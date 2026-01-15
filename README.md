@@ -267,11 +267,11 @@ All item types support the same 6 actions for consistency:
 
 **Type-Specific Behavior:**
 
-| Action | Directive | Script | Knowledge |
-|--------|-----------|--------|-----------|
-| `run` | Returns parsed XML content | Executes in venv with params | Returns entry content |
-| `publish` | Creates version with content_hash | Uploads .py file with metadata | Publishes with tags |
-| `link` | `requires`, `suggests`, `extends` | `depends_on`, `imports` | `references`, `contradicts`, `extends` |
+| Action    | Directive                         | Script                         | Knowledge                              |
+| --------- | --------------------------------- | ------------------------------ | -------------------------------------- |
+| `run`     | Returns parsed XML content        | Executes in venv with params   | Returns entry content                  |
+| `publish` | Creates version with content_hash | Uploads .py file with metadata | Publishes with tags                    |
+| `link`    | `requires`, `suggests`, `extends` | `depends_on`, `imports`        | `references`, `contradicts`, `extends` |
 
 **Examples:**
 
@@ -365,6 +365,7 @@ Scripts automatically load both files in order (userspace → project → runtim
 ### Virtual Environment Isolation
 
 Scripts run in isolated virtual environments:
+
 - **Project scripts**: `.ai/scripts/.venv/`
 - **Userspace scripts**: `~/.ai/.venv/`
 
@@ -373,6 +374,7 @@ Each environment is automatically created and managed.
 ### Dependency Auto-Install
 
 Dependencies are automatically detected and installed:
+
 - From script `import` statements
 - From lib module imports
 - Supports version constraints
@@ -398,12 +400,14 @@ from lib.youtube_utils import extract_video_id
 ```
 
 Library locations:
+
 - `.ai/scripts/lib/` (project)
 - `~/.ai/scripts/lib/` (userspace)
 
 ### Output Management
 
 Large script outputs are automatically saved:
+
 - **Project**: `.ai/outputs/scripts/{script_name}/`
 - **Userspace**: `~/.ai/outputs/scripts/{script_name}/`
 - Keeps last 10 outputs per script
