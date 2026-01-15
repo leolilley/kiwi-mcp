@@ -2,7 +2,6 @@
 
 A unified MCP (Model Context Protocol) server consolidating **directives**, **scripts**, and **knowledge** management into **4 simple tools**.
 
-**Status:** ✅ Ready for Production  
 **Version:** 0.1.0  
 **Coverage:** 30% (tests in progress)
 
