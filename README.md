@@ -4,7 +4,7 @@ A unified MCP (Model Context Protocol) server consolidating **directives**, **sc
 
 **Status:** ✅ Ready for Production  
 **Version:** 0.1.0  
-**Coverage:** >85%
+**Coverage:** 30% (tests in progress)
 
 ---
 
@@ -337,12 +337,16 @@ help(topic="directive")
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SECRET_KEY=your-secret-key
 
-# User space directory (optional, defaults to ~/.ai)
+# User space directory (optional, defaults to ~/.ai if not provided)
+# Set this in your MCP client configuration (e.g., Cursor's mcp.json)
+# If not provided, defaults to ~/.ai
 USER_SPACE=~/.ai
 
 # Log level
 LOG_LEVEL=INFO
 ```
+
+**Note:** `USER_SPACE` is typically provided via your MCP client configuration (e.g., Cursor's `mcp.json`). If not set, it defaults to `~/.ai`.
 
 ### .env Files
 
@@ -495,7 +499,7 @@ pytest tests/ -v --cov=kiwi_mcp --cov-report=html
 ### Coverage Target
 
 - **Goal:** >85% code coverage
-- **Current:** ✅ Achieved
+- **Current:** 30% (tests in progress)
 
 ---
 
