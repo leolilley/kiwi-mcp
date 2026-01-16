@@ -39,15 +39,17 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
     """
     Parse a directive markdown file.
     
-    Extracts XML directive from markdown code block and parses to dict.
+    Extracts XML directive from markdown code block, validates required structure,
+    and parses it into a dict with a flat permissions list.
     
     Returns:
         {
             "name": str,
             "version": str,
             "description": str,
-            "content": str,  # Raw markdown
-            "parsed": dict  # Parsed XML structure
+            "content": str,      # Raw markdown
+            "parsed": dict,      # Parsed XML structure
+            "permissions": list  # [{"tag": str, "attrs": dict}, ...]
         }
     """
     content = file_path.read_text()
@@ -55,16 +57,38 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
     # Extract XML from markdown
     xml_content = _extract_xml_from_markdown(content)
     if not xml_content:
-        return {
-            "name": file_path.stem,
-            "version": "0.0.0",
-            "description": "",
-            "content": content,
-            "parsed": {}
-        }
+        raise ValueError(f"No XML directive found in directive file: {file_path}")
     
-    # Parse XML to dict
-    parsed = _parse_xml_to_dict(xml_content)
+    # Parse XML and validate required <permissions> section
+    try:
+        root = ET.fromstring(xml_content)
+    except ET.ParseError as e:
+        raise ValueError(f"Invalid directive XML in {file_path}: {e}")
+    
+    # Look for <permissions> inside <metadata> (required location)
+    metadata_elem = root.find("metadata")
+    if metadata_elem is None:
+        raise ValueError(f"Directive XML is missing required <metadata> section: {file_path}")
+    
+    permissions_elem = metadata_elem.find("permissions")
+    if permissions_elem is None:
+        raise ValueError(f"Directive XML is missing required <permissions> section inside <metadata>: {file_path}")
+    
+    permissions: List[Dict[str, Any]] = []
+    for child in permissions_elem:
+        # Skip comments or non-element nodes
+        if not isinstance(child.tag, str):
+            continue
+        permissions.append({
+            "tag": child.tag,
+            "attrs": dict(child.attrib) if child.attrib else {}
+        })
+    
+    # Convert full XML to nested dict
+    parsed = _element_to_dict(root)
+    
+    # Expand CDATA placeholders in action elements (after parsing)
+    parsed = _expand_placeholders_in_dict(parsed)
     
     # Extract metadata
     attrs = parsed.get("_attrs", {})
@@ -75,7 +99,8 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
         "version": attrs.get("version", "0.0.0"),
         "description": _get_text_content(metadata.get("description", "")),
         "content": content,
-        "parsed": parsed
+        "parsed": parsed,
+        "permissions": permissions,
     }
 
 
@@ -245,6 +270,18 @@ def _parse_xml_to_dict(xml_content: str) -> Dict[str, Any]:
         return {}
 
 
+def _expand_cdata_placeholders(text: str) -> str:
+    """
+    Replace CDATA placeholders with actual CDATA markers.
+    
+    These placeholders allow showing CDATA examples in CDATA content,
+    working around the XML limitation that CDATA sections cannot be nested.
+    """
+    text = text.replace("{CDATA_OPEN}", "<![CDATA[")
+    text = text.replace("{CDATA_CLOSE}", "]]>")
+    return text
+
+
 def _element_to_dict(element: ET.Element) -> Dict[str, Any]:
     """Convert XML element to dict."""
     result = {}
@@ -270,6 +307,36 @@ def _element_to_dict(element: ET.Element) -> Dict[str, Any]:
         return result['_text']
     
     return result
+
+
+def _expand_placeholders_in_dict(data: Any) -> Any:
+    """
+    Recursively expand CDATA placeholders in action elements.
+    
+    This is applied AFTER XML parsing to expand {CDATA_OPEN} and {CDATA_CLOSE}
+    placeholders in action element text content.
+    """
+    if isinstance(data, str):
+        return _expand_cdata_placeholders(data)
+    elif isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            # Expand placeholders in action element text content
+            if key == 'action' and isinstance(value, (str, dict)):
+                if isinstance(value, str):
+                    result[key] = _expand_cdata_placeholders(value)
+                elif isinstance(value, dict) and '_text' in value:
+                    result[key] = value.copy()
+                    result[key]['_text'] = _expand_cdata_placeholders(value['_text'])
+                else:
+                    result[key] = _expand_placeholders_in_dict(value)
+            else:
+                result[key] = _expand_placeholders_in_dict(value)
+        return result
+    elif isinstance(data, list):
+        return [_expand_placeholders_in_dict(item) for item in data]
+    else:
+        return data
 
 
 def _get_text_content(value: Any) -> str:

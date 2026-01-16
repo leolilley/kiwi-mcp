@@ -20,13 +20,12 @@ class ExecuteTool(BaseTool):
             name="execute",
             description="""Execute operations on directives, scripts, or knowledge.
 
-All three types support the same 6 actions for consistency:
+All three types support the same 5 actions for consistency:
 - run: Execute/load content (directive returns parsed XML, script executes code, knowledge returns content for context)
 - publish: Upload to registry with version (requires 'version' parameter)
 - delete: Remove from local/registry (requires 'confirm': true for safety)
 - create: Validate and save new item - guards against malformed content (directive validates XML, script validates Python)
 - update: Validate and update existing item
-- link: Establish relationship to another item of the same type
 
 Examples:
   directive.run: Returns parsed XML for agent to follow
@@ -36,10 +35,6 @@ Examples:
   directive.create: Validates XML syntax before saving
   script.create: Validates Python syntax before saving
   knowledge.create: Creates entry with metadata
-  
-  directive.link: Link directives (requires, suggests, extends, related)
-  script.link: Link scripts (depends_on, imports, related)
-  knowledge.link: Link knowledge entries (references, contradicts, etc.)
 """,
             inputSchema={
                 "type": "object",
@@ -51,8 +46,8 @@ Examples:
                     },
                     "action": {
                         "type": "string",
-                        "enum": ["run", "publish", "delete", "create", "update", "link"],
-                        "description": "Action to perform (all 6 actions supported for all types)",
+                        "enum": ["run", "publish", "delete", "create", "update"],
+                        "description": "Action to perform (all 5 actions supported for all types)",
                     },
                     "item_id": {
                         "type": "string",
@@ -79,14 +74,6 @@ Examples:
                                 "enum": ["project", "user"],
                                 "description": "Save location for create action (project=.ai/ folder, user=home directory)",
                             },
-                            "to": {
-                                "type": "string",
-                                "description": "Target item for link action (another directive/script/knowledge entry)",
-                            },
-                            "relationship": {
-                                "type": "string",
-                                "description": "Relationship type for link action (varies by type: directive=requires|suggests|extends|related, script=depends_on|imports|related, knowledge=references|contradicts|extends|etc.)",
-                            },
                             "category": {
                                 "type": "string",
                                 "description": "Category folder for create action (optional)",
@@ -99,7 +86,7 @@ Examples:
                     },
                     "project_path": {
                         "type": "string",
-                        "description": "Absolute path to project root for project-based operations (required for location='project')",
+                        "description": "Absolute path to project root (where .ai/ folder lives). REQUIRED for: run, delete, update, create with location='project'. Example: '/home/user/myproject'",
                     },
                 },
                 "required": ["item_type", "action", "item_id"],
@@ -119,12 +106,22 @@ Examples:
                 {"error": "item_type, action, and item_id are required"}
             )
 
-        # Validate project_path for project-based operations
+        # Validate project_path for operations that need it
         location = parameters.get("location")
-        if location == "project" and not project_path:
+        source = parameters.get("source")
+        
+        # Actions that require project_path
+        needs_project_path = (
+            action in ("run", "delete", "update") or  # These always need project context
+            location == "project" or  # Creating/saving to project
+            source in ("local", "all")  # Working with local files
+        )
+        
+        if needs_project_path and not project_path:
             return self._format_response({
-                "error": "project_path is required when location='project'",
-                "message": "Please provide the absolute path to your project root (where .ai/ folder lives)."
+                "error": f"project_path is REQUIRED for action='{action}'",
+                "message": f"Please provide the absolute path to your project root (where .ai/ folder lives).",
+                "hint": f"Add project_path parameter to your execute() call. Example: project_path='/home/user/myproject'"
             })
 
         # Create handler dynamically with project_path

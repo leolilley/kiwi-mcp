@@ -5,13 +5,16 @@ Implements search, load, execute operations for scripts.
 Handles LOCAL file operations directly, only uses registry for REMOTE operations.
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
 
 from kiwi_mcp.handlers import SortBy
+import hashlib
 import json
 import ast
+import re
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from kiwi_mcp.api.script_registry import ScriptRegistry
@@ -144,66 +147,159 @@ class ScriptHandler:
     async def load(
         self,
         script_name: str,
-        to_location: str = "project",
-        sections: Optional[List[str]] = None
+        source: Literal["project", "user", "registry"],
+        destination: Literal["project", "user"],
     ) -> Dict[str, Any]:
         """
-        Load script details or download from registry.
+        Load script from specified source.
         
         Args:
             script_name: Name of script
-            to_location: "project" or "user" (for downloads)
+            source: Where to load from - "project" | "user" | "registry" (REQUIRED)
+            destination: Where to save/return from - "project" | "user" (REQUIRED)
             sections: Sections to include (["metadata", "content", "all"])
         
         Returns:
             Dict with script details
         """
-        # Try local first
-        file_path = self.resolver.resolve(script_name)
-        if file_path:
-            script_data = parse_script_metadata(file_path)
-            script_data["source"] = "project" if ".ai/" in str(file_path) else "user"
-            script_data["path"] = str(file_path)
-            return script_data
-        
-        # Try registry
-        if not self.registry.is_configured:
-            return {
-                "error": f"Script '{script_name}' not found locally and registry not configured"
-            }
+        self.logger.info(f"ScriptHandler.load: script={script_name}, source={source}, destination={destination}")
         
         try:
-            # Get from registry
-            script_data = await self.registry.get(script_name)
-            if not script_data:
-                return {"error": f"Script '{script_name}' not found in registry"}
+            # LOAD FROM REGISTRY
+            if source == "registry":
+                if not self.registry.is_configured:
+                    return {
+                        "error": "Registry not configured",
+                        "message": "Set SUPABASE_URL and SUPABASE_KEY to load from registry"
+                    }
+                
+                # Get from registry
+                script_data = await self.registry.get(script_name)
+                if not script_data:
+                    return {"error": f"Script '{script_name}' not found in registry"}
+                
+                # Determine target path based on destination
+                if destination == "user":
+                    target_dir = get_user_space() / "scripts"
+                else:  # destination == "project"
+                    if not self.project_path:
+                        return {
+                            "error": "project_path is required for destination='project'"
+                        }
+                    target_dir = self.project_path / ".ai" / "scripts"
+                
+                target_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Determine category subdirectory
+                category = script_data.get("category", "utility")
+                category_dir = target_dir / category
+                category_dir.mkdir(exist_ok=True)
+                
+                # Write script file
+                target_file = category_dir / f"{script_name}.py"
+                target_file.write_text(script_data["content"])
+                
+                self.logger.info(f"Downloaded script from registry to: {target_file}")
+                
+                return {
+                    "status": "success",
+                    "message": f"Downloaded script to {destination}",
+                    "path": str(target_file),
+                    "source": "registry",
+                    "destination": destination,
+                    "script": script_data
+                }
             
-            # Download to local storage
-            target_dir = (
-                self.project_path / ".ai" / "scripts" 
-                if to_location == "project" and self.project_path
-                else get_user_space() / "scripts"
-            )
-            target_dir.mkdir(parents=True, exist_ok=True)
+            # LOAD FROM PROJECT
+            if source == "project":
+                if not self.project_path:
+                    return {
+                        "error": "project_path is required for source='project'"
+                    }
+                search_base = self.project_path / ".ai" / "scripts"
+                file_path = self._find_script_in_path(script_name, search_base)
+                if not file_path:
+                    return {
+                        "error": f"Script '{script_name}' not found in project"
+                    }
+                
+                # If destination differs from source, copy the file
+                if destination == "user":
+                    # Copy from project to user space
+                    content = file_path.read_text()
+                    # Determine category from source path
+                    relative_path = file_path.relative_to(search_base)
+                    target_path = get_user_space() / "scripts" / relative_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_text(content)
+                    self.logger.info(f"Copied script from project to user: {target_path}")
+                    
+                    script_data = parse_script_metadata(target_path)
+                    script_data["source"] = "project"
+                    script_data["destination"] = "user"
+                    script_data["path"] = str(target_path)
+                    return script_data
+                else:
+                    # Just return project file info (no copy needed)
+                    script_data = parse_script_metadata(file_path)
+                    script_data["source"] = "project"
+                    script_data["path"] = str(file_path)
+                    return script_data
             
-            # Determine category subdirectory
-            category = script_data.get("category", "utility")
-            category_dir = target_dir / category
-            category_dir.mkdir(exist_ok=True)
+            # LOAD FROM USER
+            # source == "user" (only remaining option due to Literal typing)
+            search_base = get_user_space() / "scripts"
+            file_path = self._find_script_in_path(script_name, search_base)
+            if not file_path:
+                return {
+                    "error": f"Script '{script_name}' not found in user space"
+                }
             
-            # Write script file
-            target_file = category_dir / f"{script_name}.py"
-            target_file.write_text(script_data["content"])
-            
-            return {
-                "status": "success",
-                "message": f"Downloaded script to {to_location}",
-                "path": str(target_file),
-                "script": script_data
-            }
+            # If destination differs from source, copy the file
+            if destination == "project":
+                if not self.project_path:
+                    return {
+                        "error": "project_path is required for destination='project'"
+                    }
+                # Copy from user to project space
+                content = file_path.read_text()
+                # Determine category from source path
+                relative_path = file_path.relative_to(search_base)
+                target_path = self.project_path / ".ai" / "scripts" / relative_path
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(content)
+                self.logger.info(f"Copied script from user to project: {target_path}")
+                
+                script_data = parse_script_metadata(target_path)
+                script_data["source"] = "user"
+                script_data["destination"] = "project"
+                script_data["path"] = str(target_path)
+                return script_data
+            else:
+                # Just return user file info (no copy needed)
+                script_data = parse_script_metadata(file_path)
+                script_data["source"] = "user"
+                script_data["path"] = str(file_path)
+                return script_data
         except Exception as e:
-            self.logger.error(f"Failed to load script from registry: {e}")
+            self.logger.error(f"Failed to load script: {e}")
             return {"error": str(e)}
+    
+    def _find_script_in_path(self, script_name: str, base_path: Path) -> Optional[Path]:
+        """Find script file in specified path."""
+        if not base_path.exists():
+            return None
+        
+        # Search recursively for the script
+        for py_file in base_path.rglob(f"{script_name}.py"):
+            return py_file
+        
+        # Also try with wildcards in case of naming variations
+        for py_file in base_path.rglob("*.py"):
+            if script_name in py_file.stem:
+                return py_file
+        
+        return None
     
     def _extract_lib_dependencies(self, script_path: Path) -> List[Dict[str, Any]]:
         """
@@ -262,6 +358,50 @@ class ScriptHandler:
         
         return None
     
+    def _verify_script_signature(self, file_path: Path) -> Optional[Dict[str, Any]]:
+        """
+        Verify script signature if present.
+        
+        Returns None if no signature, or a dict with status:
+        - "valid": hash matches
+        - "modified": hash doesn't match
+        - "invalid": signature format is wrong
+        """
+        content = file_path.read_text()
+        
+        # Look for signature comment (after optional shebang)
+        # Format: # kiwi-mcp:validated:TIMESTAMP:HASH
+        sig_pattern = r'^(?:#!/[^\n]*\n)?# kiwi-mcp:validated:(.*?):([a-f0-9]{12})'
+        sig_match = re.match(sig_pattern, content)
+        
+        if not sig_match:
+            return None  # No signature - might be legacy or unvalidated
+        
+        stored_timestamp = sig_match.group(1)
+        stored_hash = sig_match.group(2)
+        
+        # Remove signature line to compute current hash
+        content_without_sig = re.sub(r'^#!/[^\n]*\n', '', content)  # Remove shebang if present
+        content_without_sig = re.sub(r'^# kiwi-mcp:validated:[^\n]+\n', '', content_without_sig)
+        
+        # Compute current hash
+        current_hash = hashlib.sha256(content_without_sig.encode()).hexdigest()[:12]
+        
+        if current_hash == stored_hash:
+            return {
+                "status": "valid",
+                "validated_at": stored_timestamp,
+                "hash": stored_hash
+            }
+        else:
+            return {
+                "status": "modified",
+                "validated_at": stored_timestamp,
+                "original_hash": stored_hash,
+                "current_hash": current_hash,
+                "warning": "Content modified since last validation. Consider running 'update' to re-validate."
+            }
+    
     def _build_search_paths(self, script_path: Path, storage_location: str) -> List[Path]:
         """
         Build PYTHONPATH entries for script execution context.
@@ -310,6 +450,28 @@ class ScriptHandler:
                 "error": f"Script '{script_name}' not found locally",
                 "suggestion": "Use load() to download from registry first"
             }
+        
+        # ENFORCE hash validation - ALWAYS check, never skip
+        signature_status = self._verify_script_signature(file_path)
+        
+        # Block execution if signature is invalid or modified
+        if signature_status:
+            if signature_status.get("status") == "modified":
+                return {
+                    "status": "error",
+                    "error": "Script content has been modified since last validation",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Run 'update' action to re-validate the script"
+                }
+            elif signature_status.get("status") == "invalid":
+                return {
+                    "status": "error",
+                    "error": "Script signature is invalid",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Run 'update' action to re-validate the script"
+                }
         
         # Parse script metadata for dependencies
         script_meta = parse_script_metadata(file_path)
@@ -578,13 +740,6 @@ class ScriptHandler:
             elif action == "update":
                 return await self._update_script(script_name, kwargs.get("updates", {}))
             
-            elif action == "link":
-                return await self._link_script(
-                    script_name,
-                    kwargs.get("to"),
-                    kwargs.get("relationship")
-                )
-            
             else:
                 return {"error": f"Unknown action: {action}"}
         
@@ -667,12 +822,28 @@ class ScriptHandler:
         if target_file.exists():
             return {"error": f"Script '{script_name}' already exists"}
         
-        target_file.write_text(content)
+        # Generate signature for validated content
+        content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        signature_line = f"# kiwi-mcp:validated:{timestamp}:{content_hash}\n"
+        
+        # Prepend signature to content (after shebang if present)
+        if content.startswith("#!/"):
+            lines = content.split("\n", 1)
+            signed_content = lines[0] + "\n" + signature_line + (lines[1] if len(lines) > 1 else "")
+        else:
+            signed_content = signature_line + content
+        
+        target_file.write_text(signed_content)
         
         return {
             "status": "success",
             "message": f"Created script at {location}",
-            "path": str(target_file)
+            "path": str(target_file),
+            "signature": {
+                "hash": content_hash,
+                "timestamp": timestamp
+            }
         }
     
     async def _update_script(self, script_name: str, updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -683,20 +854,31 @@ class ScriptHandler:
         
         # For now, only support content updates
         if "content" in updates:
-            file_path.write_text(updates["content"])
+            content = updates["content"]
+            
+            # Generate new signature for validated content
+            content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            signature_line = f"# kiwi-mcp:validated:{timestamp}:{content_hash}\n"
+            
+            # Remove old signature if present
+            content_clean = re.sub(r'^(#!/[^\n]*\n)?# kiwi-mcp:validated:[^\n]+\n', r'\1', content)
+            
+            # Prepend new signature (after shebang if present)
+            if content_clean.startswith("#!/"):
+                lines = content_clean.split("\n", 1)
+                signed_content = lines[0] + "\n" + signature_line + (lines[1] if len(lines) > 1 else "")
+            else:
+                signed_content = signature_line + content_clean
+            
+            file_path.write_text(signed_content)
             return {
                 "status": "success",
-                "message": f"Updated script '{script_name}'"
+                "message": f"Updated script '{script_name}'",
+                "signature": {
+                    "hash": content_hash,
+                    "timestamp": timestamp
+                }
             }
         
         return {"error": "No updates provided"}
-    
-    async def _link_script(
-        self,
-        script_name: str,
-        to: str,
-        relationship: str
-    ) -> Dict[str, Any]:
-        """Link script to another script."""
-        # Not implemented yet
-        return {"error": "Link operation not yet implemented for scripts"}

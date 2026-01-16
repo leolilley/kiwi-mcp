@@ -18,7 +18,7 @@ class LoadTool(BaseTool):
     def schema(self) -> Tool:
         return Tool(
             name="load",
-            description="Load/download items from registry to local storage",
+            description="Load items from specified source (project, user, or registry)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -31,22 +31,26 @@ class LoadTool(BaseTool):
                         "type": "string",
                         "description": "Item ID to load",
                     },
+                    "source": {
+                        "type": "string",
+                        "enum": ["project", "user", "registry"],
+                        "description": "Where to load from: 'project' (local .ai/), 'user' (mcp env variable), or 'registry' (remote Supabase)",
+                    },
                     "destination": {
                         "type": "string",
                         "enum": ["project", "user"],
-                        "default": "project",
-                        "description": "Where to save the item",
+                        "description": "Where to save/return from: 'project' or 'user' (REQUIRED)",
                     },
                     "version": {
                         "type": "string",
-                        "description": "Specific version to load (optional)",
+                        "description": "Specific version to load (registry only)",
                     },
                     "project_path": {
                         "type": "string",
-                        "description": "Absolute path to project root (where .ai/ folder lives). Required for destination='project'. Example: '/home/user/myproject'",
+                        "description": "Absolute path to project root (where .ai/ folder lives). REQUIRED for source='project' or destination='project'. Example: '/home/user/myproject'",
                     },
                 },
-                "required": ["item_type", "item_id"],
+                "required": ["item_type", "item_id", "source", "destination"],
             },
         )
 
@@ -54,20 +58,35 @@ class LoadTool(BaseTool):
         """Execute load with dynamic handler creation."""
         item_type = arguments.get("item_type")
         item_id = arguments.get("item_id")
-        destination = arguments.get("destination", "project")
+        source = arguments.get("source")
+        destination = arguments.get("destination")
         version = arguments.get("version")
         project_path = arguments.get("project_path")
 
+        # Validate required parameters
         if not item_type or not item_id:
             return self._format_response(
                 {"error": "item_type and item_id are required"}
             )
-
-        # Validate project_path for project destination
-        if destination == "project" and not project_path:
+        
+        if not source:
             return self._format_response({
-                "error": "project_path is required when destination='project'",
-                "message": "Please provide the absolute path to your project root (where .ai/ folder lives)."
+                "error": "source is REQUIRED",
+                "message": "Specify source='project', source='user', or source='registry'"
+            })
+        
+        if not destination:
+            return self._format_response({
+                "error": "destination is REQUIRED",
+                "message": "Specify destination='project' or destination='user'"
+            })
+
+        # Validate project_path when needed
+        if (source == "project" or destination == "project") and not project_path:
+            return self._format_response({
+                "error": "project_path is REQUIRED for source='project' or destination='project'",
+                "message": "Please provide the absolute path to your project root (where .ai/ folder lives).",
+                "hint": "Add project_path parameter. Example: project_path='/home/user/myproject'"
             })
 
         # Create handler dynamically with project_path
@@ -90,7 +109,23 @@ class LoadTool(BaseTool):
                 })
             
             handler = handler_class(project_path=project_path)
-            result = await handler.load(item_id, destination=destination, version=version)
+            
+            # Call load with appropriate parameters based on item type
+            if item_type == "knowledge":
+                include_relationships = arguments.get("include_relationships", False)
+                result = await handler.load(
+                    item_id,
+                    source=source,
+                    destination=destination,
+                    include_relationships=include_relationships
+                )
+            else:  # directive or script
+                result = await handler.load(
+                    item_id,
+                    source=source,
+                    destination=destination,
+                    version=version
+                )
             return self._format_response(result)
         except Exception as e:
             self.logger.error(f"Load failed: {e}")

@@ -44,7 +44,7 @@ class SearchTool(BaseTool):
                     },
                     "project_path": {
                         "type": "string",
-                        "description": "Absolute path to project root (where .ai/ folder lives). Required for source='local' or 'all'. Example: '/home/user/myproject'",
+                        "description": "Absolute path to project root (where .ai/ folder lives). REQUIRED for source='local' or source='all'. Example: '/home/user/myproject'",
                     },
                 },
                 "required": ["item_type", "query"],
@@ -69,8 +69,9 @@ class SearchTool(BaseTool):
         # Validate project_path for local/all sources
         if source in ("local", "all") and not project_path:
             return self._format_response({
-                "error": f"project_path is required when source='{source}'",
-                "message": "Please provide the absolute path to your project root (where .ai/ folder lives)."
+                "error": f"project_path is REQUIRED when source='{source}'",
+                "message": "Please provide the absolute path to your project root (where .ai/ folder lives).",
+                "hint": f"Add project_path parameter to your search() call. Example: project_path='/home/user/myproject'"
             })
 
         # Create handler dynamically with project_path

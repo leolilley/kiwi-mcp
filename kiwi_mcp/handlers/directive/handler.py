@@ -5,11 +5,11 @@ Implements search, load, execute operations for directives.
 Handles LOCAL file operations directly, only uses registry for REMOTE operations.
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
 
 from kiwi_mcp.handlers import SortBy
-import json
-import logging
+import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import re
@@ -136,48 +136,151 @@ class DirectiveHandler:
     async def load(
         self,
         directive_name: str,
-        destination: str = "project",
+        source: Literal["project", "user", "registry"],
+        destination: Literal["project", "user"],
         version: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Load directive from local files or download from registry.
+        Load directive from specified source.
         
         Args:
             directive_name: Name of directive to load
-            destination: "project" or "user" (for downloading from registry)
+            source: Where to load from - "project" | "user" | "registry"
+            destination: Where to save/return from - "project" | "user"
             version: Specific version to load (registry only)
         
         Returns:
             Dict with directive details and metadata
         """
-        self.logger.info(f"DirectiveHandler.load: directive={directive_name}, destination={destination}")
+        self.logger.info(f"DirectiveHandler.load: directive={directive_name}, source={source}, destination={destination}")
         
         try:
-            # Try local first
-            file_path = self.resolver.resolve(directive_name)
-            if file_path:
-                directive_data = parse_directive_file(file_path)
-                directive_data["source"] = "project" if ".ai/" in str(file_path) else "user"
-                directive_data["path"] = str(file_path)
+            # LOAD FROM REGISTRY
+            if source == "registry":
+                # Fetch from registry
+                registry_data = await self.registry.get(
+                    name=directive_name,
+                    version=version
+                )
+                
+                if not registry_data:
+                    return {
+                        "error": f"Directive '{directive_name}' not found in registry"
+                    }
+                
+                # Extract metadata
+                content = registry_data.get("content")
+                category = registry_data.get("category", "core")
+                subcategory = registry_data.get("subcategory")
+                
+                if not content:
+                    return {
+                        "error": f"Directive '{directive_name}' has no content"
+                    }
+                
+                # Determine target path based on destination
+                if destination == "user":
+                    base_path = Path.home() / ".ai" / "directives"
+                else:  # destination == "project"
+                    if not self.project_path:
+                        return {
+                            "error": "project_path is required for destination='project'"
+                        }
+                    base_path = self.project_path / ".ai" / "directives"
+                
+                # Build category path
+                if subcategory:
+                    target_dir = base_path / category / subcategory
+                else:
+                    target_dir = base_path / category
+                
+                # Create directory if needed
+                target_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Write file
+                target_path = target_dir / f"{directive_name}.md"
+                target_path.write_text(content)
+                
+                self.logger.info(f"Downloaded directive from registry to: {target_path}")
+                
+                # Parse and return
+                directive_data = parse_directive_file(target_path)
+                directive_data["source"] = "registry"
+                directive_data["destination"] = destination
+                directive_data["path"] = str(target_path)
                 return directive_data
             
-            # Not found locally - try registry if destination specified
-            if destination:
-                try:
-                    result = await self.registry.get(
-                        directive_name=directive_name,
-                        destination=destination,
-                        version=version,
-                        project_path=str(self.project_path) if self.project_path else None
-                    )
-                    return result
-                except Exception as e:
-                    self.logger.warning(f"Registry get failed: {e}")
+            # LOAD FROM PROJECT
+            if source == "project":
+                if not self.project_path:
+                    return {
+                        "error": "project_path is required for source='project'"
+                    }
+                search_base = self.project_path / ".ai" / "directives"
+                file_path = self._find_in_path(directive_name, search_base)
+                if not file_path:
+                    return {
+                        "error": f"Directive '{directive_name}' not found in project"
+                    }
+                
+                # If destination differs from source, copy the file
+                if destination == "user":
+                    # Copy from project to user space
+                    content = file_path.read_text()
+                    # Determine category from source path
+                    relative_path = file_path.relative_to(search_base)
+                    target_path = Path.home() / ".ai" / "directives" / relative_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_text(content)
+                    self.logger.info(f"Copied directive from project to user: {target_path}")
+                    
+                    directive_data = parse_directive_file(target_path)
+                    directive_data["source"] = "project"
+                    directive_data["destination"] = "user"
+                    directive_data["path"] = str(target_path)
+                    return directive_data
+                else:
+                    # Just return project file info (no copy needed)
+                    directive_data = parse_directive_file(file_path)
+                    directive_data["source"] = "project"
+                    directive_data["path"] = str(file_path)
+                    return directive_data
             
-            return {
-                "error": f"Directive '{directive_name}' not found locally",
-                "suggestion": "Use search to find it, or specify destination to download from registry"
-            }
+            # LOAD FROM USER
+            # source == "user" (only remaining option due to Literal typing)
+            search_base = Path.home() / ".ai" / "directives"
+            file_path = self._find_in_path(directive_name, search_base)
+            if not file_path:
+                return {
+                    "error": f"Directive '{directive_name}' not found in user space"
+                }
+            
+            # If destination differs from source, copy the file
+            if destination == "project":
+                if not self.project_path:
+                    return {
+                        "error": "project_path is required for destination='project'"
+                    }
+                # Copy from user to project space
+                content = file_path.read_text()
+                # Determine category from source path
+                relative_path = file_path.relative_to(search_base)
+                target_path = self.project_path / ".ai" / "directives" / relative_path
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(content)
+                self.logger.info(f"Copied directive from user to project: {target_path}")
+                
+                directive_data = parse_directive_file(target_path)
+                directive_data["source"] = "user"
+                directive_data["destination"] = "project"
+                directive_data["path"] = str(target_path)
+                return directive_data
+            else:
+                # Just return user file info (no copy needed)
+                directive_data = parse_directive_file(file_path)
+                directive_data["source"] = "user"
+                directive_data["path"] = str(file_path)
+                return directive_data
         except Exception as e:
             return {
                 "error": str(e),
@@ -214,12 +317,10 @@ class DirectiveHandler:
                 return await self._create_directive(directive_name, parameters or {})
             elif action == "update":
                 return await self._update_directive(directive_name, parameters or {})
-            elif action == "link":
-                return await self._link_directive(directive_name, parameters or {})
             else:
                 return {
                     "error": f"Unknown action: {action}",
-                    "supported_actions": ["run", "publish", "delete", "create", "update", "link"]
+                    "supported_actions": ["run", "publish", "delete", "create", "update"]
                 }
         except Exception as e:
             return {
@@ -285,7 +386,38 @@ class DirectiveHandler:
         try:
             directive_data = parse_directive_file(file_path)
             
-            return {
+            # Enforce permissions - run action requires valid permissions
+            permission_check = self._check_permissions(directive_data.get("permissions", []))
+            if not permission_check["valid"]:
+                return {
+                    "error": "Directive permissions not satisfied",
+                    "details": permission_check["issues"],
+                    "path": str(file_path),
+                    "permissions_required": directive_data.get("permissions", [])
+                }
+            
+            # ENFORCE hash validation - ALWAYS check, never skip
+            file_content = file_path.read_text()
+            signature_status = self._verify_signature(file_content)
+            
+            # Block execution if signature is invalid or modified
+            if signature_status:
+                if signature_status.get("status") == "modified":
+                    return {
+                        "error": "Directive content has been modified since last validation",
+                        "signature": signature_status,
+                        "path": str(file_path),
+                        "solution": "Run 'update' action to re-validate the directive"
+                    }
+                elif signature_status.get("status") == "invalid":
+                    return {
+                        "error": "Directive signature is invalid",
+                        "signature": signature_status,
+                        "path": str(file_path),
+                        "solution": "Run 'update' action to re-validate the directive"
+                    }
+            
+            result = {
                 "status": "ready",
                 "directive": {
                     "name": directive_data["name"],
@@ -293,6 +425,7 @@ class DirectiveHandler:
                     "description": directive_data["description"],
                     "content": directive_data["content"],
                     "parsed": directive_data["parsed"],
+                    "permissions": directive_data.get("permissions", []),
                     "source": "project" if str(file_path).startswith(str(self.resolver.project_directives)) else "user"
                 },
                 "inputs": params,
@@ -301,10 +434,93 @@ class DirectiveHandler:
                     "Read the directive's <process> section and follow each step."
                 )
             }
+            
+            return result
         except Exception as e:
             return {
                 "error": f"Failed to parse directive: {str(e)}",
                 "path": str(file_path)
+            }
+    
+    def _find_in_path(self, directive_name: str, base_path: Path) -> Optional[Path]:
+        """Find directive file in specified path."""
+        if not base_path.exists():
+            return None
+        
+        # Search recursively for the directive
+        for md_file in base_path.rglob(f"{directive_name}.md"):
+            return md_file
+        
+        # Also try with wildcards in case of naming variations
+        for md_file in base_path.rglob("*.md"):
+            if directive_name in md_file.stem:
+                return md_file
+        
+        return None
+    
+    def _check_permissions(self, permissions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Validate directive permissions.
+        
+        Checks that required permissions are satisfied.
+        Current implementation validates permission structure.
+        
+        Args:
+            permissions: List of permission dicts from parsed directive
+        
+        Returns:
+            {"valid": bool, "issues": list[str]}
+        """
+        issues = []
+        
+        if not permissions:
+            return {"valid": False, "issues": ["No permissions defined in directive"]}
+        
+        for perm in permissions:
+            if not isinstance(perm, dict):
+                issues.append(f"Invalid permission format: {perm}")
+                continue
+            
+            if "tag" not in perm:
+                issues.append("Permission missing 'tag' field")
+            if not perm.get("attrs"):
+                issues.append(f"Permission '{perm.get('tag', 'unknown')}' missing attributes")
+        
+        return {
+            "valid": len(issues) == 0,
+            "issues": issues
+        }
+    
+    def _verify_signature(self, file_content: str) -> Optional[Dict[str, Any]]:
+        """Verify content signature if present."""
+        # Match timestamp (ISO format with colons) and hash (12 hex chars)
+        sig_match = re.match(r'^<!-- kiwi-mcp:validated:(.*?):([a-f0-9]{12}) -->', file_content)
+        if not sig_match:
+            return None  # No signature - that's fine, might be legacy
+        
+        stored_timestamp = sig_match.group(1)
+        stored_hash = sig_match.group(2)
+        
+        # Extract XML from file_content and compute current hash
+        xml_match = re.search(r'```xml\n(.*?)\n```', file_content, re.DOTALL)
+        if not xml_match:
+            return {"status": "invalid", "reason": "no_xml_found"}
+        
+        current_hash = hashlib.sha256(xml_match.group(1).encode()).hexdigest()[:12]
+        
+        if current_hash == stored_hash:
+            return {
+                "status": "valid",
+                "validated_at": stored_timestamp,
+                "hash": stored_hash
+            }
+        else:
+            return {
+                "status": "modified",
+                "validated_at": stored_timestamp,
+                "original_hash": stored_hash,
+                "current_hash": current_hash,
+                "warning": "Content modified since last validation. Consider running 'update' to re-validate."
             }
     
     async def _publish_directive(
@@ -393,15 +609,12 @@ class DirectiveHandler:
         directive_name: str,
         params: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Create a new directive with validation."""
-        content = params.get("content")
-        if not content:
-            return {
-                "error": "content is required",
-                "required": {"content": "Markdown content with XML directive"},
-                "example": "parameters={'content': '# My Directive\\n\\n```xml\\n<directive...', 'location': 'project'}"
-            }
+        """
+        Validate and register an existing directive file.
         
+        Expects the directive file to already exist on disk.
+        This action validates the XML, checks permissions, and adds a signature.
+        """
         location = params.get("location", "project")
         if location not in ("project", "user"):
             return {
@@ -409,13 +622,48 @@ class DirectiveHandler:
                 "valid_locations": ["project", "user"]
             }
         
+        # Find the directive file
+        if location == "project":
+            if not self.project_path:
+                return {
+                    "error": "project_path required for location='project'",
+                    "suggestion": "Provide project_path or use location='user'"
+                }
+            # Search in project directives
+            file_path = None
+            for search_path in [self.resolver.project_directives]:
+                for candidate in Path(search_path).rglob(f"*{directive_name}.md"):
+                    if candidate.stem == directive_name:
+                        file_path = candidate
+                        break
+                if file_path:
+                    break
+        else:
+            # Search in user directives
+            file_path = None
+            for candidate in Path(self.resolver.user_directives).rglob(f"*{directive_name}.md"):
+                if candidate.stem == directive_name:
+                    file_path = candidate
+                    break
+        
+        if not file_path or not file_path.exists():
+            return {
+                "error": f"Directive file not found: {directive_name}",
+                "hint": f"Create the file first at .ai/directives/{{category}}/{directive_name}.md",
+                "searched_in": str(self.resolver.project_directives if location == "project" else self.resolver.user_directives)
+            }
+        
+        # Read and validate the file
+        content = file_path.read_text()
+        
         # Validate XML can be parsed
         try:
             xml_match = re.search(r'```xml\n(.*?)\n```', content, re.DOTALL)
             if not xml_match:
                 return {
                     "error": "No XML directive found in content",
-                    "hint": "Content must contain XML directive wrapped in ```xml``` code block"
+                    "hint": "Content must contain XML directive wrapped in ```xml``` code block",
+                    "file": str(file_path)
                 }
             
             xml_content = xml_match.group(1)
@@ -425,39 +673,52 @@ class DirectiveHandler:
             return {
                 "error": "Invalid directive XML",
                 "parse_error": str(e),
-                "hint": "Check for unescaped < > & characters. Use CDATA for special chars."
+                "hint": "Check for unescaped < > & characters. Use CDATA for special chars.",
+                "file": str(file_path)
             }
         except Exception as e:
             return {
                 "error": "Failed to validate directive",
-                "details": str(e)
+                "details": str(e),
+                "file": str(file_path)
             }
         
-        # Save to file
-        if location == "project":
-            if not self.project_path:
+        # Parse and check permissions
+        try:
+            directive_data = parse_directive_file(file_path)
+            permission_check = self._check_permissions(directive_data.get("permissions", []))
+            if not permission_check["valid"]:
                 return {
-                    "error": "project_path required for location='project'",
-                    "suggestion": "Provide project_path or use location='user'"
+                    "error": "Directive permissions not satisfied",
+                    "details": permission_check["issues"],
+                    "path": str(file_path),
+                    "permissions_required": directive_data.get("permissions", [])
                 }
-            base_dir = self.project_path / ".ai" / "directives"
-        else:
-            base_dir = get_user_space() / "directives"
-        
-        category = params.get("category", "custom")
-        save_dir = base_dir / category
-        save_dir.mkdir(parents=True, exist_ok=True)
-        
-        file_path = save_dir / f"{directive_name}.md"
-        
-        if file_path.exists():
+        except Exception as e:
             return {
-                "error": f"Directive '{directive_name}' already exists",
-                "path": str(file_path),
-                "suggestion": "Use 'update' action to modify existing directive"
+                "error": "Failed to validate directive permissions",
+                "details": str(e),
+                "file": str(file_path)
             }
         
-        file_path.write_text(content)
+        # Generate signature for validated content
+        content_hash = hashlib.sha256(xml_content.encode()).hexdigest()[:12]
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        signature = f"<!-- kiwi-mcp:validated:{timestamp}:{content_hash} -->\n"
+        
+        # Remove old signature if present, then prepend new one
+        content_without_sig = re.sub(r'^<!-- kiwi-mcp:validated:[^>]+-->\n', '', content)
+        signed_content = signature + content_without_sig
+        
+        # Update file with signature
+        file_path.write_text(signed_content)
+        
+        # Parse to get category
+        try:
+            directive = parse_directive_file(file_path)
+            category = directive.get("category", "unknown")
+        except:
+            category = "unknown"
         
         return {
             "status": "created",
@@ -465,7 +726,12 @@ class DirectiveHandler:
             "path": str(file_path),
             "location": location,
             "category": category,
-            "validated": True
+            "validated": True,
+            "signature": {
+                "hash": content_hash,
+                "timestamp": timestamp
+            },
+            "message": f"Directive validated and signed. Ready to use."
         }
     
     async def _update_directive(
@@ -473,14 +739,13 @@ class DirectiveHandler:
         directive_name: str,
         params: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Update existing directive with validation."""
-        content = params.get("content")
-        if not content:
-            return {
-                "error": "content is required for update",
-                "required": {"content": "Updated markdown content with XML"}
-            }
+        """
+        Validate and update an existing directive file.
         
+        Expects the directive file to already exist on disk.
+        This action validates the XML, checks permissions, and updates the signature.
+        Uses the same pattern as _create_directive: works with file paths, not content strings.
+        """
         # Find existing file
         file_path = self.resolver.resolve(directive_name)
         if not file_path:
@@ -489,13 +754,23 @@ class DirectiveHandler:
                 "suggestion": "Use 'create' action for new directives"
             }
         
-        # Validate new content
+        if not file_path.exists():
+            return {
+                "error": f"Directive file not found: {directive_name}",
+                "path": str(file_path)
+            }
+        
+        # Read the existing file
+        content = file_path.read_text()
+        
+        # Validate XML can be parsed
         try:
             xml_match = re.search(r'```xml\n(.*?)\n```', content, re.DOTALL)
             if not xml_match:
                 return {
                     "error": "No XML directive found in content",
-                    "hint": "Content must contain XML directive wrapped in ```xml``` code block"
+                    "hint": "Content must contain XML directive wrapped in ```xml``` code block",
+                    "file": str(file_path)
                 }
             
             xml_content = xml_match.group(1)
@@ -505,87 +780,63 @@ class DirectiveHandler:
             return {
                 "error": "Invalid directive XML",
                 "parse_error": str(e),
-                "hint": "Check for unescaped < > & characters. Use CDATA for special chars."
+                "hint": "Check for unescaped < > & characters. Use CDATA for special chars.",
+                "file": str(file_path)
+            }
+        except Exception as e:
+            return {
+                "error": "Failed to validate directive",
+                "details": str(e),
+                "file": str(file_path)
             }
         
+        # Parse and check permissions
+        try:
+            directive_data = parse_directive_file(file_path)
+            permission_check = self._check_permissions(directive_data.get("permissions", []))
+            if not permission_check["valid"]:
+                return {
+                    "error": "Directive permissions not satisfied",
+                    "details": permission_check["issues"],
+                    "path": str(file_path),
+                    "permissions_required": directive_data.get("permissions", [])
+                }
+        except Exception as e:
+            return {
+                "error": "Failed to validate directive permissions",
+                "details": str(e),
+                "file": str(file_path)
+            }
+        
+        # Generate new signature for validated content
+        content_hash = hashlib.sha256(xml_content.encode()).hexdigest()[:12]
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        signature = f"<!-- kiwi-mcp:validated:{timestamp}:{content_hash} -->\n"
+        
+        # Remove old signature if present, then prepend new one
+        content_without_sig = re.sub(r'^<!-- kiwi-mcp:validated:[^>]+-->\n', '', content)
+        signed_content = signature + content_without_sig
+        
         # Update file
-        file_path.write_text(content)
+        file_path.write_text(signed_content)
+        
+        # Parse to get category
+        try:
+            directive = parse_directive_file(file_path)
+            category = directive.get("category", "unknown")
+        except:
+            category = "unknown"
         
         return {
             "status": "updated",
             "name": directive_name,
             "path": str(file_path),
-            "validated": True
+            "category": category,
+            "validated": True,
+            "signature": {
+                "hash": content_hash,
+                "timestamp": timestamp
+            },
+            "message": f"Directive validated and signed. Ready to use."
         }
     
-    async def _link_directive(
-        self,
-        directive_name: str,
-        params: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Link two directives together."""
-        to_id = params.get("to")
-        if not to_id:
-            return {
-                "error": "to is required (target directive name)",
-                "example": "parameters={'to': 'other_directive', 'relationship': 'requires'}"
-            }
-        
-        relationship = params.get("relationship", "related")
-        valid_relationships = ["requires", "suggests", "extends", "related"]
-        
-        if relationship not in valid_relationships:
-            return {
-                "error": f"Invalid relationship: {relationship}",
-                "valid_relationships": valid_relationships
-            }
-        
-        # Store link in local JSON file
-        if self.project_path:
-            metadata_dir = self.project_path / ".ai" / "metadata"
-        else:
-            metadata_dir = get_user_space() / "metadata"
-        
-        metadata_dir.mkdir(parents=True, exist_ok=True)
-        links_file = metadata_dir / "directive_links.json"
-        
-        # Load existing links
-        if links_file.exists():
-            links_data = json.loads(links_file.read_text())
-        else:
-            links_data = {"directive_links": []}
-        
-        # Add new link
-        new_link = {
-            "from": directive_name,
-            "to": to_id,
-            "relationship": relationship
-        }
-        
-        # Check if link already exists
-        existing = [
-            l for l in links_data.get("directive_links", [])
-            if l["from"] == directive_name and l["to"] == to_id
-        ]
-        
-        if existing:
-            # Update existing link
-            for link in links_data["directive_links"]:
-                if link["from"] == directive_name and link["to"] == to_id:
-                    link["relationship"] = relationship
-        else:
-            # Add new link
-            if "directive_links" not in links_data:
-                links_data["directive_links"] = []
-            links_data["directive_links"].append(new_link)
-        
-        # Save links
-        links_file.write_text(json.dumps(links_data, indent=2))
-        
-        return {
-            "status": "linked",
-            "from": directive_name,
-            "to": to_id,
-            "relationship": relationship,
-            "storage": str(links_file)
-        }

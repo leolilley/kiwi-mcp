@@ -5,10 +5,12 @@ Implements search, load, execute operations for knowledge entries.
 Handles LOCAL file operations directly, only uses registry for REMOTE operations.
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
 
 from kiwi_mcp.handlers import SortBy
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from kiwi_mcp.api.knowledge_registry import KnowledgeRegistry
@@ -125,51 +127,130 @@ class KnowledgeHandler:
     async def load(
         self,
         zettel_id: str,
-        destination: str = "project",
+        source: Literal["project", "user", "registry"],
+        destination: Literal["project", "user"],
         include_relationships: bool = False
     ) -> Dict[str, Any]:
         """
-        Load knowledge entry from local files or download from registry.
+        Load knowledge entry from specified source.
         
         Args:
             zettel_id: Entry ID to load
-            destination: "project", "user", or both (when getting from registry)
+            source: Where to load from - "project" | "user" | "registry" (REQUIRED)
+            destination: Where to save/return from - "project" | "user" (REQUIRED)
             include_relationships: Include linked entries
         
         Returns:
             Dict with entry content and metadata
         """
+        self.logger.info(f"KnowledgeHandler.load: zettel={zettel_id}, source={source}, destination={destination}")
+        
         try:
-            # Try local first
-            file_path = self.resolver.resolve(zettel_id)
-            if file_path:
+            # LOAD FROM REGISTRY
+            if source == "registry":
+                result = await self.registry.get(
+                    zettel_id=zettel_id,
+                    destination=destination,
+                    include_relationships=include_relationships,
+                    project_path=str(self.project_path) if self.project_path else None
+                )
+                if result:
+                    result["source"] = "registry"
+                    result["destination"] = destination
+                return result
+            
+            # LOAD FROM PROJECT
+            if source == "project":
+                if not self.project_path:
+                    return {
+                        "error": "project_path is required for source='project'"
+                    }
+                search_base = self.project_path / ".ai" / "knowledge"
+                file_path = self._find_entry_in_path(zettel_id, search_base)
+                if not file_path:
+                    return {
+                        "error": f"Knowledge entry '{zettel_id}' not found in project"
+                    }
+                
+                # If destination differs from source, copy the file
+                if destination == "user":
+                    # Copy from project to user space
+                    content = file_path.read_text()
+                    # Determine category from source path
+                    relative_path = file_path.relative_to(search_base)
+                    target_path = get_user_space() / "knowledge" / relative_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_text(content)
+                    self.logger.info(f"Copied knowledge entry from project to user: {target_path}")
+                    
+                    entry_data = parse_knowledge_entry(target_path)
+                    entry_data["source"] = "project"
+                    entry_data["destination"] = "user"
+                    entry_data["path"] = str(target_path)
+                    return entry_data
+                else:
+                    # Just return project file info (no copy needed)
+                    entry_data = parse_knowledge_entry(file_path)
+                    entry_data["source"] = "project"
+                    entry_data["path"] = str(file_path)
+                    return entry_data
+            
+            # LOAD FROM USER
+            # source == "user" (only remaining option due to Literal typing)
+            search_base = get_user_space() / "knowledge"
+            file_path = self._find_entry_in_path(zettel_id, search_base)
+            if not file_path:
+                return {
+                    "error": f"Knowledge entry '{zettel_id}' not found in user space"
+                }
+            
+            # If destination differs from source, copy the file
+            if destination == "project":
+                if not self.project_path:
+                    return {
+                        "error": "project_path is required for destination='project'"
+                    }
+                # Copy from user to project space
+                content = file_path.read_text()
+                # Determine category from source path
+                relative_path = file_path.relative_to(search_base)
+                target_path = self.project_path / ".ai" / "knowledge" / relative_path
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(content)
+                self.logger.info(f"Copied knowledge entry from user to project: {target_path}")
+                
+                entry_data = parse_knowledge_entry(target_path)
+                entry_data["source"] = "user"
+                entry_data["destination"] = "project"
+                entry_data["path"] = str(target_path)
+                return entry_data
+            else:
+                # Just return user file info (no copy needed)
                 entry_data = parse_knowledge_entry(file_path)
-                entry_data["source"] = "project" if ".ai/" in str(file_path) else "user"
+                entry_data["source"] = "user"
                 entry_data["path"] = str(file_path)
                 return entry_data
-            
-            # Not found locally - try registry if destination specified
-            if destination:
-                try:
-                    result = await self.registry.get(
-                        zettel_id=zettel_id,
-                        destination=destination,
-                        include_relationships=include_relationships,
-                        project_path=str(self.project_path) if self.project_path else None
-                    )
-                    return result
-                except Exception as e:
-                    self.logger.warning(f"Registry get failed: {e}")
-            
-            return {
-                "error": f"Knowledge entry '{zettel_id}' not found locally",
-                "suggestion": "Use search to find it, or specify destination to download from registry"
-            }
         except Exception as e:
             return {
                 "error": str(e),
                 "message": f"Failed to load entry '{zettel_id}'"
             }
+    
+    def _find_entry_in_path(self, zettel_id: str, base_path: Path) -> Optional[Path]:
+        """Find knowledge entry file in specified path."""
+        if not base_path.exists():
+            return None
+        
+        # Search recursively for the entry
+        for md_file in base_path.rglob(f"{zettel_id}.md"):
+            return md_file
+        
+        # Also try with wildcards in case of naming variations
+        for md_file in base_path.rglob("*.md"):
+            if zettel_id in md_file.stem:
+                return md_file
+        
+        return None
     
     async def execute(
         self,
@@ -199,19 +280,74 @@ class KnowledgeHandler:
                 return await self._update_knowledge(zettel_id, params)
             elif action == "delete":
                 return await self._delete_knowledge(zettel_id, params)
-            elif action == "link":
-                return await self._link_knowledge(zettel_id, params)
             elif action == "publish":
                 return await self._publish_knowledge(zettel_id, params)
             else:
                 return {
                     "error": f"Unknown action: {action}",
-                    "supported_actions": ["run", "create", "update", "delete", "link", "publish"]
+                    "supported_actions": ["run", "create", "update", "delete", "publish"]
                 }
         except Exception as e:
             return {
                 "error": str(e),
                 "message": f"Failed to execute action '{action}' on entry '{zettel_id}'"
+            }
+    
+    def _verify_knowledge_signature(self, file_path: Path) -> Optional[Dict[str, Any]]:
+        """
+        Verify knowledge entry signature if present.
+        
+        Returns None if no signature, or a dict with status:
+        - "valid": hash matches
+        - "modified": hash doesn't match
+        - "invalid": signature format is wrong
+        """
+        content = file_path.read_text()
+        
+        # Extract YAML frontmatter
+        if not content.startswith("---"):
+            return None  # No frontmatter, no signature
+        
+        end_idx = content.find("---", 3)
+        if end_idx == -1:
+            return None
+        
+        yaml_content = content[3:end_idx].strip()
+        
+        # Parse frontmatter for signature fields
+        stored_timestamp = None
+        stored_hash = None
+        
+        for line in yaml_content.split('\n'):
+            if ':' in line:
+                key, value = line.split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                if key == "validated_at":
+                    stored_timestamp = value
+                elif key == "content_hash":
+                    stored_hash = value
+        
+        if not stored_timestamp or not stored_hash:
+            return None  # No signature fields
+        
+        # Extract content (after frontmatter) to compute current hash
+        entry_content = content[end_idx + 3:].strip()
+        current_hash = hashlib.sha256(entry_content.encode()).hexdigest()[:12]
+        
+        if current_hash == stored_hash:
+            return {
+                "status": "valid",
+                "validated_at": stored_timestamp,
+                "hash": stored_hash
+            }
+        else:
+            return {
+                "status": "modified",
+                "validated_at": stored_timestamp,
+                "original_hash": stored_hash,
+                "current_hash": current_hash,
+                "warning": "Content modified since last validation. Consider running 'update' to re-validate."
             }
     
     def _search_local(
@@ -268,6 +404,28 @@ class KnowledgeHandler:
                 "error": f"Knowledge entry '{zettel_id}' not found locally",
                 "suggestion": "Use load() to download from registry first"
             }
+        
+        # ENFORCE hash validation - ALWAYS check, never skip
+        signature_status = self._verify_knowledge_signature(file_path)
+        
+        # Block execution if signature is invalid or modified
+        if signature_status:
+            if signature_status.get("status") == "modified":
+                return {
+                    "status": "error",
+                    "error": "Knowledge entry content has been modified since last validation",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Run 'update' action to re-validate the entry"
+                }
+            elif signature_status.get("status") == "invalid":
+                return {
+                    "status": "error",
+                    "error": "Knowledge entry signature is invalid",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Run 'update' action to re-validate the entry"
+                }
         
         # Parse entry file
         try:
@@ -339,7 +497,11 @@ class KnowledgeHandler:
                 "suggestion": "Use 'update' action to modify existing entry"
             }
         
-        # Create markdown content with YAML frontmatter
+        # Generate signature for validated content
+        content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        # Create markdown content with YAML frontmatter (including signature)
         tags = params.get("tags", [])
         frontmatter = f"""---
 zettel_id: {zettel_id}
@@ -347,6 +509,8 @@ title: {title}
 entry_type: {entry_type}
 category: {category}
 tags: {json.dumps(tags)}
+validated_at: {timestamp}
+content_hash: {content_hash}
 ---
 
 """
@@ -359,7 +523,11 @@ tags: {json.dumps(tags)}
             "path": str(file_path),
             "location": location,
             "category": category,
-            "entry_type": entry_type
+            "entry_type": entry_type,
+            "signature": {
+                "hash": content_hash,
+                "timestamp": timestamp
+            }
         }
     
     async def _update_knowledge(
@@ -392,13 +560,19 @@ tags: {json.dumps(tags)}
         category = params.get("category", entry_data.get("category"))
         tags = params.get("tags", entry_data.get("tags", []))
         
-        # Recreate frontmatter
+        # Generate new signature for validated content
+        content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        # Recreate frontmatter with signature
         frontmatter = f"""---
 zettel_id: {zettel_id}
 title: {title}
 entry_type: {entry_type}
 category: {category}
 tags: {json.dumps(tags)}
+validated_at: {timestamp}
+content_hash: {content_hash}
 ---
 
 """
@@ -408,7 +582,11 @@ tags: {json.dumps(tags)}
         return {
             "status": "updated",
             "zettel_id": zettel_id,
-            "path": str(file_path)
+            "path": str(file_path),
+            "signature": {
+                "hash": content_hash,
+                "timestamp": timestamp
+            }
         }
     
     async def _delete_knowledge(
@@ -455,78 +633,6 @@ tags: {json.dumps(tags)}
             "status": "deleted",
             "zettel_id": zettel_id,
             "deleted_from": deleted
-        }
-    
-    async def _link_knowledge(
-        self,
-        zettel_id: str,
-        params: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Link two knowledge entries together."""
-        to_id = params.get("to")
-        if not to_id:
-            return {
-                "error": "to is required (target entry ID)",
-                "example": "parameters={'to': 'other_entry', 'relationship': 'references'}"
-            }
-        
-        relationship = params.get("relationship", "related")
-        valid_relationships = ["references", "contradicts", "extends", "implements", "supersedes", "depends_on", "related", "example_of"]
-        
-        if relationship not in valid_relationships:
-            return {
-                "error": f"Invalid relationship: {relationship}",
-                "valid_relationships": valid_relationships
-            }
-        
-        # Store link in local JSON file
-        if self.project_path:
-            metadata_dir = self.project_path / ".ai" / "metadata"
-        else:
-            metadata_dir = get_user_space() / "metadata"
-        
-        metadata_dir.mkdir(parents=True, exist_ok=True)
-        links_file = metadata_dir / "knowledge_links.json"
-        
-        # Load existing links
-        if links_file.exists():
-            links_data = json.loads(links_file.read_text())
-        else:
-            links_data = {"knowledge_links": []}
-        
-        # Add new link
-        new_link = {
-            "from": zettel_id,
-            "to": to_id,
-            "relationship": relationship
-        }
-        
-        # Check if link already exists
-        existing = [
-            l for l in links_data.get("knowledge_links", [])
-            if l["from"] == zettel_id and l["to"] == to_id
-        ]
-        
-        if existing:
-            # Update existing link
-            for link in links_data["knowledge_links"]:
-                if link["from"] == zettel_id and link["to"] == to_id:
-                    link["relationship"] = relationship
-        else:
-            # Add new link
-            if "knowledge_links" not in links_data:
-                links_data["knowledge_links"] = []
-            links_data["knowledge_links"].append(new_link)
-        
-        # Save links
-        links_file.write_text(json.dumps(links_data, indent=2))
-        
-        return {
-            "status": "linked",
-            "from": zettel_id,
-            "to": to_id,
-            "relationship": relationship,
-            "storage": str(links_file)
         }
     
     async def _publish_knowledge(
