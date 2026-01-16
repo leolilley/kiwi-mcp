@@ -75,7 +75,8 @@ python -m kiwi_mcp.server
     "item_type": "directive",
     "query": "authentication setup",
     "source": "registry",
-    "limit": 10
+    "limit": 10,
+    "project_path": "/home/user/myproject"
   }
 }
 ```
@@ -133,7 +134,8 @@ python -m kiwi_mcp.server
     "parameters": {
       "project_name": "my_app",
       "language": "python"
-    }
+    },
+    "project_path": "/home/user/myproject"
   }
 }
 ```
@@ -162,7 +164,8 @@ python -m kiwi_mcp.server
     "parameters": {
       "version": "1.0.0",
       "changelog": "Initial release with best practices"
-    }
+    },
+    "project_path": "/home/user/myproject"
   }
 }
 ```
@@ -179,6 +182,7 @@ Find items by natural language query across local and registry sources.
 
 - `item_type` (required): `"directive"`, `"script"`, or `"knowledge"`
 - `query` (required): Natural language search query
+- `project_path` (required): Absolute path to project root
 - `source` (optional): `"local"`, `"registry"`, or `"all"` (default: `"local"`)
 - `limit` (optional): Max results (default: 10)
 
@@ -191,14 +195,16 @@ Find items by natural language query across local and registry sources.
 search(
     item_type="knowledge",
     query="email deliverability",
-    source="registry"
+    source="registry",
+    project_path="/home/user/myproject"
 )
 
 # Search local scripts
 search(
     item_type="script",
     query="scrape Google Maps",
-    limit=5
+    limit=5,
+    project_path="/home/user/myproject"
 )
 ```
 
@@ -212,8 +218,8 @@ Download items from registry to local storage.
 
 - `item_type` (required): `"directive"`, `"script"`, or `"knowledge"`
 - `item_id` (required): Item identifier
+- `project_path` (required): Absolute path to project root
 - `destination` (optional): `"project"` or `"user"` (default: `"project"`)
-- `project_path` (optional): Required if `destination="project"`
 - `version` (optional): Specific version to load
 
 **Returns:** JSON with `status`, `path`, and metadata
@@ -233,7 +239,8 @@ load(
 load(
     item_type="knowledge",
     item_id="001-jwt-auth",
-    destination="user"
+    destination="user",
+    project_path="/home/user/myapp"
 )
 ```
 
@@ -248,8 +255,9 @@ Run operations on items: run, publish, delete, create, update, link.
 - `item_type` (required): `"directive"`, `"script"`, or `"knowledge"`
 - `action` (required): `"run"`, `"publish"`, `"delete"`, `"create"`, `"update"`, `"link"`
 - `item_id` (required): Item identifier
+- `project_path` (required): Absolute path to project root
 - `parameters` (optional): Action-specific parameters dict
-- Additional parameters: `dry_run`, `project_path`, etc.
+- Additional parameters: `dry_run`, etc.
 
 **Returns:** JSON with operation result or `error`
 
@@ -280,7 +288,8 @@ execute(
     item_type="directive",
     action="run",
     item_id="setup_auth",
-    parameters={"provider": "google"}
+    parameters={"provider": "google"},
+    project_path="/home/user/myproject"
 )
 
 # Publish script to registry
@@ -288,7 +297,8 @@ execute(
     item_type="script",
     action="publish",
     item_id="my_scraper",
-    parameters={"version": "1.0.0"}
+    parameters={"version": "1.0.0"},
+    project_path="/home/user/myproject"
 )
 
 # Delete with confirmation
@@ -296,7 +306,8 @@ execute(
     item_type="knowledge",
     action="delete",
     item_id="001-old-entry",
-    parameters={"confirm": True}
+    parameters={"confirm": True},
+    project_path="/home/user/myproject"
 )
 ```
 

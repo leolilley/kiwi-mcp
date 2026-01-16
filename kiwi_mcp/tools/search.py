@@ -8,7 +8,7 @@ from kiwi_mcp.utils.logger import get_logger
 
 class SearchTool(BaseTool):
     """Search for items across all Kiwi types."""
-    
+
     def __init__(self, registry=None):
         """Initialize with optional registry reference."""
         self.registry = registry
@@ -44,10 +44,10 @@ class SearchTool(BaseTool):
                     },
                     "project_path": {
                         "type": "string",
-                        "description": "Absolute path to project root (where .ai/ folder lives). REQUIRED for source='local' or source='all'. Example: '/home/user/myproject'",
+                        "description": "Absolute path to project root (where .ai/ folder lives). Example: '/home/user/myproject'",
                     },
                 },
-                "required": ["item_type", "query"],
+                "required": ["item_type", "query", "project_path"],
             },
         )
 
@@ -59,44 +59,51 @@ class SearchTool(BaseTool):
         limit = arguments.get("limit", 10)
         project_path = arguments.get("project_path")
 
-        self.logger.info(f"SearchTool.execute: item_type={item_type}, query={query}, source={source}")
+        self.logger.info(
+            f"SearchTool.execute: item_type={item_type}, query={query}, source={source}"
+        )
 
         if not item_type or not query:
-            return self._format_response(
-                {"error": "item_type and query are required"}
-            )
+            return self._format_response({"error": "item_type and query are required"})
 
-        # Validate project_path for local/all sources
-        if source in ("local", "all") and not project_path:
-            return self._format_response({
-                "error": f"project_path is REQUIRED when source='{source}'",
-                "message": "Please provide the absolute path to your project root (where .ai/ folder lives).",
-                "hint": f"Add project_path parameter to your search() call. Example: project_path='/home/user/myproject'"
-            })
+        if not project_path:
+            return self._format_response(
+                {
+                    "error": "project_path is REQUIRED",
+                    "message": "Please provide the absolute path to your project root (where .ai/ folder lives).",
+                    "hint": "Add project_path parameter. Example: project_path='/home/user/myproject'",
+                }
+            )
 
         # Create handler dynamically with project_path
         try:
             from kiwi_mcp.handlers.directive.handler import DirectiveHandler
             from kiwi_mcp.handlers.script.handler import ScriptHandler
             from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
-            
+
             handlers = {
                 "directive": DirectiveHandler,
                 "script": ScriptHandler,
                 "knowledge": KnowledgeHandler,
             }
-            
+
             handler_class = handlers.get(item_type)
             if not handler_class:
-                return self._format_response({
-                    "error": f"Unknown item_type: {item_type}",
-                    "supported_types": list(handlers.keys())
-                })
-            
+                return self._format_response(
+                    {
+                        "error": f"Unknown item_type: {item_type}",
+                        "supported_types": list(handlers.keys()),
+                    }
+                )
+
             handler = handler_class(project_path=project_path)
             result = await handler.search(query, source=source, limit=limit)
-            self.logger.info(f"SearchTool result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
-            self.logger.info(f"SearchTool result total: {result.get('total', 'N/A') if isinstance(result, dict) else 'N/A'}")
+            self.logger.info(
+                f"SearchTool result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}"
+            )
+            self.logger.info(
+                f"SearchTool result total: {result.get('total', 'N/A') if isinstance(result, dict) else 'N/A'}"
+            )
             return self._format_response(result)
         except Exception as e:
             self.logger.error(f"Search failed: {e}")

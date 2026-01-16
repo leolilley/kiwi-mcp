@@ -84,6 +84,30 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
             "attrs": dict(child.attrib) if child.attrib else {}
         })
     
+    # Extract model_class from metadata
+    model_class_elem = metadata_elem.find("model_class")
+    if model_class_elem is not None:
+        model_class_data = {
+            "tier": model_class_elem.get("tier"),
+            "fallback": model_class_elem.get("fallback"),
+            "parallel": model_class_elem.get("parallel"),
+            "reasoning": model_class_elem.text.strip() if model_class_elem.text else None
+        }
+    else:
+        model_class_data = None
+    
+    # Extract relationships from metadata (if present)
+    relationships_data = {}
+    relationships_elem = metadata_elem.find("relationships")
+    if relationships_elem is not None:
+        for rel_type in ["requires", "suggests", "extends", "related"]:
+            elements = relationships_elem.findall(rel_type)
+            if elements:
+                relationships_data[rel_type] = [
+                    elem.get("directive") or elem.text.strip() if elem.text else None
+                    for elem in elements
+                ]
+    
     # Convert full XML to nested dict
     parsed = _element_to_dict(root)
     
@@ -101,6 +125,8 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
         "content": content,
         "parsed": parsed,
         "permissions": permissions,
+        "model_class": model_class_data,
+        "relationships": relationships_data if relationships_data else None,
     }
 
 

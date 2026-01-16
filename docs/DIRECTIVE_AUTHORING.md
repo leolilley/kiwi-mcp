@@ -93,7 +93,7 @@ Directives can declare relationships to other directives using the `<relationshi
 
 ### Relationships Element
 
-Add the `<relationships>` element after `<metadata>` in your directive XML:
+Add the `<relationships>` element inside `<metadata>`, after `<permissions>`:
 
 ```xml
 <directive name="my_directive" version="1.0.0">
@@ -101,14 +101,19 @@ Add the `<relationships>` element after `<metadata>` in your directive XML:
     <description>My directive description</description>
     <category>development</category>
     <author>your_name</author>
+    <model_class tier="balanced" fallback="reasoning" parallel="false">
+      Brief explanation of reasoning requirements
+    </model_class>
+    <permissions>
+      <read resource="filesystem" path="**/*" />
+    </permissions>
+    <relationships>
+      <requires>base_setup</requires>
+      <suggests>advanced_config</suggests>
+      <extends>parent_directive</extends>
+      <related>similar_directive</related>
+    </relationships>
   </metadata>
-
-  <relationships>
-    <requires directive="base_setup" />
-    <suggests directive="advanced_config" />
-    <extends directive="parent_directive" />
-    <related directive="similar_directive" />
-  </relationships>
 
   <!-- rest of directive -->
 </directive>
@@ -208,6 +213,122 @@ If you don't need CDATA, you can use XML escaping:
 - `&apos;` for `'`
 
 This is cleaner for short content but harder to read for large blocks.
+
+---
+
+## Model Class
+
+### Purpose
+
+The `<model_class>` metadata helps orchestrator agents select the appropriate AI model for executing the directive. This enables cost/performance optimization by routing simple tasks to fast models and complex tasks to reasoning models.
+
+### Format
+
+The `<model_class>` element **must be placed inside `<metadata>`** after `<author>` and before `<permissions>`:
+
+```xml
+<metadata>
+  <description>...</description>
+  <category>...</category>
+  <author>...</author>
+  <model_class tier="balanced" fallback="fast" parallel="true">
+    Brief explanation of reasoning requirements
+  </model_class>
+  <permissions>...</permissions>
+</metadata>
+```
+
+### Attributes
+
+| Attribute | Required | Values | Description |
+|-----------|----------|--------|-------------|
+| `tier` | **Yes** | Any string (see standard tiers below) | Primary model class (cost-optimized choice) |
+| `fallback` | No | Any string or `none` | Higher-tier model to use if directive fails with primary tier |
+| `parallel` | No | `true`, `false` | Whether directive can run in parallel instances |
+
+### Text Content
+
+Optional human-readable explanation of why this tier was chosen and what reasoning is required.
+
+### Fallback Strategy
+
+The `fallback` attribute specifies a **higher reasoning tier** to use if the directive fails when executed with the primary tier. This enables cost optimization by starting with the cheapest suitable model and automatically upgrading if needed.
+
+**Fallback chain examples:**
+- `tier="fast" fallback="balanced"` - Try fast first, use balanced if it fails
+- `tier="balanced" fallback="reasoning"` - Try balanced first, use reasoning if it fails  
+- `tier="reasoning" fallback="expert"` - Try reasoning first, use expert if it fails
+- `tier="expert" fallback="none"` - No fallback available (already at highest tier)
+
+**When to use fallback:**
+- Set `fallback` when you want automatic retry with a smarter model if execution fails
+- Set `fallback="none"` when failure should stop rather than retry with higher tier
+- Fallback should always be a tier higher than primary (or `none`)
+
+### Standard Model Tiers
+
+The following are **recommended standard tiers** for common use cases. Custom tier names are allowed for specialized or fine-tuned models.
+
+| Tier | Use Case | Example Models | Cost |
+|------|----------|----------------|------|
+| `fast` | Simple transforms, formatting, lookups, template substitution | grok-fast, haiku, flash | $ |
+| `balanced` | Standard tasks, code generation, multi-step workflows | sonnet, gpt-4o | $$ |
+| `reasoning` | Complex analysis, planning, edge cases, novel problems | o1, o3-mini, deepthink | $$$ |
+| `expert` | Hardest problems, research-level, critical decisions | opus, o1-pro | $$$$ |
+
+**Custom tiers:** You may specify custom tier names for fine-tuned or specialized models (e.g., `"code-specialist"`, `"domain-expert-legal"`, etc.). The orchestrator is responsible for mapping tier names to actual models.
+
+### Examples
+
+**Fast tier - Simple file operations:**
+```xml
+<model_class tier="fast" fallback="balanced" parallel="true">
+  Template substitution and file copying. Fallback to balanced if edge cases arise.
+</model_class>
+```
+
+**Balanced tier - Standard development:**
+```xml
+<model_class tier="balanced" fallback="reasoning" parallel="false">
+  Multi-step code generation with validation. Fallback to reasoning for complex edge cases.
+</model_class>
+```
+
+**Reasoning tier - Complex planning:**
+```xml
+<model_class tier="reasoning" fallback="expert" parallel="false">
+  Deep analysis of system architecture. Fallback to expert if novel solutions needed.
+</model_class>
+```
+
+**Expert tier - Novel problems:**
+```xml
+<model_class tier="expert" fallback="none" parallel="false">
+  Research-level problem requiring best available reasoning. No higher tier available.
+</model_class>
+```
+
+### Guidelines
+
+1. **Start cost-optimized** - Choose the cheapest tier that should work for typical cases
+2. **Set appropriate fallback** - Specify a higher-tier model for automatic retry if execution fails
+3. **Fallback must be higher** - Fallback should always be a tier above primary (fast→balanced→reasoning→expert)
+4. **Expert has no fallback** - If tier="expert", use fallback="none" (already at highest tier)
+5. **Explain reasoning** - Text content helps future reviewers understand the tier choice
+6. **Parallel safety** - Set `parallel="true"` only if directive has no shared state
+
+### Enforcement
+
+The `<model_class>` element is **REQUIRED** in all directives. The parser will reject directives:
+- Missing the `<model_class>` element
+- Missing the required `tier` attribute
+- With invalid tier/fallback values
+- With malformed parallel attribute
+
+This is enforced in:
+- `run` action (before execution)
+- `create` action (before signing)
+- `update` action (before saving)
 
 ---
 

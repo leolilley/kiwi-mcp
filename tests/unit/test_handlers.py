@@ -15,24 +15,21 @@ class TestTypeHandlerRegistryInitialization:
     """Test TypeHandlerRegistry initialization."""
 
     def test_registry_initializes_without_project_path(self):
-        """Test registry initializes without project_path."""
-        registry = TypeHandlerRegistry()
-        
-        assert registry.project_path is None
-        assert registry.handlers is not None
-        assert isinstance(registry.handlers, dict)
+        """Test registry raises error without project_path."""
+        with pytest.raises(TypeError):
+            TypeHandlerRegistry()
 
     def test_registry_initializes_with_project_path(self):
         """Test registry initializes with project_path."""
         project_path = "/home/user/myproject"
         registry = TypeHandlerRegistry(project_path=project_path)
-        
+
         assert registry.project_path == project_path
 
     def test_registry_has_handler_mapping(self):
         """Test registry has handler mapping."""
-        registry = TypeHandlerRegistry()
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
         assert hasattr(registry, "handlers")
         assert isinstance(registry.handlers, dict)
         # Handlers dict should be empty or have handlers depending on imports
@@ -40,15 +37,15 @@ class TestTypeHandlerRegistryInitialization:
 
     def test_registry_get_supported_types(self):
         """Test registry can get supported types."""
-        registry = TypeHandlerRegistry()
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
         supported = registry.get_supported_types()
         assert isinstance(supported, list)
 
     def test_registry_get_handler_info(self):
         """Test registry can provide handler info."""
-        registry = TypeHandlerRegistry()
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
         info = registry.get_handler_info()
         assert isinstance(info, dict)
         assert "registry" in info
@@ -63,13 +60,10 @@ class TestTypeHandlerRegistrySearch:
     @pytest.mark.asyncio
     async def test_search_unknown_item_type(self):
         """Test search with unknown item_type."""
-        registry = TypeHandlerRegistry()
-        
-        result = await registry.search(
-            item_type="unknown_type",
-            query="test"
-        )
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
+        result = await registry.search(item_type="unknown_type", query="test")
+
         assert "error" in result
         assert "unknown_item_type" in result["error"].lower() or "Unknown" in result["error"]
 
@@ -79,15 +73,12 @@ class TestTypeHandlerRegistrySearch:
         # Create a mock handler
         mock_handler = AsyncMock()
         mock_handler.search.return_value = {"results": ["item1"]}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
-        
-        result = await registry.search(
-            item_type="directive",
-            query="test query"
-        )
-        
+
+        result = await registry.search(item_type="directive", query="test query")
+
         # Handler should be called
         mock_handler.search.assert_called_once()
         assert result == {"results": ["item1"]}
@@ -97,17 +88,12 @@ class TestTypeHandlerRegistrySearch:
         """Test search passes all parameters to handler."""
         mock_handler = AsyncMock()
         mock_handler.search.return_value = {}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["script"] = mock_handler
-        
-        await registry.search(
-            item_type="script",
-            query="test",
-            source="registry",
-            limit=20
-        )
-        
+
+        await registry.search(item_type="script", query="test", source="registry", limit=20)
+
         # Check handler received parameters
         call_args = mock_handler.search.call_args
         assert call_args is not None
@@ -119,15 +105,12 @@ class TestTypeHandlerRegistrySearch:
         """Test search handles handler exceptions."""
         mock_handler = AsyncMock()
         mock_handler.search.side_effect = Exception("Handler error")
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["knowledge"] = mock_handler
-        
-        result = await registry.search(
-            item_type="knowledge",
-            query="test"
-        )
-        
+
+        result = await registry.search(item_type="knowledge", query="test")
+
         assert "error" in result
         assert "Failed to search" in result.get("message", "")
 
@@ -138,13 +121,10 @@ class TestTypeHandlerRegistryLoad:
     @pytest.mark.asyncio
     async def test_load_unknown_item_type(self):
         """Test load with unknown item_type."""
-        registry = TypeHandlerRegistry()
-        
-        result = await registry.load(
-            item_type="nonexistent",
-            item_id="item1"
-        )
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
+        result = await registry.load(item_type="nonexistent", item_id="item1")
+
         assert "error" in result
         assert "Unknown" in result["error"]
 
@@ -153,16 +133,14 @@ class TestTypeHandlerRegistryLoad:
         """Test load with directive handler."""
         mock_handler = AsyncMock()
         mock_handler.load.return_value = {"status": "loaded"}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
-        
+
         result = await registry.load(
-            item_type="directive",
-            item_id="my_directive",
-            destination="project"
+            item_type="directive", item_id="my_directive", destination="project"
         )
-        
+
         mock_handler.load.assert_called_once()
         assert result == {"status": "loaded"}
 
@@ -171,15 +149,12 @@ class TestTypeHandlerRegistryLoad:
         """Test load maps item_id to directive_name."""
         mock_handler = AsyncMock()
         mock_handler.load.return_value = {}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
-        
-        await registry.load(
-            item_type="directive",
-            item_id="test_directive"
-        )
-        
+
+        await registry.load(item_type="directive", item_id="test_directive")
+
         # Check directive_name parameter was used
         call_kwargs = mock_handler.load.call_args[1]
         assert "directive_name" in call_kwargs
@@ -190,15 +165,12 @@ class TestTypeHandlerRegistryLoad:
         """Test load maps item_id to script_name."""
         mock_handler = AsyncMock()
         mock_handler.load.return_value = {}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["script"] = mock_handler
-        
-        await registry.load(
-            item_type="script",
-            item_id="test_script"
-        )
-        
+
+        await registry.load(item_type="script", item_id="test_script")
+
         # Check script_name parameter was used
         call_kwargs = mock_handler.load.call_args[1]
         assert "script_name" in call_kwargs
@@ -208,15 +180,12 @@ class TestTypeHandlerRegistryLoad:
         """Test load maps item_id to zettel_id."""
         mock_handler = AsyncMock()
         mock_handler.load.return_value = {}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["knowledge"] = mock_handler
-        
-        await registry.load(
-            item_type="knowledge",
-            item_id="001-test"
-        )
-        
+
+        await registry.load(item_type="knowledge", item_id="001-test")
+
         # Check zettel_id parameter was used
         call_kwargs = mock_handler.load.call_args[1]
         assert "zettel_id" in call_kwargs
@@ -228,14 +197,10 @@ class TestTypeHandlerRegistryExecute:
     @pytest.mark.asyncio
     async def test_execute_unknown_item_type(self):
         """Test execute with unknown item_type."""
-        registry = TypeHandlerRegistry()
-        
-        result = await registry.execute(
-            item_type="unknown",
-            action="run",
-            item_id="test"
-        )
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
+        result = await registry.execute(item_type="unknown", action="run", item_id="test")
+
         assert "error" in result
         assert "Unknown" in result["error"]
 
@@ -244,17 +209,14 @@ class TestTypeHandlerRegistryExecute:
         """Test execute passes parameters."""
         mock_handler = AsyncMock()
         mock_handler.execute.return_value = {"status": "executed"}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
-        
+
         result = await registry.execute(
-            item_type="directive",
-            action="run",
-            item_id="my_directive",
-            parameters={"key": "value"}
+            item_type="directive", action="run", item_id="my_directive", parameters={"key": "value"}
         )
-        
+
         mock_handler.execute.assert_called_once()
         # Parameters should be passed
         call_kwargs = mock_handler.execute.call_args[1]
@@ -266,16 +228,12 @@ class TestTypeHandlerRegistryExecute:
         """Test execute maps item_id for directives."""
         mock_handler = AsyncMock()
         mock_handler.execute.return_value = {}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
-        
-        await registry.execute(
-            item_type="directive",
-            action="publish",
-            item_id="test_directive"
-        )
-        
+
+        await registry.execute(item_type="directive", action="publish", item_id="test_directive")
+
         call_kwargs = mock_handler.execute.call_args[1]
         assert "directive_name" in call_kwargs
 
@@ -284,16 +242,12 @@ class TestTypeHandlerRegistryExecute:
         """Test execute maps item_id for scripts."""
         mock_handler = AsyncMock()
         mock_handler.execute.return_value = {}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["script"] = mock_handler
-        
-        await registry.execute(
-            item_type="script",
-            action="run",
-            item_id="test_script"
-        )
-        
+
+        await registry.execute(item_type="script", action="run", item_id="test_script")
+
         call_kwargs = mock_handler.execute.call_args[1]
         assert "script_name" in call_kwargs
 
@@ -302,16 +256,12 @@ class TestTypeHandlerRegistryExecute:
         """Test execute maps item_id for knowledge."""
         mock_handler = AsyncMock()
         mock_handler.execute.return_value = {}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["knowledge"] = mock_handler
-        
-        await registry.execute(
-            item_type="knowledge",
-            action="create",
-            item_id="001-test"
-        )
-        
+
+        await registry.execute(item_type="knowledge", action="create", item_id="001-test")
+
         call_kwargs = mock_handler.execute.call_args[1]
         assert "zettel_id" in call_kwargs
 
@@ -320,16 +270,12 @@ class TestTypeHandlerRegistryExecute:
         """Test execute handles handler exceptions."""
         mock_handler = AsyncMock()
         mock_handler.execute.side_effect = RuntimeError("Execution error")
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
-        
-        result = await registry.execute(
-            item_type="directive",
-            action="run",
-            item_id="test"
-        )
-        
+
+        result = await registry.execute(item_type="directive", action="run", item_id="test")
+
         assert "error" in result
         assert "Failed to execute" in result.get("message", "")
 
@@ -340,13 +286,10 @@ class TestTypeHandlerRegistryErrorCases:
     @pytest.mark.asyncio
     async def test_search_returns_error_dict(self):
         """Test search returns error dict on failure."""
-        registry = TypeHandlerRegistry()
-        
-        result = await registry.search(
-            item_type="invalid",
-            query="test"
-        )
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
+        result = await registry.search(item_type="invalid", query="test")
+
         assert isinstance(result, dict)
         assert "error" in result
         assert "supported_types" in result
@@ -354,35 +297,28 @@ class TestTypeHandlerRegistryErrorCases:
     @pytest.mark.asyncio
     async def test_load_returns_error_dict(self):
         """Test load returns error dict on failure."""
-        registry = TypeHandlerRegistry()
-        
-        result = await registry.load(
-            item_type="invalid",
-            item_id="test"
-        )
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
+        result = await registry.load(item_type="invalid", item_id="test")
+
         assert isinstance(result, dict)
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_execute_returns_error_dict(self):
         """Test execute returns error dict on failure."""
-        registry = TypeHandlerRegistry()
-        
-        result = await registry.execute(
-            item_type="invalid",
-            action="run",
-            item_id="test"
-        )
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
+        result = await registry.execute(item_type="invalid", action="run", item_id="test")
+
         assert isinstance(result, dict)
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_get_handler_returns_none_for_unknown(self):
         """Test _get_handler returns None for unknown type."""
-        registry = TypeHandlerRegistry()
-        
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
+
         handler = registry._get_handler("nonexistent")
         assert handler is None
 
@@ -397,22 +333,22 @@ class TestTypeHandlerRegistryIntegration:
         mock_directive = AsyncMock()
         mock_script = AsyncMock()
         mock_knowledge = AsyncMock()
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_directive
         registry.handlers["script"] = mock_script
         registry.handlers["knowledge"] = mock_knowledge
-        
+
         # Should work with all types
         assert registry.get_supported_types() == ["directive", "script", "knowledge"]
-        
+
         # Each search should route to correct handler
         await registry.search("directive", "test")
         assert mock_directive.search.called
-        
+
         await registry.search("script", "test")
         assert mock_script.search.called
-        
+
         await registry.search("knowledge", "test")
         assert mock_knowledge.search.called
 
@@ -420,9 +356,9 @@ class TestTypeHandlerRegistryIntegration:
         """Test registry info is comprehensive."""
         project_path = "/test/path"
         registry = TypeHandlerRegistry(project_path=project_path)
-        
+
         info = registry.get_handler_info()
-        
+
         assert info["registry"] == "TypeHandlerRegistry"
         assert info["project_path"] == project_path
         assert "handlers" in info
@@ -435,22 +371,19 @@ class TestTypeHandlerRegistryIntegration:
         """Test execute with full parameter set."""
         mock_handler = AsyncMock()
         mock_handler.execute.return_value = {"result": "success"}
-        
+
         registry = TypeHandlerRegistry(project_path="/path/to/project")
         registry.handlers["directive"] = mock_handler
-        
+
         result = await registry.execute(
             item_type="directive",
             action="publish",
             item_id="test_directive",
-            parameters={
-                "version": "1.0.0",
-                "description": "Test directive"
-            },
+            parameters={"version": "1.0.0", "description": "Test directive"},
             dry_run=True,
-            project_path="/custom/path"
+            project_path="/custom/path",
         )
-        
+
         assert result == {"result": "success"}
         mock_handler.execute.assert_called_once()
 
@@ -460,7 +393,7 @@ class TestTypeHandlerRegistryLogging:
 
     def test_registry_initializes_logger(self):
         """Test registry has logger."""
-        registry = TypeHandlerRegistry()
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         assert registry.logger is not None
 
     @pytest.mark.asyncio
@@ -468,11 +401,11 @@ class TestTypeHandlerRegistryLogging:
         """Test registry logs search operations."""
         mock_handler = AsyncMock()
         mock_handler.search.return_value = {}
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
-        
-        with patch.object(registry.logger, 'info') as mock_log:
+
+        with patch.object(registry.logger, "info") as mock_log:
             await registry.search("directive", "query")
             # Logger should be called
             # We just verify no exception is raised
@@ -482,11 +415,11 @@ class TestTypeHandlerRegistryLogging:
         """Test registry logs errors."""
         mock_handler = AsyncMock()
         mock_handler.search.side_effect = Exception("Test error")
-        
-        registry = TypeHandlerRegistry()
+
+        registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
-        
-        with patch.object(registry.logger, 'error') as mock_log:
+
+        with patch.object(registry.logger, "error") as mock_log:
             await registry.search("directive", "query")
             # Should log error
             # We just verify no exception propagates

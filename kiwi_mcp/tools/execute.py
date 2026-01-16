@@ -8,7 +8,7 @@ from kiwi_mcp.tools.base import BaseTool
 
 class ExecuteTool(BaseTool):
     """Execute operations on items."""
-    
+
     def __init__(self, registry=None):
         """Initialize with optional registry reference."""
         self.registry = registry
@@ -55,7 +55,8 @@ Examples:
                     },
                     "parameters": {
                         "type": "object",
-                        "description": "Action-specific parameters",
+                        "description": "Action-specific parameters. Common parameters listed below, but directives/scripts/knowledge can accept any parameters they define in their inputs.",
+                        "additionalProperties": True,
                         "properties": {
                             "version": {
                                 "type": "string",
@@ -86,10 +87,10 @@ Examples:
                     },
                     "project_path": {
                         "type": "string",
-                        "description": "Absolute path to project root (where .ai/ folder lives). REQUIRED for: run, delete, update, create with location='project'. Example: '/home/user/myproject'",
+                        "description": "Absolute path to project root (where .ai/ folder lives). Example: '/home/user/myproject'",
                     },
                 },
-                "required": ["item_type", "action", "item_id"],
+                "required": ["item_type", "action", "item_id", "project_path"],
             },
         )
 
@@ -102,47 +103,38 @@ Examples:
         project_path = arguments.get("project_path")
 
         if not item_type or not action or not item_id:
-            return self._format_response(
-                {"error": "item_type, action, and item_id are required"}
-            )
+            return self._format_response({"error": "item_type, action, and item_id are required"})
 
-        # Validate project_path for operations that need it
-        location = parameters.get("location")
-        source = parameters.get("source")
-        
-        # Actions that require project_path
-        needs_project_path = (
-            action in ("run", "delete", "update") or  # These always need project context
-            location == "project" or  # Creating/saving to project
-            source in ("local", "all")  # Working with local files
-        )
-        
-        if needs_project_path and not project_path:
-            return self._format_response({
-                "error": f"project_path is REQUIRED for action='{action}'",
-                "message": f"Please provide the absolute path to your project root (where .ai/ folder lives).",
-                "hint": f"Add project_path parameter to your execute() call. Example: project_path='/home/user/myproject'"
-            })
+        if not project_path:
+            return self._format_response(
+                {
+                    "error": "project_path is REQUIRED",
+                    "message": "Please provide the absolute path to your project root (where .ai/ folder lives).",
+                    "hint": "Add project_path parameter. Example: project_path='/home/user/myproject'",
+                }
+            )
 
         # Create handler dynamically with project_path
         try:
             from kiwi_mcp.handlers.directive.handler import DirectiveHandler
             from kiwi_mcp.handlers.script.handler import ScriptHandler
             from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
-            
+
             handlers = {
                 "directive": DirectiveHandler,
                 "script": ScriptHandler,
                 "knowledge": KnowledgeHandler,
             }
-            
+
             handler_class = handlers.get(item_type)
             if not handler_class:
-                return self._format_response({
-                    "error": f"Unknown item_type: {item_type}",
-                    "supported_types": list(handlers.keys())
-                })
-            
+                return self._format_response(
+                    {
+                        "error": f"Unknown item_type: {item_type}",
+                        "supported_types": list(handlers.keys()),
+                    }
+                )
+
             handler = handler_class(project_path=project_path)
             result = await handler.execute(action, item_id, parameters)
             return self._format_response(result)

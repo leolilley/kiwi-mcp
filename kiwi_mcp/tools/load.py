@@ -1,4 +1,4 @@
-"""Load tool - download from registry to local."""
+"""Load tool - load/inspect items or copy between locations."""
 
 import json
 import logging
@@ -7,8 +7,12 @@ from kiwi_mcp.tools.base import BaseTool
 
 
 class LoadTool(BaseTool):
-    """Load items from registry to local storage."""
+    """Load items for inspection or copy between locations.
     
+    When destination is omitted or equals source: read-only inspection (returns content).
+    When destination differs from source: copies the item to destination.
+    """
+
     def __init__(self, registry=None):
         """Initialize with optional registry reference."""
         self.registry = registry
@@ -18,7 +22,17 @@ class LoadTool(BaseTool):
     def schema(self) -> Tool:
         return Tool(
             name="load",
-            description="Load items from specified source (project, user, or registry)",
+            description="""Load items for inspection or copy between locations.
+
+When destination is omitted: Read-only mode - returns item content without copying.
+When destination equals source: Same as above - just returns content.
+When destination differs from source: Copies the item to destination location.
+
+Use cases:
+- Inspect a directive/script before running it: load(source="project")
+- Download from registry to project: load(source="registry", destination="project")
+- Copy from user space to project: load(source="user", destination="project")
+""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -34,12 +48,12 @@ class LoadTool(BaseTool):
                     "source": {
                         "type": "string",
                         "enum": ["project", "user", "registry"],
-                        "description": "Where to load from: 'project' (local .ai/), 'user' (mcp env variable), or 'registry' (remote Supabase)",
+                        "description": "Where to load from: 'project' (local .ai/), 'user' (~/.ai/), or 'registry' (remote Supabase)",
                     },
                     "destination": {
                         "type": "string",
                         "enum": ["project", "user"],
-                        "description": "Where to save/return from: 'project' or 'user' (REQUIRED)",
+                        "description": "Where to copy to (optional). If omitted or same as source, just returns content without copying.",
                     },
                     "version": {
                         "type": "string",
@@ -47,10 +61,10 @@ class LoadTool(BaseTool):
                     },
                     "project_path": {
                         "type": "string",
-                        "description": "Absolute path to project root (where .ai/ folder lives). REQUIRED for source='project' or destination='project'. Example: '/home/user/myproject'",
+                        "description": "Absolute path to project root (where .ai/ folder lives). Example: '/home/user/myproject'",
                     },
                 },
-                "required": ["item_type", "item_id", "source", "destination"],
+                "required": ["item_type", "item_id", "source", "project_path"],
             },
         )
 
@@ -65,66 +79,60 @@ class LoadTool(BaseTool):
 
         # Validate required parameters
         if not item_type or not item_id:
-            return self._format_response(
-                {"error": "item_type and item_id are required"}
-            )
-        
-        if not source:
-            return self._format_response({
-                "error": "source is REQUIRED",
-                "message": "Specify source='project', source='user', or source='registry'"
-            })
-        
-        if not destination:
-            return self._format_response({
-                "error": "destination is REQUIRED",
-                "message": "Specify destination='project' or destination='user'"
-            })
+            return self._format_response({"error": "item_type and item_id are required"})
 
-        # Validate project_path when needed
-        if (source == "project" or destination == "project") and not project_path:
-            return self._format_response({
-                "error": "project_path is REQUIRED for source='project' or destination='project'",
-                "message": "Please provide the absolute path to your project root (where .ai/ folder lives).",
-                "hint": "Add project_path parameter. Example: project_path='/home/user/myproject'"
-            })
+        if not source:
+            return self._format_response(
+                {
+                    "error": "source is REQUIRED",
+                    "message": "Specify source='project', source='user', or source='registry'",
+                }
+            )
+
+        if not project_path:
+            return self._format_response(
+                {
+                    "error": "project_path is REQUIRED",
+                    "message": "Please provide the absolute path to your project root (where .ai/ folder lives).",
+                    "hint": "Add project_path parameter. Example: project_path='/home/user/myproject'",
+                }
+            )
 
         # Create handler dynamically with project_path
         try:
             from kiwi_mcp.handlers.directive.handler import DirectiveHandler
             from kiwi_mcp.handlers.script.handler import ScriptHandler
             from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
-            
+
             handlers = {
                 "directive": DirectiveHandler,
                 "script": ScriptHandler,
                 "knowledge": KnowledgeHandler,
             }
-            
+
             handler_class = handlers.get(item_type)
             if not handler_class:
-                return self._format_response({
-                    "error": f"Unknown item_type: {item_type}",
-                    "supported_types": list(handlers.keys())
-                })
-            
+                return self._format_response(
+                    {
+                        "error": f"Unknown item_type: {item_type}",
+                        "supported_types": list(handlers.keys()),
+                    }
+                )
+
             handler = handler_class(project_path=project_path)
-            
+
             # Call load with appropriate parameters based on item type
             if item_type == "knowledge":
                 include_relationships = arguments.get("include_relationships", False)
                 result = await handler.load(
                     item_id,
                     source=source,
-                    destination=destination,
-                    include_relationships=include_relationships
+                    destination=destination,  # Can be None for read-only
+                    include_relationships=include_relationships,
                 )
             else:  # directive or script
                 result = await handler.load(
-                    item_id,
-                    source=source,
-                    destination=destination,
-                    version=version
+                    item_id, source=source, destination=destination, version=version
                 )
             return self._format_response(result)
         except Exception as e:
