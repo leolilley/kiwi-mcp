@@ -441,7 +441,7 @@ class ScriptHandler:
                     "error": "Script content has been modified since last validation",
                     "signature": signature_status,
                     "path": str(file_path),
-                    "solution": "Run 'update' action to re-validate the script",
+                    "solution": "Use execute action 'update' or 'create' to re-validate the script",
                 }
             elif signature_status.get("status") == "invalid":
                 return {
@@ -449,7 +449,7 @@ class ScriptHandler:
                     "error": "Script signature is invalid",
                     "signature": signature_status,
                     "path": str(file_path),
-                    "solution": "Run 'update' action to re-validate the script",
+                    "solution": "Use execute action 'update' or 'create' to re-validate the script",
                 }
 
         # Parse script metadata for dependencies
@@ -724,6 +724,26 @@ class ScriptHandler:
         file_path = self.resolver.resolve(script_name)
         if not file_path:
             return {"error": f"Script '{script_name}' not found locally"}
+
+        # ENFORCE hash validation - ALWAYS check, never skip
+        signature_status = self._verify_script_signature(file_path)
+
+        # Block publishing if signature is invalid or modified
+        if signature_status:
+            if signature_status.get("status") == "modified":
+                return {
+                    "error": "Script content has been modified since last validation",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Use execute action 'update' or 'create' to re-validate the script before publishing",
+                }
+            elif signature_status.get("status") == "invalid":
+                return {
+                    "error": "Script signature is invalid",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Use execute action 'update' or 'create' to re-validate the script before publishing",
+                }
 
         # Parse script to get content and metadata
         script_data = parse_script_metadata(file_path)

@@ -391,14 +391,14 @@ class DirectiveHandler:
                         "error": "Directive content has been modified since last validation",
                         "signature": signature_status,
                         "path": str(file_path),
-                        "solution": "Run 'update' action to re-validate the directive",
+                        "solution": "Use execute action 'update' or 'create' to re-validate the directive",
                     }
                 elif signature_status.get("status") == "invalid":
                     return {
                         "error": "Directive signature is invalid",
                         "signature": signature_status,
                         "path": str(file_path),
-                        "solution": "Run 'update' action to re-validate the directive",
+                        "solution": "Use execute action 'update' or 'create' to re-validate the directive",
                     }
 
             # Extract process steps and inputs for execution
@@ -621,14 +621,7 @@ class DirectiveHandler:
         self, directive_name: str, params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Publish directive to registry."""
-        version = params.get("version")
-        if not version:
-            return {
-                "error": "version is required for publish",
-                "example": "parameters={'version': '1.0.0'}",
-            }
-
-        # Find local directive file
+        # Find local directive file first (needed to extract version)
         file_path = self.resolver.resolve(directive_name)
         if not file_path:
             return {
@@ -636,8 +629,41 @@ class DirectiveHandler:
                 "suggestion": "Create directive first before publishing",
             }
 
-        # Parse directive to get content and metadata
+        # ENFORCE hash validation - ALWAYS check, never skip
+        file_content = file_path.read_text()
+        signature_status = self._verify_signature(file_content)
+
+        # Block publishing if signature is invalid or modified
+        if signature_status:
+            if signature_status.get("status") == "modified":
+                return {
+                    "error": "Directive content has been modified since last validation",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Use execute action 'update' or 'create' to re-validate the directive before publishing",
+                }
+            elif signature_status.get("status") == "invalid":
+                return {
+                    "error": "Directive signature is invalid",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Use execute action 'update' or 'create' to re-validate the directive before publishing",
+                }
+
+        # Parse directive to get content and metadata (including version from XML)
         directive_data = parse_directive_file(file_path)
+
+        # Use explicit param if provided, otherwise fall back to XML version
+        version = params.get("version") or directive_data.get("version")
+
+        # Prevent publishing placeholder version
+        if not version or not str(version).strip() or version == "0.0.0":
+            return {
+                "error": "version is required for publish",
+                "hint": f"Set <directive ... version='x.y.z'> in {file_path}",
+                "file_version": directive_data.get("version"),
+                "example": "parameters={'version': '1.0.0'}",
+            }
 
         # Use registry publish method
         result = await self.registry.publish(
@@ -648,6 +674,12 @@ class DirectiveHandler:
             description=directive_data.get("description", ""),
             tech_stack=directive_data.get("tech_stack", []),
         )
+
+        # Ensure response includes version actually used
+        if isinstance(result, dict) and "error" not in result:
+            result["name"] = directive_name
+            result["version"] = version
+
         return result
 
     async def _delete_directive(

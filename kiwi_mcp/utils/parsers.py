@@ -266,7 +266,8 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
         "content": entry_content,
         "entry_type": frontmatter.get("entry_type", "learning"),
         "category": frontmatter.get("category", ""),
-        "tags": frontmatter.get("tags", [])
+        "tags": frontmatter.get("tags", []),
+        "version": frontmatter.get("version", "1.0.0"),  # Default to 1.0.0 if not specified
     }
 
 

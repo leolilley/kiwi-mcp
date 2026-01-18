@@ -398,7 +398,7 @@ class KnowledgeHandler:
                     "error": "Knowledge entry content has been modified since last validation",
                     "signature": signature_status,
                     "path": str(file_path),
-                    "solution": "Run 'update' action to re-validate the entry",
+                    "solution": "Use execute action 'update' or 'create' to re-validate the entry",
                 }
             elif signature_status.get("status") == "invalid":
                 return {
@@ -406,7 +406,7 @@ class KnowledgeHandler:
                     "error": "Knowledge entry signature is invalid",
                     "signature": signature_status,
                     "path": str(file_path),
-                    "solution": "Run 'update' action to re-validate the entry",
+                    "solution": "Use execute action 'update' or 'create' to re-validate the entry",
                 }
 
         # Parse entry file
@@ -579,14 +579,7 @@ content_hash: {content_hash}
 
     async def _publish_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Publish knowledge entry to registry."""
-        version = params.get("version")
-        if not version:
-            return {
-                "error": "version is required for publish",
-                "example": "parameters={'version': '1.0.0'}",
-            }
-
-        # Find local entry file
+        # Find local entry file first (needed to extract version)
         file_path = self.resolver.resolve(zettel_id)
         if not file_path:
             return {
@@ -594,8 +587,31 @@ content_hash: {content_hash}
                 "suggestion": "Create entry first before publishing",
             }
 
-        # Parse entry to get content and metadata
+        # ENFORCE hash validation - ALWAYS check, never skip
+        signature_status = self._verify_knowledge_signature(file_path)
+
+        # Block publishing if signature is invalid or modified
+        if signature_status:
+            if signature_status.get("status") == "modified":
+                return {
+                    "error": "Knowledge entry content has been modified since last validation",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Use execute action 'update' or 'create' to re-validate the entry before publishing",
+                }
+            elif signature_status.get("status") == "invalid":
+                return {
+                    "error": "Knowledge entry signature is invalid",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Use execute action 'update' or 'create' to re-validate the entry before publishing",
+                }
+
+        # Parse entry to get content and metadata (including version)
         entry_data = parse_knowledge_entry(file_path)
+
+        # Use explicit param if provided, otherwise fall back to parsed version (default 1.0.0)
+        version = params.get("version") or entry_data.get("version", "1.0.0")
 
         # Ensure tags is a list
         tags = entry_data.get("tags", [])
@@ -615,4 +631,10 @@ content_hash: {content_hash}
             category=entry_data.get("category", ""),
             tags=tags,
         )
+
+        # Ensure response includes version actually used
+        if isinstance(result, dict) and "error" not in result:
+            result["zettel_id"] = zettel_id
+            result["version"] = version
+
         return result
