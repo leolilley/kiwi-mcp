@@ -152,16 +152,61 @@ class KnowledgeHandler:
                 # For registry, default destination to "project" if not specified
                 effective_destination = destination or "project"
                 
-                result = await self.registry.get(
-                    zettel_id=zettel_id,
-                    destination=effective_destination,
-                    include_relationships=include_relationships,
-                    project_path=str(self.project_path) if self.project_path else None,
-                )
-                if result:
-                    result["source"] = "registry"
-                    result["destination"] = effective_destination
-                return result
+                # Get entry from registry
+                registry_data = await self.registry.get(zettel_id=zettel_id)
+                if not registry_data:
+                    return {"error": f"Knowledge entry '{zettel_id}' not found in registry"}
+
+                content = registry_data.get("content")
+                if not content:
+                    return {"error": f"Knowledge entry '{zettel_id}' has no content"}
+
+                # Determine target path based on destination
+                if effective_destination == "user":
+                    base_path = get_user_space() / "knowledge"
+                else:  # destination == "project"
+                    base_path = self.project_path / ".ai" / "knowledge"
+
+                # Build category path
+                category = registry_data.get("category", "")
+                if category:
+                    target_dir = base_path / category
+                else:
+                    target_dir = base_path
+
+                # Create directory if needed
+                target_dir.mkdir(parents=True, exist_ok=True)
+
+                # Write file
+                target_path = target_dir / f"{zettel_id}.md"
+                target_path.write_text(content)
+
+                self.logger.info(f"Downloaded knowledge entry from registry to: {target_path}")
+
+                # Verify hash after download for safety
+                signature_status = self._verify_knowledge_signature(target_path)
+
+                # Parse and return
+                entry_data = parse_knowledge_entry(target_path)
+                entry_data["source"] = "registry"
+                entry_data["destination"] = effective_destination
+                entry_data["path"] = str(target_path)
+
+                # Add warning if signature is invalid or modified (registry content should be valid)
+                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                    entry_data["warning"] = {
+                        "message": "Registry knowledge entry content signature is invalid or modified - content may be corrupted",
+                        "signature": signature_status,
+                        "solution": "Use execute action 'update' or 'create' to re-validate the entry",
+                    }
+                    self.logger.warning(f"Registry knowledge entry '{zettel_id}' has invalid signature: {signature_status}")
+
+                # Include relationships if requested
+                if include_relationships:
+                    relationships = await self.registry.get_relationships(zettel_id)
+                    entry_data["relationships"] = relationships
+
+                return entry_data
 
             # LOAD FROM PROJECT
             if source == "project":
@@ -173,6 +218,17 @@ class KnowledgeHandler:
                 # If destination differs from source, copy the file
                 if destination == "user":
                     # Copy from project to user space
+                    # Verify hash before copying
+                    signature_status = self._verify_knowledge_signature(file_path)
+                    if signature_status:
+                        if signature_status.get("status") in ["modified", "invalid"]:
+                            return {
+                                "error": f"Knowledge entry content has been modified or signature is invalid",
+                                "signature": signature_status,
+                                "path": str(file_path),
+                                "solution": "Use execute action 'update' or 'create' to re-validate the entry before copying",
+                            }
+                    
                     content = file_path.read_text()
                     # Determine category from source path
                     relative_path = file_path.relative_to(search_base)
@@ -187,11 +243,21 @@ class KnowledgeHandler:
                     entry_data["path"] = str(target_path)
                     return entry_data
                 else:
-                    # Read-only mode: just return project file info (no copy)
+                    # Read-only mode: verify and warn, but don't block
+                    signature_status = self._verify_knowledge_signature(file_path)
+                    
                     entry_data = parse_knowledge_entry(file_path)
                     entry_data["source"] = "project"
                     entry_data["path"] = str(file_path)
                     entry_data["mode"] = "read_only"
+                    
+                    if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                        entry_data["warning"] = {
+                            "message": "Knowledge entry content has been modified or signature is invalid",
+                            "signature": signature_status,
+                            "solution": "Use execute action 'update' or 'create' to re-validate",
+                        }
+                    
                     return entry_data
 
             # LOAD FROM USER
@@ -204,6 +270,17 @@ class KnowledgeHandler:
             # If destination differs from source, copy the file
             if destination == "project":
                 # Copy from user to project space
+                # Verify hash before copying
+                signature_status = self._verify_knowledge_signature(file_path)
+                if signature_status:
+                    if signature_status.get("status") in ["modified", "invalid"]:
+                        return {
+                            "error": f"Knowledge entry content has been modified or signature is invalid",
+                            "signature": signature_status,
+                            "path": str(file_path),
+                            "solution": "Use execute action 'update' or 'create' to re-validate the entry before copying",
+                        }
+                
                 content = file_path.read_text()
                 # Determine category from source path
                 relative_path = file_path.relative_to(search_base)
@@ -218,11 +295,21 @@ class KnowledgeHandler:
                 entry_data["path"] = str(target_path)
                 return entry_data
             else:
-                # Read-only mode: just return user file info (no copy)
+                # Read-only mode: verify and warn, but don't block
+                signature_status = self._verify_knowledge_signature(file_path)
+                
                 entry_data = parse_knowledge_entry(file_path)
                 entry_data["source"] = "user"
                 entry_data["path"] = str(file_path)
                 entry_data["mode"] = "read_only"
+                
+                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                    entry_data["warning"] = {
+                        "message": "Knowledge entry content has been modified or signature is invalid",
+                        "signature": signature_status,
+                        "solution": "Use execute action 'update' or 'create' to re-validate",
+                    }
+                
                 return entry_data
         except Exception as e:
             return {"error": str(e), "message": f"Failed to load entry '{zettel_id}'"}

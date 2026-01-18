@@ -199,7 +199,10 @@ class ScriptHandler:
 
                 self.logger.info(f"Downloaded script from registry to: {target_file}")
 
-                return {
+                # Verify hash after download for safety
+                signature_status = self._verify_script_signature(target_file)
+                
+                result = {
                     "status": "success",
                     "message": f"Downloaded script to {effective_destination}",
                     "path": str(target_file),
@@ -207,6 +210,17 @@ class ScriptHandler:
                     "destination": effective_destination,
                     "script": script_data,
                 }
+                
+                # Add warning if signature is invalid or modified (registry content should be valid)
+                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                    result["warning"] = {
+                        "message": "Registry script content signature is invalid or modified - content may be corrupted",
+                        "signature": signature_status,
+                        "solution": "Use execute action 'update' or 'create' to re-validate the script",
+                    }
+                    self.logger.warning(f"Registry script '{script_name}' has invalid signature: {signature_status}")
+                
+                return result
 
             # LOAD FROM PROJECT
             if source == "project":
@@ -218,6 +232,17 @@ class ScriptHandler:
                 # If destination differs from source, copy the file
                 if destination == "user":
                     # Copy from project to user space
+                    # Verify hash before copying
+                    signature_status = self._verify_script_signature(file_path)
+                    if signature_status:
+                        if signature_status.get("status") in ["modified", "invalid"]:
+                            return {
+                                "error": f"Script content has been modified or signature is invalid",
+                                "signature": signature_status,
+                                "path": str(file_path),
+                                "solution": "Use execute action 'update' or 'create' to re-validate the script before copying",
+                            }
+                    
                     content = file_path.read_text()
                     # Determine category from source path
                     relative_path = file_path.relative_to(search_base)
@@ -232,11 +257,21 @@ class ScriptHandler:
                     script_data["path"] = str(target_path)
                     return script_data
                 else:
-                    # Read-only mode: just return project file info (no copy)
+                    # Read-only mode: verify and warn, but don't block
+                    signature_status = self._verify_script_signature(file_path)
+                    
                     script_data = parse_script_metadata(file_path)
                     script_data["source"] = "project"
                     script_data["path"] = str(file_path)
                     script_data["mode"] = "read_only"
+                    
+                    if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                        script_data["warning"] = {
+                            "message": "Script content has been modified or signature is invalid",
+                            "signature": signature_status,
+                            "solution": "Use execute action 'update' or 'create' to re-validate",
+                        }
+                    
                     return script_data
 
             # LOAD FROM USER
@@ -249,6 +284,17 @@ class ScriptHandler:
             # If destination differs from source, copy the file
             if destination == "project":
                 # Copy from user to project space
+                # Verify hash before copying
+                signature_status = self._verify_script_signature(file_path)
+                if signature_status:
+                    if signature_status.get("status") in ["modified", "invalid"]:
+                        return {
+                            "error": f"Script content has been modified or signature is invalid",
+                            "signature": signature_status,
+                            "path": str(file_path),
+                            "solution": "Use execute action 'update' or 'create' to re-validate the script before copying",
+                        }
+                
                 content = file_path.read_text()
                 # Determine category from source path
                 relative_path = file_path.relative_to(search_base)
@@ -263,11 +309,21 @@ class ScriptHandler:
                 script_data["path"] = str(target_path)
                 return script_data
             else:
-                # Read-only mode: just return user file info (no copy)
+                # Read-only mode: verify and warn, but don't block
+                signature_status = self._verify_script_signature(file_path)
+                
                 script_data = parse_script_metadata(file_path)
                 script_data["source"] = "user"
                 script_data["path"] = str(file_path)
                 script_data["mode"] = "read_only"
+                
+                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                    script_data["warning"] = {
+                        "message": "Script content has been modified or signature is invalid",
+                        "signature": signature_status,
+                        "solution": "Use execute action 'update' or 'create' to re-validate",
+                    }
+                
                 return script_data
         except Exception as e:
             self.logger.error(f"Failed to load script: {e}")

@@ -195,11 +195,25 @@ class DirectiveHandler:
 
                 self.logger.info(f"Downloaded directive from registry to: {target_path}")
 
+                # Verify hash after download for safety
+                file_content = target_path.read_text()
+                signature_status = self._verify_signature(file_content)
+                
                 # Parse and return
                 directive_data = parse_directive_file(target_path)
                 directive_data["source"] = "registry"
                 directive_data["destination"] = effective_destination
                 directive_data["path"] = str(target_path)
+                
+                # Add warning if signature is invalid or modified (registry content should be valid)
+                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                    directive_data["warning"] = {
+                        "message": "Registry directive content signature is invalid or modified - content may be corrupted",
+                        "signature": signature_status,
+                        "solution": "Use execute action 'update' or 'create' to re-validate the directive",
+                    }
+                    self.logger.warning(f"Registry directive '{directive_name}' has invalid signature: {signature_status}")
+                
                 return directive_data
 
             # LOAD FROM PROJECT
@@ -213,6 +227,18 @@ class DirectiveHandler:
                 if destination == "user":
                     # Copy from project to user space
                     content = file_path.read_text()
+                    
+                    # Verify hash before copying
+                    signature_status = self._verify_signature(content)
+                    if signature_status:
+                        if signature_status.get("status") in ["modified", "invalid"]:
+                            return {
+                                "error": f"Directive content has been modified or signature is invalid",
+                                "signature": signature_status,
+                                "path": str(file_path),
+                                "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
+                            }
+                    
                     # Determine category from source path
                     relative_path = file_path.relative_to(search_base)
                     target_path = Path.home() / ".ai" / "directives" / relative_path
@@ -226,11 +252,22 @@ class DirectiveHandler:
                     directive_data["path"] = str(target_path)
                     return directive_data
                 else:
-                    # Read-only mode: just return project file info (no copy)
+                    # Read-only mode: verify and warn, but don't block
+                    file_content = file_path.read_text()
+                    signature_status = self._verify_signature(file_content)
+                    
                     directive_data = parse_directive_file(file_path)
                     directive_data["source"] = "project"
                     directive_data["path"] = str(file_path)
                     directive_data["mode"] = "read_only"
+                    
+                    if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                        directive_data["warning"] = {
+                            "message": "Directive content has been modified or signature is invalid",
+                            "signature": signature_status,
+                            "solution": "Use execute action 'update' or 'create' to re-validate",
+                        }
+                    
                     return directive_data
 
             # LOAD FROM USER
@@ -244,6 +281,18 @@ class DirectiveHandler:
             if destination == "project":
                 # Copy from user to project space
                 content = file_path.read_text()
+                
+                # Verify hash before copying
+                signature_status = self._verify_signature(content)
+                if signature_status:
+                    if signature_status.get("status") in ["modified", "invalid"]:
+                        return {
+                            "error": f"Directive content has been modified or signature is invalid",
+                            "signature": signature_status,
+                            "path": str(file_path),
+                            "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
+                        }
+                
                 # Determine category from source path
                 relative_path = file_path.relative_to(search_base)
                 target_path = self.project_path / ".ai" / "directives" / relative_path
@@ -257,11 +306,22 @@ class DirectiveHandler:
                 directive_data["path"] = str(target_path)
                 return directive_data
             else:
-                # Read-only mode: just return user file info (no copy)
+                # Read-only mode: verify and warn, but don't block
+                file_content = file_path.read_text()
+                signature_status = self._verify_signature(file_content)
+                
                 directive_data = parse_directive_file(file_path)
                 directive_data["source"] = "user"
                 directive_data["path"] = str(file_path)
                 directive_data["mode"] = "read_only"
+                
+                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                    directive_data["warning"] = {
+                        "message": "Directive content has been modified or signature is invalid",
+                        "signature": signature_status,
+                        "solution": "Use execute action 'update' or 'create' to re-validate",
+                    }
+                
                 return directive_data
         except Exception as e:
             return {"error": str(e), "message": f"Failed to load directive '{directive_name}'"}
