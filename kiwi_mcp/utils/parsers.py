@@ -84,17 +84,39 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
             "attrs": dict(child.attrib) if child.attrib else {}
         })
     
-    # Extract model_class from metadata
-    model_class_elem = metadata_elem.find("model_class")
-    if model_class_elem is not None:
-        model_class_data = {
-            "tier": model_class_elem.get("tier"),
-            "fallback": model_class_elem.get("fallback"),
-            "parallel": model_class_elem.get("parallel"),
-            "reasoning": model_class_elem.text.strip() if model_class_elem.text else None
+    # Extract model from metadata (check both 'model' and legacy 'model_class')
+    model_elem = metadata_elem.find("model")
+    legacy_model_class_elem = metadata_elem.find("model_class")
+    
+    # Get directive name from root element for warning message
+    directive_name = root.get("name", file_path.stem)
+    
+    if model_elem is not None:
+        # New format: use 'model' tag
+        model_data = {
+            "tier": model_elem.get("tier"),
+            "fallback": model_elem.get("fallback"),
+            "parallel": model_elem.get("parallel"),
+            "id": model_elem.get("id"),  # NEW: optional agent id
+            "reasoning": model_elem.text.strip() if model_elem.text else None
+        }
+        legacy_warning = None
+    elif legacy_model_class_elem is not None:
+        # Backwards compatibility: extract from model_class
+        model_data = {
+            "tier": legacy_model_class_elem.get("tier"),
+            "fallback": legacy_model_class_elem.get("fallback"),
+            "parallel": legacy_model_class_elem.get("parallel"),
+            "id": None,  # Legacy doesn't have id
+            "reasoning": legacy_model_class_elem.text.strip() if legacy_model_class_elem.text else None
+        }
+        legacy_warning = {
+            "message": "Directive uses legacy 'model_class' tag. Please update to 'model' tag.",
+            "solution": f"Run directive 'edit_directive' with directive_name='{directive_name}' to update"
         }
     else:
-        model_class_data = None
+        model_data = None
+        legacy_warning = None
     
     # Extract relationships from metadata (if present)
     relationships_data = {}
@@ -118,16 +140,82 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
     attrs = parsed.get("_attrs", {})
     metadata = parsed.get("metadata", {})
     
-    return {
-        "name": attrs.get("name", file_path.stem),
+    # Get directive name from XML (REQUIRED - no fallback)
+    if "name" not in attrs or not attrs.get("name"):
+        raise ValueError(
+            f"Directive XML is missing required 'name' attribute in {file_path}\n"
+            f"\n"
+            f"PROBLEM:\n"
+            f"  The <directive> tag must have a 'name' attribute\n"
+            f"  Example: <directive name=\"my_directive\" version=\"1.0.0\">\n"
+            f"\n"
+            f"SOLUTION:\n"
+            f"  1. Edit {file_path}\n"
+            f"  2. Add name attribute to directive tag: <directive name=\"{file_path.stem}\" ...>\n"
+            f"  3. Ensure filename matches: {file_path.name} should match the name attribute"
+        )
+    
+    directive_name = attrs["name"]
+    
+    # Validate filename matches directive name
+    expected_filename = f"{directive_name}.md"
+    actual_filename = file_path.name
+    
+    if actual_filename != expected_filename:
+        raise ValueError(
+            f"Filename and directive name mismatch in {file_path}\n"
+            f"\n"
+            f"PROBLEM:\n"
+            f"  Expected filename: {expected_filename}\n"
+            f"  Actual filename: {actual_filename}\n"
+            f"  XML directive name: {directive_name}\n"
+            f"\n"
+            f"SOLUTION (choose one):\n"
+            f"  Option 1 - Rename file to match XML:\n"
+            f"    mv '{file_path}' '{file_path.parent / expected_filename}'\n"
+            f"\n"
+            f"  Option 2 - Update XML to match filename:\n"
+            f"    1. Edit {file_path}\n"
+            f"    2. Change XML: <directive name=\"{file_path.stem}\" ...>\n"
+            f"    3. Run: mcp__kiwi_mcp__execute(item_type='directive', action='update', item_id='{file_path.stem}')\n"
+            f"\n"
+            f"  Option 3 - Use edit_directive directive:\n"
+            f"    Run directive edit_directive with directive_name='{file_path.stem}'\n"
+            f"    Update XML name attribute to '{file_path.stem}' or rename file to '{expected_filename}'"
+        )
+    
+    # Extract category from metadata (if present)
+    category = None
+    category_elem = metadata_elem.find("category")
+    if category_elem is not None and category_elem.text:
+        category = category_elem.text.strip()
+    
+    # If no category in XML, infer from file path
+    if not category:
+        # File path structure: .../directives/{category}/{name}.md
+        # Get parent directory name as category
+        parent_dir = file_path.parent.name
+        if parent_dir != "directives":  # Only use if not the base directives folder
+            category = parent_dir
+    
+    result = {
+        "name": directive_name,  # Use validated name (required, no fallback)
         "version": attrs.get("version", "0.0.0"),
         "description": _get_text_content(metadata.get("description", "")),
         "content": content,
         "parsed": parsed,
         "permissions": permissions,
-        "model_class": model_class_data,
+        "model": model_data,  # NEW: primary key
+        "model_class": model_data if legacy_warning else None,  # Backwards compat
         "relationships": relationships_data if relationships_data else None,
+        "category": category,  # Category from XML or inferred from path
     }
+    
+    # Only include legacy_warning if it's not None
+    if legacy_warning is not None:
+        result["legacy_warning"] = legacy_warning
+    
+    return result
 
 
 def parse_script_metadata(file_path: Path) -> Dict[str, Any]:
@@ -260,8 +348,38 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
     content_start = content.find("---", 3) + 3 if content.startswith("---") else 0
     entry_content = content[content_start:].strip()
     
+    # Get zettel_id from frontmatter (fallback to filename stem if not present)
+    zettel_id = frontmatter.get("zettel_id", file_path.stem)
+    
+    # Validate filename matches zettel_id
+    expected_filename = f"{zettel_id}.md"
+    actual_filename = file_path.name
+    
+    if actual_filename != expected_filename:
+        raise ValueError(
+            f"Filename and zettel_id mismatch in {file_path}\n"
+            f"\n"
+            f"PROBLEM:\n"
+            f"  Expected filename: {expected_filename}\n"
+            f"  Actual filename: {actual_filename}\n"
+            f"  Frontmatter zettel_id: {zettel_id}\n"
+            f"\n"
+            f"SOLUTION (choose one):\n"
+            f"  Option 1 - Rename file to match frontmatter:\n"
+            f"    mv '{file_path}' '{file_path.parent / expected_filename}'\n"
+            f"\n"
+            f"  Option 2 - Update frontmatter to match filename:\n"
+            f"    1. Edit {file_path}\n"
+            f"    2. Change frontmatter: zettel_id: {file_path.stem}\n"
+            f"    3. Run: mcp__kiwi_mcp__execute(item_type='knowledge', action='update', item_id='{file_path.stem}')\n"
+            f"\n"
+            f"  Option 3 - Use edit_knowledge directive:\n"
+            f"    Run directive edit_knowledge with zettel_id='{file_path.stem}'\n"
+            f"    Update frontmatter zettel_id to '{file_path.stem}' or rename file to '{expected_filename}'"
+        )
+    
     return {
-        "zettel_id": frontmatter.get("zettel_id", file_path.stem),
+        "zettel_id": zettel_id,
         "title": frontmatter.get("title", file_path.stem),
         "content": entry_content,
         "entry_type": frontmatter.get("entry_type", "learning"),

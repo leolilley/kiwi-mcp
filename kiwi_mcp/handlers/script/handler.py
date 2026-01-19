@@ -8,13 +8,11 @@ Handles LOCAL file operations directly, only uses registry for REMOTE operations
 from typing import Dict, Any, Optional, List, Literal
 
 from kiwi_mcp.handlers import SortBy
-import hashlib
 import json
 import ast
 import re
 import subprocess
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from kiwi_mcp.api.script_registry import ScriptRegistry
@@ -24,6 +22,8 @@ from kiwi_mcp.utils.parsers import parse_script_metadata
 from kiwi_mcp.utils.file_search import search_python_files, score_relevance
 from kiwi_mcp.utils.env_manager import EnvManager
 from kiwi_mcp.utils.output_manager import OutputManager, truncate_for_response
+from kiwi_mcp.utils.metadata_manager import MetadataManager
+from kiwi_mcp.utils.validators import ValidationManager
 
 
 class ScriptHandler:
@@ -200,7 +200,8 @@ class ScriptHandler:
                 self.logger.info(f"Downloaded script from registry to: {target_file}")
 
                 # Verify hash after download for safety
-                signature_status = self._verify_script_signature(target_file)
+                file_content = target_file.read_text()
+                signature_status = MetadataManager.verify_signature("script", file_content)
                 
                 result = {
                     "status": "success",
@@ -233,7 +234,8 @@ class ScriptHandler:
                 if destination == "user":
                     # Copy from project to user space
                     # Verify hash before copying
-                    signature_status = self._verify_script_signature(file_path)
+                    content = file_path.read_text()
+                    signature_status = MetadataManager.verify_signature("script", content)
                     if signature_status:
                         if signature_status.get("status") in ["modified", "invalid"]:
                             return {
@@ -258,7 +260,8 @@ class ScriptHandler:
                     return script_data
                 else:
                     # Read-only mode: verify and warn, but don't block
-                    signature_status = self._verify_script_signature(file_path)
+                    file_content = file_path.read_text()
+                    signature_status = MetadataManager.verify_signature("script", file_content)
                     
                     script_data = parse_script_metadata(file_path)
                     script_data["source"] = "project"
@@ -285,7 +288,8 @@ class ScriptHandler:
             if destination == "project":
                 # Copy from user to project space
                 # Verify hash before copying
-                signature_status = self._verify_script_signature(file_path)
+                content = file_path.read_text()
+                signature_status = MetadataManager.verify_signature("script", content)
                 if signature_status:
                     if signature_status.get("status") in ["modified", "invalid"]:
                         return {
@@ -310,7 +314,8 @@ class ScriptHandler:
                 return script_data
             else:
                 # Read-only mode: verify and warn, but don't block
-                signature_status = self._verify_script_signature(file_path)
+                file_content = file_path.read_text()
+                signature_status = MetadataManager.verify_signature("script", file_content)
                 
                 script_data = parse_script_metadata(file_path)
                 script_data["source"] = "user"
@@ -401,45 +406,6 @@ class ScriptHandler:
 
         return None
 
-    def _verify_script_signature(self, file_path: Path) -> Optional[Dict[str, Any]]:
-        """
-        Verify script signature if present.
-
-        Returns None if no signature, or a dict with status:
-        - "valid": hash matches
-        - "modified": hash doesn't match
-        - "invalid": signature format is wrong
-        """
-        content = file_path.read_text()
-
-        # Look for signature comment (after optional shebang)
-        # Format: # kiwi-mcp:validated:TIMESTAMP:HASH
-        sig_pattern = r"^(?:#!/[^\n]*\n)?# kiwi-mcp:validated:(.*?):([a-f0-9]{12})"
-        sig_match = re.match(sig_pattern, content)
-
-        if not sig_match:
-            return None  # No signature - might be legacy or unvalidated
-
-        stored_timestamp = sig_match.group(1)
-        stored_hash = sig_match.group(2)
-
-        # Remove signature line to compute current hash
-        content_without_sig = re.sub(r"^#!/[^\n]*\n", "", content)  # Remove shebang if present
-        content_without_sig = re.sub(r"^# kiwi-mcp:validated:[^\n]+\n", "", content_without_sig)
-
-        # Compute current hash
-        current_hash = hashlib.sha256(content_without_sig.encode()).hexdigest()[:12]
-
-        if current_hash == stored_hash:
-            return {"status": "valid", "validated_at": stored_timestamp, "hash": stored_hash}
-        else:
-            return {
-                "status": "modified",
-                "validated_at": stored_timestamp,
-                "original_hash": stored_hash,
-                "current_hash": current_hash,
-                "warning": "Content modified since last validation. Consider running 'update' to re-validate.",
-            }
 
     def _build_search_paths(self, script_path: Path, storage_location: str) -> List[Path]:
         """
@@ -487,7 +453,8 @@ class ScriptHandler:
             }
 
         # ENFORCE hash validation - ALWAYS check, never skip
-        signature_status = self._verify_script_signature(file_path)
+        file_content = file_path.read_text()
+        signature_status = MetadataManager.verify_signature("script", file_content)
 
         # Block execution if signature is invalid or modified
         if signature_status:
@@ -508,8 +475,19 @@ class ScriptHandler:
                     "solution": "Use execute action 'update' or 'create' to re-validate the script",
                 }
 
-        # Parse script metadata for dependencies
+        # Parse script metadata for dependencies and validate
         script_meta = parse_script_metadata(file_path)
+        
+        # Validate script using centralized validator
+        validation_result = ValidationManager.validate("script", file_path, script_meta)
+        if not validation_result["valid"]:
+            return {
+                "status": "error",
+                "error": "Script validation failed",
+                "details": validation_result["issues"],
+                "path": str(file_path),
+            }
+        
         dependencies = script_meta.get("dependencies", [])
 
         # Determine storage location (project or user)
@@ -782,7 +760,8 @@ class ScriptHandler:
             return {"error": f"Script '{script_name}' not found locally"}
 
         # ENFORCE hash validation - ALWAYS check, never skip
-        signature_status = self._verify_script_signature(file_path)
+        file_content = file_path.read_text()
+        signature_status = MetadataManager.verify_signature("script", file_content)
 
         # Block publishing if signature is invalid or modified
         if signature_status:
@@ -859,19 +838,36 @@ class ScriptHandler:
         if target_file.exists():
             return {"error": f"Script '{script_name}' already exists"}
 
-        # Generate signature for validated content
-        content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        signature_line = f"# kiwi-mcp:validated:{timestamp}:{content_hash}\n"
+        # Write file first to parse and validate
+        target_file.write_text(content)
+        
+        # Parse and validate
+        try:
+            script_meta = parse_script_metadata(target_file)
+            validation_result = ValidationManager.validate("script", target_file, script_meta)
+            if not validation_result["valid"]:
+                target_file.unlink()  # Clean up invalid file
+                return {
+                    "error": "Script validation failed",
+                    "details": validation_result["issues"],
+                    "path": str(target_file),
+                }
+        except Exception as e:
+            target_file.unlink()  # Clean up on error
+            return {
+                "error": "Failed to validate script",
+                "details": str(e),
+                "path": str(target_file),
+            }
 
-        # Prepend signature to content (after shebang if present)
-        if content.startswith("#!/"):
-            lines = content.split("\n", 1)
-            signed_content = lines[0] + "\n" + signature_line + (lines[1] if len(lines) > 1 else "")
-        else:
-            signed_content = signature_line + content
-
+        # Generate and add signature for validated content
+        signed_content = MetadataManager.sign_content("script", content)
         target_file.write_text(signed_content)
+        
+        # Get signature info for response
+        signature_info = MetadataManager.get_signature_info("script", signed_content)
+        content_hash = signature_info["hash"] if signature_info else None
+        timestamp = signature_info["timestamp"] if signature_info else None
 
         return {
             "status": "success",
@@ -889,25 +885,39 @@ class ScriptHandler:
         # For now, only support content updates
         if "content" in updates:
             content = updates["content"]
-
-            # Generate new signature for validated content
-            content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
-            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            signature_line = f"# kiwi-mcp:validated:{timestamp}:{content_hash}\n"
-
-            # Remove old signature if present
-            content_clean = re.sub(r"^(#!/[^\n]*\n)?# kiwi-mcp:validated:[^\n]+\n", r"\1", content)
-
-            # Prepend new signature (after shebang if present)
-            if content_clean.startswith("#!/"):
-                lines = content_clean.split("\n", 1)
-                signed_content = (
-                    lines[0] + "\n" + signature_line + (lines[1] if len(lines) > 1 else "")
-                )
-            else:
-                signed_content = signature_line + content_clean
-
+            
+            # Write content temporarily to parse and validate
+            temp_path = file_path.parent / f".{file_path.name}.tmp"
+            temp_path.write_text(content)
+            
+            # Parse and validate
+            try:
+                script_meta = parse_script_metadata(temp_path)
+                validation_result = ValidationManager.validate("script", temp_path, script_meta)
+                if not validation_result["valid"]:
+                    temp_path.unlink()  # Clean up
+                    return {
+                        "error": "Script validation failed",
+                        "details": validation_result["issues"],
+                        "path": str(file_path),
+                    }
+            except Exception as e:
+                temp_path.unlink()  # Clean up on error
+                return {
+                    "error": "Failed to validate script",
+                    "details": str(e),
+                    "path": str(file_path),
+                }
+            
+            # Generate and add signature for validated content
+            signed_content = MetadataManager.sign_content("script", content)
             file_path.write_text(signed_content)
+            temp_path.unlink()  # Clean up temp file
+            
+            # Get signature info for response
+            signature_info = MetadataManager.get_signature_info("script", signed_content)
+            content_hash = signature_info["hash"] if signature_info else None
+            timestamp = signature_info["timestamp"] if signature_info else None
             return {
                 "status": "success",
                 "message": f"Updated script '{script_name}'",

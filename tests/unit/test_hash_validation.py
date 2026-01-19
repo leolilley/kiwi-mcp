@@ -3,6 +3,9 @@ Unit tests for hash validation enforcement in handlers.
 
 Tests that directives, scripts, and knowledge entries enforce hash validation
 during run actions and properly block execution when content is modified.
+
+These tests verify that handlers use the centralized MetadataManager
+for all signature verification operations.
 """
 
 import pytest
@@ -14,6 +17,7 @@ from datetime import datetime, timezone
 from kiwi_mcp.handlers.directive.handler import DirectiveHandler
 from kiwi_mcp.handlers.script.handler import ScriptHandler
 from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
+from kiwi_mcp.utils.metadata_manager import MetadataManager
 
 
 class TestDirectiveHashValidation:
@@ -41,8 +45,13 @@ class TestDirectiveHashValidation:
   </process>
 </directive>"""
         
-        # Generate correct hash for original content
-        original_hash = hashlib.sha256(xml_content.encode()).hexdigest()[:12]
+        # Generate correct hash for original content using centralized method
+        original_hash = MetadataManager.compute_hash("directive", f"""# Test Directive
+
+```xml
+{xml_content}
+```
+""")
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         
         # Create file with signature
@@ -100,8 +109,13 @@ class TestDirectiveHashValidation:
   </process>
 </directive>"""
         
-        # Generate correct hash
-        content_hash = hashlib.sha256(xml_content.encode()).hexdigest()[:12]
+        # Generate correct hash using centralized method
+        content_hash = MetadataManager.compute_hash("directive", f"""# Test Directive
+
+```xml
+{xml_content}
+```
+""")
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         
         # Create file with correct signature
@@ -187,8 +201,8 @@ if __name__ == "__main__":
     main()
 '''
         
-        # Generate correct hash
-        content_hash = hashlib.sha256(script_content.encode()).hexdigest()[:12]
+        # Generate correct hash using centralized method
+        content_hash = MetadataManager.compute_hash("script", script_content)
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         signature_line = f"# kiwi-mcp:validated:{timestamp}:{content_hash}\n"
         
@@ -219,8 +233,8 @@ class TestKnowledgeHashValidation:
         # Original content
         entry_content = "This is the original knowledge content."
         
-        # Generate hash for original
-        original_hash = hashlib.sha256(entry_content.encode()).hexdigest()[:12]
+        # Generate hash for original using centralized method
+        original_hash = MetadataManager.compute_hash("knowledge", entry_content)
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         
         # Create frontmatter with signature
@@ -274,8 +288,8 @@ content_hash: {original_hash}
         
         entry_content = "This is valid knowledge content."
         
-        # Generate correct hash
-        content_hash = hashlib.sha256(entry_content.encode()).hexdigest()[:12]
+        # Generate correct hash using centralized method
+        content_hash = MetadataManager.compute_hash("knowledge", entry_content)
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         
         # Create frontmatter with correct signature

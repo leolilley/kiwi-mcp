@@ -8,9 +8,7 @@ Handles LOCAL file operations directly, only uses registry for REMOTE operations
 from typing import Dict, Any, Optional, List, Literal
 
 from kiwi_mcp.handlers import SortBy
-import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 from kiwi_mcp.api.knowledge_registry import KnowledgeRegistry
@@ -18,6 +16,8 @@ from kiwi_mcp.utils.logger import get_logger
 from kiwi_mcp.utils.resolvers import KnowledgeResolver, get_user_space
 from kiwi_mcp.utils.parsers import parse_knowledge_entry
 from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
+from kiwi_mcp.utils.metadata_manager import MetadataManager
+from kiwi_mcp.utils.validators import ValidationManager
 
 
 class KnowledgeHandler:
@@ -184,7 +184,8 @@ class KnowledgeHandler:
                 self.logger.info(f"Downloaded knowledge entry from registry to: {target_path}")
 
                 # Verify hash after download for safety
-                signature_status = self._verify_knowledge_signature(target_path)
+                file_content = target_path.read_text()
+                signature_status = MetadataManager.verify_signature("knowledge", file_content)
 
                 # Parse and return
                 entry_data = parse_knowledge_entry(target_path)
@@ -219,7 +220,8 @@ class KnowledgeHandler:
                 if destination == "user":
                     # Copy from project to user space
                     # Verify hash before copying
-                    signature_status = self._verify_knowledge_signature(file_path)
+                    content = file_path.read_text()
+                    signature_status = MetadataManager.verify_signature("knowledge", content)
                     if signature_status:
                         if signature_status.get("status") in ["modified", "invalid"]:
                             return {
@@ -244,7 +246,8 @@ class KnowledgeHandler:
                     return entry_data
                 else:
                     # Read-only mode: verify and warn, but don't block
-                    signature_status = self._verify_knowledge_signature(file_path)
+                    file_content = file_path.read_text()
+                    signature_status = MetadataManager.verify_signature("knowledge", file_content)
                     
                     entry_data = parse_knowledge_entry(file_path)
                     entry_data["source"] = "project"
@@ -271,7 +274,8 @@ class KnowledgeHandler:
             if destination == "project":
                 # Copy from user to project space
                 # Verify hash before copying
-                signature_status = self._verify_knowledge_signature(file_path)
+                content = file_path.read_text()
+                signature_status = MetadataManager.verify_signature("knowledge", content)
                 if signature_status:
                     if signature_status.get("status") in ["modified", "invalid"]:
                         return {
@@ -296,7 +300,8 @@ class KnowledgeHandler:
                 return entry_data
             else:
                 # Read-only mode: verify and warn, but don't block
-                signature_status = self._verify_knowledge_signature(file_path)
+                file_content = file_path.read_text()
+                signature_status = MetadataManager.verify_signature("knowledge", file_content)
                 
                 entry_data = parse_knowledge_entry(file_path)
                 entry_data["source"] = "user"
@@ -368,58 +373,6 @@ class KnowledgeHandler:
                 "message": f"Failed to execute action '{action}' on entry '{zettel_id}'",
             }
 
-    def _verify_knowledge_signature(self, file_path: Path) -> Optional[Dict[str, Any]]:
-        """
-        Verify knowledge entry signature if present.
-
-        Returns None if no signature, or a dict with status:
-        - "valid": hash matches
-        - "modified": hash doesn't match
-        - "invalid": signature format is wrong
-        """
-        content = file_path.read_text()
-
-        # Extract YAML frontmatter
-        if not content.startswith("---"):
-            return None  # No frontmatter, no signature
-
-        end_idx = content.find("---", 3)
-        if end_idx == -1:
-            return None
-
-        yaml_content = content[3:end_idx].strip()
-
-        # Parse frontmatter for signature fields
-        stored_timestamp = None
-        stored_hash = None
-
-        for line in yaml_content.split("\n"):
-            if ":" in line:
-                key, value = line.split(":", 1)
-                key = key.strip()
-                value = value.strip()
-                if key == "validated_at":
-                    stored_timestamp = value
-                elif key == "content_hash":
-                    stored_hash = value
-
-        if not stored_timestamp or not stored_hash:
-            return None  # No signature fields
-
-        # Extract content (after frontmatter) to compute current hash
-        entry_content = content[end_idx + 3 :].strip()
-        current_hash = hashlib.sha256(entry_content.encode()).hexdigest()[:12]
-
-        if current_hash == stored_hash:
-            return {"status": "valid", "validated_at": stored_timestamp, "hash": stored_hash}
-        else:
-            return {
-                "status": "modified",
-                "validated_at": stored_timestamp,
-                "original_hash": stored_hash,
-                "current_hash": current_hash,
-                "warning": "Content modified since last validation. Consider running 'update' to re-validate.",
-            }
 
     def _search_local(
         self,
@@ -475,7 +428,8 @@ class KnowledgeHandler:
             }
 
         # ENFORCE hash validation - ALWAYS check, never skip
-        signature_status = self._verify_knowledge_signature(file_path)
+        file_content = file_path.read_text()
+        signature_status = MetadataManager.verify_signature("knowledge", file_content)
 
         # Block execution if signature is invalid or modified
         if signature_status:
@@ -496,9 +450,19 @@ class KnowledgeHandler:
                     "solution": "Use execute action 'update' or 'create' to re-validate the entry",
                 }
 
-        # Parse entry file
+        # Parse entry file and validate
         try:
             entry_data = parse_knowledge_entry(file_path)
+            
+            # Validate using centralized validator
+            validation_result = ValidationManager.validate("knowledge", file_path, entry_data)
+            if not validation_result["valid"]:
+                return {
+                    "status": "error",
+                    "error": "Knowledge entry validation failed",
+                    "details": validation_result["issues"],
+                    "path": str(file_path),
+                }
 
             # Return content for decision making
             return {
@@ -549,12 +513,48 @@ class KnowledgeHandler:
                 "suggestion": "Use 'update' action to modify existing entry",
             }
 
-        # Generate signature for validated content
-        content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        # Create markdown content with YAML frontmatter (including signature)
+        # Create markdown content with YAML frontmatter (temporarily without signature)
         tags = params.get("tags", [])
+        temp_frontmatter = f"""---
+zettel_id: {zettel_id}
+title: {title}
+entry_type: {entry_type}
+category: {category}
+tags: {json.dumps(tags)}
+---
+
+"""
+        temp_content = temp_frontmatter + content
+        file_path.write_text(temp_content)
+        
+        # Parse and validate
+        try:
+            entry_data = parse_knowledge_entry(file_path)
+            validation_result = ValidationManager.validate("knowledge", file_path, entry_data)
+            if not validation_result["valid"]:
+                file_path.unlink()  # Clean up invalid file
+                return {
+                    "error": "Knowledge entry validation failed",
+                    "details": validation_result["issues"],
+                    "path": str(file_path),
+                }
+        except Exception as e:
+            file_path.unlink()  # Clean up on error
+            return {
+                "error": "Failed to validate knowledge entry",
+                "details": str(e),
+                "path": str(file_path),
+            }
+        
+        # Generate signature for validated content using MetadataManager
+        content_hash = MetadataManager.compute_hash("knowledge", temp_content)
+        timestamp = MetadataManager.get_strategy("knowledge").format_signature("", "").split("validated_at: ")[1].split("\n")[0] if MetadataManager.get_strategy("knowledge").format_signature("", "") else None
+        # Actually, let's use the utility functions directly
+        from kiwi_mcp.utils.metadata_manager import compute_content_hash, generate_timestamp
+        content_hash = compute_content_hash(content)  # Hash just the content part
+        timestamp = generate_timestamp()
+
+        # Create final content with signature in frontmatter
         frontmatter = f"""---
 zettel_id: {zettel_id}
 title: {title}
@@ -568,6 +568,24 @@ content_hash: {content_hash}
 """
         full_content = frontmatter + content
         file_path.write_text(full_content)
+
+        # Verify filename matches zettel_id (sanity check - this should never fail)
+        if file_path.stem != zettel_id:
+            file_path.unlink()  # Clean up
+            return {
+                "error": "Internal error: Created file with mismatched filename",
+                "problem": {
+                    "expected": f"{zettel_id}.md",
+                    "actual": file_path.name,
+                    "zettel_id": zettel_id,
+                    "path": str(file_path)
+                },
+                "solution": {
+                    "message": "This indicates a bug in file creation logic. File was cleaned up.",
+                    "action": "Report this error. The file was not created. Try create action again.",
+                    "workaround": f"Manually create file: {file_path.parent / f'{zettel_id}.md'}"
+                }
+            }
 
         return {
             "status": "created",
@@ -601,14 +619,70 @@ content_hash: {content_hash}
         entry_type = params.get("entry_type", entry_data.get("entry_type"))
         category = params.get("category", entry_data.get("category"))
         tags = params.get("tags", entry_data.get("tags", []))
+        
+        # Validate updated entry
+        updated_entry_data = {
+            "zettel_id": entry_data.get("zettel_id"),
+            "title": title,
+            "content": content,
+            "entry_type": entry_type,
+            "category": category,
+            "tags": tags,
+        }
+        validation_result = ValidationManager.validate("knowledge", file_path, updated_entry_data)
+        if not validation_result["valid"]:
+            return {
+                "error": "Knowledge entry validation failed",
+                "details": validation_result["issues"],
+                "path": str(file_path),
+            }
 
-        # Generate new signature for validated content
-        content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Use zettel_id from file's frontmatter (not parameter) - parse_knowledge_entry() already validated match
+        file_zettel_id = entry_data["zettel_id"]
+        
+        # Explicit validation check before writing (double-check)
+        expected_filename = f"{file_zettel_id}.md"
+        if file_path.stem != file_zettel_id:
+            return {
+                "error": "Cannot update: filename and zettel_id mismatch",
+                "problem": {
+                    "filename": file_path.name,
+                    "frontmatter_zettel_id": file_zettel_id,
+                    "expected_filename": expected_filename,
+                    "path": str(file_path)
+                },
+                "solution": {
+                    "option_1": {
+                        "action": "Rename file to match frontmatter zettel_id",
+                        "command": f"mv '{file_path}' '{file_path.parent / expected_filename}'",
+                        "then": f"Re-run update action with item_id='{file_zettel_id}'"
+                    },
+                    "option_2": {
+                        "action": "Update frontmatter to match current filename",
+                        "steps": [
+                            f"1. Edit {file_path}",
+                            f"2. Change frontmatter: zettel_id: {file_path.stem}",
+                            f"3. Re-run: mcp__kiwi_mcp__execute(item_type='knowledge', action='update', item_id='{file_path.stem}')"
+                        ]
+                    },
+                    "option_3": {
+                        "action": "Use edit_knowledge directive",
+                        "steps": [
+                            f"Run: edit_knowledge directive with zettel_id='{file_path.stem}'",
+                            f"Update frontmatter zettel_id to '{file_path.stem}' OR rename file to '{expected_filename}'"
+                        ]
+                    }
+                }
+            }
 
-        # Recreate frontmatter with signature
+        # Generate new signature for validated content using MetadataManager
+        from kiwi_mcp.utils.metadata_manager import compute_content_hash, generate_timestamp
+        content_hash = compute_content_hash(content)  # Hash just the content part
+        timestamp = generate_timestamp()
+
+        # Recreate frontmatter with signature (use file's zettel_id, not parameter)
         frontmatter = f"""---
-zettel_id: {zettel_id}
+zettel_id: {file_zettel_id}
 title: {title}
 entry_type: {entry_type}
 category: {category}
@@ -623,7 +697,7 @@ content_hash: {content_hash}
 
         return {
             "status": "updated",
-            "zettel_id": zettel_id,
+            "zettel_id": file_zettel_id,
             "path": str(file_path),
             "signature": {"hash": content_hash, "timestamp": timestamp},
         }
@@ -650,12 +724,14 @@ content_hash: {content_hash}
         # Delete from registry
         if source in ("registry", "all"):
             try:
-                await self.registry.delete(
+                result = await self.registry.delete(
                     zettel_id=zettel_id,
-                    source="registry",
-                    project_path=str(self.project_path) if self.project_path else None,
+                    cascade_relationships=params.get("cascade_relationships", False)
                 )
-                deleted.append("registry")
+                if "error" in result:
+                    self.logger.warning(f"Registry delete failed: {result.get('error')}")
+                else:
+                    deleted.append("registry")
             except Exception as e:
                 self.logger.warning(f"Registry delete failed: {e}")
 
@@ -675,7 +751,8 @@ content_hash: {content_hash}
             }
 
         # ENFORCE hash validation - ALWAYS check, never skip
-        signature_status = self._verify_knowledge_signature(file_path)
+        file_content = file_path.read_text()
+        signature_status = MetadataManager.verify_signature("knowledge", file_content)
 
         # Block publishing if signature is invalid or modified
         if signature_status:
@@ -695,7 +772,54 @@ content_hash: {content_hash}
                 }
 
         # Parse entry to get content and metadata (including version)
-        entry_data = parse_knowledge_entry(file_path)
+        # parse_knowledge_entry() will validate filename/zettel_id match and raise if mismatch
+        try:
+            entry_data = parse_knowledge_entry(file_path)
+        except ValueError as e:
+            # Convert parse validation error to structured response
+            return {
+                "error": "Cannot publish: filename and zettel_id mismatch",
+                "details": str(e),
+                "path": str(file_path)
+            }
+        
+        # Explicit validation check after parsing (double-check for clarity)
+        expected_filename = f"{entry_data['zettel_id']}.md"
+        if file_path.stem != entry_data["zettel_id"]:
+            return {
+                "error": "Cannot publish: filename and zettel_id mismatch",
+                "problem": {
+                    "filename": file_path.name,
+                    "frontmatter_zettel_id": entry_data["zettel_id"],
+                    "expected_filename": expected_filename,
+                    "path": str(file_path)
+                },
+                "solution": {
+                    "message": "Fix mismatch before publishing. Choose one option:",
+                    "option_1": {
+                        "action": "Rename file to match frontmatter",
+                        "command": f"mv '{file_path}' '{file_path.parent / expected_filename}'",
+                        "then": f"Re-run publish with: item_id='{entry_data['zettel_id']}'"
+                    },
+                    "option_2": {
+                        "action": "Update frontmatter to match filename",
+                        "steps": [
+                            f"1. Edit {file_path}",
+                            f"2. Change frontmatter: zettel_id: {file_path.stem}",
+                            f"3. Run: mcp__kiwi_mcp__execute(item_type='knowledge', action='update', item_id='{file_path.stem}')",
+                            f"4. Then re-run publish with: item_id='{file_path.stem}'"
+                        ]
+                    },
+                    "option_3": {
+                        "action": "Use edit_knowledge directive",
+                        "steps": [
+                            f"Run: edit_knowledge directive with zettel_id='{file_path.stem}'",
+                            f"Fix mismatch (rename file or update frontmatter)",
+                            f"Then re-run publish"
+                        ]
+                    }
+                }
+            }
 
         # Use explicit param if provided, otherwise fall back to parsed version (default 1.0.0)
         version = params.get("version") or entry_data.get("version", "1.0.0")

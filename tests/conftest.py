@@ -170,3 +170,97 @@ def mock_filesystem(tmp_path):
         "scripts_dir": tmp_path / ".ai" / "scripts",
         "knowledge_dir": tmp_path / ".ai" / "knowledge",
     }
+
+
+# ============================================================================
+# Test File Creation Helpers
+# ============================================================================
+
+@pytest.fixture
+def sample_directive_content():
+    """Sample directive XML content for testing."""
+    return """<directive name="test_directive" version="1.0.0">
+  <metadata>
+    <description>Test directive for unit testing</description>
+    <permissions>
+      <allow type="read" scope="all" />
+    </permissions>
+    <model tier="reasoning" />
+  </metadata>
+  <process>
+    <step name="test">
+      <action>Test action</action>
+    </step>
+  </process>
+</directive>"""
+
+
+@pytest.fixture
+def sample_directive_file(tmp_path, sample_directive_content):
+    """Create a sample directive file for testing."""
+    directive_dir = tmp_path / ".ai" / "directives" / "test"
+    directive_dir.mkdir(parents=True)
+    
+    file_content = f"""# Test Directive
+
+```xml
+{sample_directive_content}
+```
+"""
+    directive_file = directive_dir / "test_directive.md"
+    directive_file.write_text(file_content)
+    return directive_file
+
+
+@pytest.fixture
+def sample_script_content():
+    """Sample script content for testing."""
+    return '''"""Test script for unit testing"""
+import sys
+import json
+
+def main():
+    result = {"status": "success", "data": {"message": "test"}}
+    print(json.dumps(result))
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+@pytest.fixture
+def sample_script_file(tmp_path, sample_script_content):
+    """Create a sample script file for testing."""
+    script_dir = tmp_path / ".ai" / "scripts" / "test"
+    script_dir.mkdir(parents=True)
+    
+    script_file = script_dir / "test_script.py"
+    script_file.write_text(sample_script_content)
+    return script_file
+
+
+@pytest.fixture
+def sample_knowledge_content():
+    """Sample knowledge entry content for testing."""
+    return "This is test knowledge content for unit testing."
+
+
+@pytest.fixture
+def sample_knowledge_file(tmp_path, sample_knowledge_content):
+    """Create a sample knowledge entry file for testing."""
+    knowledge_dir = tmp_path / ".ai" / "knowledge" / "test"
+    knowledge_dir.mkdir(parents=True)
+    
+    file_content = f"""---
+zettel_id: 001-test
+title: Test Knowledge Entry
+entry_type: learning
+category: test
+tags: []
+---
+
+{sample_knowledge_content}
+"""
+    knowledge_file = knowledge_dir / "001-test.md"
+    knowledge_file.write_text(file_content)
+    return knowledge_file

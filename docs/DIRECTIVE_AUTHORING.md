@@ -216,35 +216,38 @@ This is cleaner for short content but harder to read for large blocks.
 
 ---
 
-## Model Class
+## Model
 
 ### Purpose
 
-The `<model_class>` metadata helps orchestrator agents select the appropriate AI model for executing the directive. This enables cost/performance optimization by routing simple tasks to fast models and complex tasks to reasoning models.
+The `<model>` metadata helps orchestrator agents select the appropriate AI model for executing the directive. This enables cost/performance optimization by routing simple tasks to fast models and complex tasks to reasoning models.
 
 ### Format
 
-The `<model_class>` element **must be placed inside `<metadata>`** after `<author>` and before `<permissions>`:
+The `<model>` element **must be placed inside `<metadata>`** after `<author>` and before `<permissions>`:
 
 ```xml
 <metadata>
   <description>...</description>
   <category>...</category>
   <author>...</author>
-  <model_class tier="balanced" fallback="fast" parallel="true">
+  <model tier="balanced" fallback="fast" parallel="true" id="optional-agent-id">
     Brief explanation of reasoning requirements
-  </model_class>
+  </model>
   <permissions>...</permissions>
 </metadata>
 ```
+
+**Note:** The legacy `<model_class>` tag is still supported for backwards compatibility, but will generate a warning. Use `<model>` for new directives.
 
 ### Attributes
 
 | Attribute | Required | Values | Description |
 |-----------|----------|--------|-------------|
-| `tier` | **Yes** | Any string (see standard tiers below) | Primary model class (cost-optimized choice) |
+| `tier` | **Yes** | Any string (see standard tiers below) | Primary model tier (cost-optimized choice) |
 | `fallback` | No | Any string or `none` | Higher-tier model to use if directive fails with primary tier |
 | `parallel` | No | `true`, `false` | Whether directive can run in parallel instances |
+| `id` | No | Any string | Optional agent ID to specify a specific agent for execution |
 
 ### Text Content
 

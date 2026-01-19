@@ -24,6 +24,7 @@ wheels/
 venv/
 ENV/
 env/
+.ruff_cache/
 
 # IDE
 .vscode/
@@ -34,6 +35,7 @@ env/
 
 # Project specific
 .ai/
+.cursor/
 *.log
 *.sqlite
 *.db

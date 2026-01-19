@@ -15,7 +15,7 @@ Kiwi MCP reduces 17 tools from three separate MCPs into 4 unified tools with con
 | ----------- | ------------------------------------------------------------------ |
 | **search**  | Find directives, scripts, or knowledge entries (local or registry) |
 | **load**    | Download items from registry to local storage                      |
-| **execute** | Run operations: publish, delete, create, update, link, run         |
+| **execute** | Run operations: publish, delete, create, update, run               |
 | **help**    | Get usage guidance and troubleshooting                             |
 
 **Supported Types:**
@@ -248,12 +248,12 @@ load(
 
 ### execute
 
-Run operations on items: run, publish, delete, create, update, link.
+Run operations on items: run, publish, delete, create, update.
 
 **Parameters:**
 
 - `item_type` (required): `"directive"`, `"script"`, or `"knowledge"`
-- `action` (required): `"run"`, `"publish"`, `"delete"`, `"create"`, `"update"`, `"link"`
+- `action` (required): `"run"`, `"publish"`, `"delete"`, `"create"`, `"update"`
 - `item_id` (required): Item identifier
 - `project_path` (required): Absolute path to project root
 - `parameters` (optional): Action-specific parameters dict
@@ -270,15 +270,13 @@ All item types support the same 6 actions for consistency:
 - `delete` - Remove from local or registry (requires `confirm: true`)
 - `create` - Create new item locally
 - `update` - Modify existing item
-- `link` - Link to another item of the same type (e.g., directive → directive, script → script)
 
 **Type-Specific Behavior:**
 
-| Action    | Directive                         | Script                         | Knowledge                              |
-| --------- | --------------------------------- | ------------------------------ | -------------------------------------- |
-| `run`     | Returns parsed XML content        | Executes in venv with params   | Returns entry content                  |
-| `publish` | Creates version with content_hash | Uploads .py file with metadata | Publishes with tags                    |
-| `link`    | `requires`, `suggests`, `extends` | `depends_on`, `imports`        | `references`, `contradicts`, `extends` |
+| Action    | Directive                         | Script                         | Knowledge             |
+| --------- | --------------------------------- | ------------------------------ | --------------------- |
+| `run`     | Returns parsed XML content        | Executes in venv with params   | Returns entry content |
+| `publish` | Creates version with content_hash | Uploads .py file with metadata | Publishes with tags   |
 
 **Examples:**
 
@@ -567,7 +565,7 @@ pytest-watch tests/
 
 - Location: `.ai/knowledge/` (project) or `~/.ai/knowledge/` (user)
 - Format: Markdown with metadata
-- Operations: search, load, create, update, delete, link, publish
+- Operations: search, load, create, update, delete, publish
 
 ### Sources
 

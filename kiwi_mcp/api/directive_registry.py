@@ -259,6 +259,8 @@ class DirectiveRegistry(BaseRegistry):
                 update_data = {}
                 if description:
                     update_data["description"] = description
+                if category:
+                    update_data["category"] = category
                 if subcategory:
                     update_data["subcategory"] = subcategory
                 if tech_stack:
