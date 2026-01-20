@@ -439,6 +439,15 @@ class DirectiveHandler:
                     model_data = directive_data.get("model") or directive_data.get("model_class")
                     error_response["model_found"] = model_data
                     error_response["hint"] = "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
+                elif any("code block" in issue.lower() or "closing" in issue.lower() or "must end" in issue.lower() or "unexpected content" in issue.lower() for issue in validation_result["issues"]):
+                    error_response["error"] = "Directive XML structure not valid"
+                    error_response["hint"] = "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    error_response["solution"] = {
+                        "message": "Remove any content after the closing ``` in the directive file",
+                        "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
+                        "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
+                        "example": "```xml\n<directive name=\"example\" version=\"1.0.0\">\n  ...\n</directive>\n```"
+                    }
                 return error_response
 
             # ENFORCE hash validation - ALWAYS check, never skip
@@ -806,6 +815,15 @@ class DirectiveHandler:
                     model_data = directive_data.get("model") or directive_data.get("model_class")
                     error_response["model_found"] = model_data
                     error_response["hint"] = "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
+                elif any("code block" in issue.lower() or "closing" in issue.lower() or "must end" in issue.lower() or "unexpected content" in issue.lower() for issue in validation_result["issues"]):
+                    error_response["error"] = "Directive XML structure not valid"
+                    error_response["hint"] = "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    error_response["solution"] = {
+                        "message": "Remove any content after the closing ``` in the directive file",
+                        "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
+                        "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
+                        "example": "```xml\n<directive name=\"example\" version=\"1.0.0\">\n  ...\n</directive>\n```"
+                    }
                 
                 return error_response
         except ValueError as e:
@@ -951,15 +969,17 @@ class DirectiveHandler:
                     model_data = directive_data.get("model") or directive_data.get("model_class")
                     error_response["model_found"] = model_data
                     error_response["hint"] = "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
+                elif any("code block" in issue.lower() or "closing" in issue.lower() or "must end" in issue.lower() or "unexpected content" in issue.lower() for issue in validation_result["issues"]):
+                    error_response["error"] = "Directive XML structure not valid"
+                    error_response["hint"] = "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    error_response["solution"] = {
+                        "message": "Remove any content after the closing ``` in the directive file",
+                        "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
+                        "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
+                        "example": "```xml\n<directive name=\"example\" version=\"1.0.0\">\n  ...\n</directive>\n```"
+                    }
                 
                 return error_response
-                return {
-                    "error": "Directive model not valid",
-                    "details": model_check["issues"],
-                    "path": str(file_path),
-                    "model_found": model_data,  # Show what was actually found
-                    "hint": "The <model> tag must have a 'tier' attribute (required). Optional: fallback, parallel, id. Example: <model tier=\"reasoning\">...</model> or <model tier=\"reasoning\" fallback=\"fast\" parallel=\"false\">...</model>"
-                }
         except ValueError as e:
             # Convert parse validation error to structured response
             return {

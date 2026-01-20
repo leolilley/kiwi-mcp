@@ -82,10 +82,114 @@ class TestDirectiveValidator:
     @pytest.mark.validation
     def test_validate_metadata_success(self, validator, sample_directive_data):
         """Should pass when metadata is valid."""
-        result = validator.validate_metadata(sample_directive_data)
+        # Add valid content with proper closing tag
+        data = sample_directive_data.copy()
+        data["content"] = """# Test Directive
+
+```xml
+<directive name="test_directive" version="1.0.0">
+  <metadata>
+    <permissions>
+      <allow type="read" />
+    </permissions>
+    <model tier="reasoning" />
+  </metadata>
+</directive>
+```
+"""
+        result = validator.validate_metadata(data)
 
         assert result["valid"] is True
         assert len(result["issues"]) == 0
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_validate_metadata_missing_closing_tag(self, validator, sample_directive_data):
+        """Should fail when XML doesn't end with </directive> tag."""
+        # Content with XML that doesn't end with </directive>
+        data = sample_directive_data.copy()
+        data["content"] = """# Test Directive
+
+```xml
+<directive name="test_directive" version="1.0.0">
+  <metadata>
+    <permissions>
+      <allow type="read" />
+    </permissions>
+    <model tier="reasoning" />
+  </metadata>
+</directive>
+<!-- extra content after closing tag -->
+```
+"""
+        result = validator.validate_metadata(data)
+
+        assert result["valid"] is False
+        assert any("must end with </directive>" in issue for issue in result["issues"])
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_validate_metadata_closing_tag_with_whitespace(self, validator, sample_directive_data):
+        """Should pass when XML ends with </directive> even with trailing whitespace."""
+        # Content with XML ending with </directive> but with whitespace
+        data = sample_directive_data.copy()
+        data["content"] = """# Test Directive
+
+```xml
+<directive name="test_directive" version="1.0.0">
+  <metadata>
+    <permissions>
+      <allow type="read" />
+    </permissions>
+    <model tier="reasoning" />
+  </metadata>
+</directive>   
+```
+"""
+        result = validator.validate_metadata(data)
+
+        # Should pass - whitespace is stripped before checking
+        assert result["valid"] is True
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_validate_metadata_no_xml_content(self, validator, sample_directive_data):
+        """Should fail when content doesn't contain valid XML."""
+        # Content without XML directive
+        data = sample_directive_data.copy()
+        data["content"] = """# Test Directive
+
+Just markdown, no XML here.
+"""
+        result = validator.validate_metadata(data)
+
+        assert result["valid"] is False
+        assert any("could not extract" in issue.lower() for issue in result["issues"])
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_validate_metadata_content_after_code_block(self, validator, sample_directive_data):
+        """Should fail when there's XML-like content after the closing code block."""
+        # Content with valid XML but extra content after closing ```
+        data = sample_directive_data.copy()
+        data["content"] = """# Test Directive
+
+```xml
+<directive name="test_directive" version="1.0.0">
+  <metadata>
+    <permissions>
+      <allow type="read" />
+    </permissions>
+    <model tier="reasoning" />
+  </metadata>
+</directive>
+```</content>
+<parameter name="filePath">/some/path</parameter>
+"""
+        result = validator.validate_metadata(data)
+
+        assert result["valid"] is False
+        assert any("unexpected content after code block" in issue.lower() for issue in result["issues"])
 
     @pytest.mark.unit
     @pytest.mark.validation
@@ -436,7 +540,7 @@ class TestKnowledgeValidator:
         result = validator.validate_metadata(data)
 
         assert result["valid"] is False
-        assert any("zettel_id" in issue.lower() for issue in result["issues"])
+        assert any("zettel" in issue.lower() and "required" in issue.lower() for issue in result["issues"])
 
     @pytest.mark.unit
     @pytest.mark.validation
