@@ -7,7 +7,8 @@ Provides consistent validation across directives, scripts, and knowledge entries
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
+from packaging import version
 
 
 class BaseValidator(ABC):
@@ -186,6 +187,14 @@ class DirectiveValidator(BaseValidator):
             if model_id and (not isinstance(model_id, str) or not model_id.strip()):
                 issues.append("model id must be a non-empty string or omitted")
 
+        # Validate version (REQUIRED)
+        directive_version = parsed_data.get("version")
+        if not directive_version or directive_version == "0.0.0":
+            issues.append(
+                "Directive is missing required 'version' attribute. "
+                "Add version attribute to <directive> tag: <directive name=\"...\" version=\"1.0.0\">"
+            )
+
         # Check for legacy model_class warning
         if parsed_data.get("legacy_warning"):
             warnings.append(parsed_data["legacy_warning"].get("message", "Legacy model_class tag detected"))
@@ -314,6 +323,33 @@ class KnowledgeValidator(BaseValidator):
             "issues": issues,
             "warnings": warnings,
         }
+
+
+def compare_versions(version1: str, version2: str) -> int:
+    """
+    Compare two semantic version strings using packaging library.
+    
+    Assumes versions are valid strings (missing versions are caught by validator).
+    
+    Args:
+        version1: First version string
+        version2: Second version string
+    
+    Returns:
+        -1 if version1 < version2
+         0 if version1 == version2
+         1 if version1 > version2
+    
+    Raises:
+        ValueError: If version strings are invalid (packaging will raise)
+    """
+    v1 = version.parse(version1)
+    v2 = version.parse(version2)
+    if v1 < v2:
+        return -1
+    elif v1 > v2:
+        return 1
+    return 0
 
 
 class ValidationManager:

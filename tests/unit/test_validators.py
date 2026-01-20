@@ -14,6 +14,7 @@ from kiwi_mcp.utils.validators import (
     ScriptValidator,
     KnowledgeValidator,
     ValidationManager,
+    compare_versions,
 )
 
 
@@ -363,6 +364,42 @@ Just markdown, no XML here.
 
     @pytest.mark.unit
     @pytest.mark.validation
+    def test_validate_metadata_missing_version(self, validator, sample_directive_data):
+        """Should fail when version is missing."""
+        data = sample_directive_data.copy()
+        data.pop("version", None)
+
+        result = validator.validate_metadata(data)
+
+        assert result["valid"] is False
+        assert any("version" in issue.lower() and "missing" in issue.lower() for issue in result["issues"])
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_validate_metadata_version_zero(self, validator, sample_directive_data):
+        """Should fail when version is '0.0.0'."""
+        data = sample_directive_data.copy()
+        data["version"] = "0.0.0"
+
+        result = validator.validate_metadata(data)
+
+        assert result["valid"] is False
+        assert any("version" in issue.lower() and "missing" in issue.lower() for issue in result["issues"])
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_validate_metadata_valid_version(self, validator, sample_directive_data):
+        """Should pass when version is valid."""
+        data = sample_directive_data.copy()
+        data["version"] = "1.2.3"
+
+        result = validator.validate_metadata(data)
+
+        assert result["valid"] is True
+        assert not any("version" in issue.lower() for issue in result["issues"])
+
+    @pytest.mark.unit
+    @pytest.mark.validation
     def test_validate_combines_filename_and_metadata(self, validator, tmp_path, sample_directive_data):
         """Should combine filename and metadata validation results."""
         file_path = tmp_path / "test_directive.md"
@@ -708,3 +745,40 @@ class TestValidationEdgeCases:
         result = ValidationManager.validate("directive", invalid_path, data)
 
         assert "valid" in result
+
+
+class TestCompareVersions:
+    """Test version comparison utility function."""
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_compare_versions_less_than(self):
+        """Should return -1 when version1 < version2."""
+        assert compare_versions("1.0.0", "1.0.1") == -1
+        assert compare_versions("1.0.0", "1.1.0") == -1
+        assert compare_versions("1.0.0", "2.0.0") == -1
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_compare_versions_equal(self):
+        """Should return 0 when version1 == version2."""
+        assert compare_versions("1.0.0", "1.0.0") == 0
+        assert compare_versions("2.5.3", "2.5.3") == 0
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_compare_versions_greater_than(self):
+        """Should return 1 when version1 > version2."""
+        assert compare_versions("1.0.1", "1.0.0") == 1
+        assert compare_versions("1.1.0", "1.0.0") == 1
+        assert compare_versions("2.0.0", "1.0.0") == 1
+
+    @pytest.mark.unit
+    @pytest.mark.validation
+    def test_compare_versions_invalid_raises(self):
+        """Should raise ValueError for invalid version strings."""
+        with pytest.raises(ValueError):
+            compare_versions("invalid", "1.0.0")
+        
+        with pytest.raises(ValueError):
+            compare_versions("1.0.0", "invalid")

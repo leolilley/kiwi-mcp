@@ -18,7 +18,7 @@ from kiwi_mcp.utils.resolvers import DirectiveResolver, get_user_space
 from kiwi_mcp.utils.parsers import parse_directive_file
 from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
 from kiwi_mcp.utils.metadata_manager import MetadataManager
-from kiwi_mcp.utils.validators import ValidationManager
+from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 
 
 class DirectiveHandler:
@@ -546,9 +546,100 @@ class DirectiveHandler:
             if legacy_warning:
                 result["warning"] = legacy_warning
 
+            # Check for newer versions in other locations
+            # Version is guaranteed to exist after validation, but add safety check
+            current_version = directive_data.get("version")
+            if current_version and current_version != "0.0.0":
+                # Determine source location
+                is_project = str(file_path).startswith(str(self.resolver.project_directives))
+                current_source = "project" if is_project else "user"
+                
+                version_warning = await self._check_for_newer_version(
+                    directive_name=directive_name,
+                    current_version=current_version,
+                    current_source=current_source,
+                )
+                if version_warning:
+                    result["version_warning"] = version_warning
+
             return result
         except Exception as e:
             return {"error": f"Failed to parse directive: {str(e)}", "path": str(file_path)}
+
+    async def _check_for_newer_version(
+        self,
+        directive_name: str,
+        current_version: str,
+        current_source: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check for newer versions of a directive in other locations.
+        
+        Args:
+            directive_name: Name of directive
+            current_version: Current version being run (guaranteed to exist - validated)
+            current_source: "project" or "user"
+        
+        Returns:
+            Warning dict if newer version found, None otherwise
+        """
+        newest_version = current_version
+        newest_location = None
+        
+        # Check user space (if running from project)
+        if current_source == "project":
+            try:
+                user_file_path = self._find_in_path(directive_name, self.resolver.user_directives)
+                if user_file_path and user_file_path.exists():
+                    try:
+                        user_directive_data = parse_directive_file(user_file_path)
+                        user_version = user_directive_data.get("version")
+                        if user_version:
+                            try:
+                                if compare_versions(current_version, user_version) < 0:
+                                    # User version is newer
+                                    if compare_versions(newest_version, user_version) < 0:
+                                        newest_version = user_version
+                                        newest_location = "user"
+                            except Exception as e:
+                                self.logger.warning(f"Failed to compare versions with user space: {e}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse user space directive {directive_name}: {e}")
+            except Exception as e:
+                self.logger.warning(f"Failed to check user space for directive {directive_name}: {e}")
+        
+        # Check registry (always)
+        try:
+            registry_data = await self.registry.get(directive_name)
+            if registry_data and registry_data.get("version"):
+                registry_version = registry_data["version"]
+                try:
+                    if compare_versions(current_version, registry_version) < 0:
+                        # Registry version is newer
+                        if compare_versions(newest_version, registry_version) < 0:
+                            newest_version = registry_version
+                            newest_location = "registry"
+                except Exception as e:
+                    self.logger.warning(f"Failed to compare versions with registry: {e}")
+        except Exception as e:
+            self.logger.warning(f"Failed to check registry for directive {directive_name}: {e}")
+        
+        # Return warning if newer version found
+        if newest_location and newest_version != current_version:
+            suggestion = (
+                f"Use load() to download the newer version from {newest_location}"
+                if newest_location == "registry"
+                else f"Use load() to copy the newer version from user space"
+            )
+            return {
+                "message": "A newer version of this directive is available",
+                "current_version": current_version,
+                "newer_version": newest_version,
+                "location": newest_location,
+                "suggestion": suggestion,
+            }
+        
+        return None
 
     def _find_in_path(self, directive_name: str, base_path: Path) -> Optional[Path]:
         """Find directive file in specified path."""

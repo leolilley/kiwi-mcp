@@ -200,7 +200,7 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
     
     result = {
         "name": directive_name,  # Use validated name (required, no fallback)
-        "version": attrs.get("version", "0.0.0"),
+        "version": attrs.get("version"),  # None if missing - validator will catch it
         "description": _get_text_content(metadata.get("description", "")),
         "content": content,
         "parsed": parsed,
