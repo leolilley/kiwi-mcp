@@ -378,10 +378,10 @@ Scripts automatically load both files in order (userspace → project → runtim
 
 Scripts run in isolated virtual environments:
 
-- **Project scripts**: `.ai/scripts/.venv/`
-- **Userspace scripts**: `~/.ai/.venv/`
+- **Script from userspace** (`~/.ai/scripts/`): always uses `~/.ai/.venv/`
+- **Script from project** (`.ai/scripts/`): uses `.ai/scripts/.venv/` if it exists; otherwise falls back to `~/.ai/.venv/`
 
-Each environment is automatically created and managed.
+The userspace venv is created on first use if missing. The project venv is not auto-created; if absent, execution uses the userspace venv.
 
 ### Dependency Auto-Install
 

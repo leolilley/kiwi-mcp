@@ -247,7 +247,8 @@ def parse_script_metadata(file_path: Path) -> Dict[str, Any]:
         "dependencies": [],
         "required_env_vars": [],
         "input_schema": {},
-        "tech_stack": []
+        "tech_stack": [],
+        "version": None,
     }
     
     try:
@@ -277,7 +278,18 @@ def parse_script_metadata(file_path: Path) -> Dict[str, Any]:
                     description_lines.append(line)
                 if description_lines:
                     metadata["description"] = ' '.join(description_lines).strip()
-        
+
+        # Extract __version__ = "x.y.z" (module-level)
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and target.id == "__version__":
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        metadata["version"] = node.value.value
+                        break
+        else:
+            metadata["version"] = None
+
         # Extract imports and dependencies
         imports = []
         for node in ast.walk(tree):
@@ -385,7 +397,7 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
         "entry_type": frontmatter.get("entry_type", "learning"),
         "category": frontmatter.get("category", ""),
         "tags": frontmatter.get("tags", []),
-        "version": frontmatter.get("version", "1.0.0"),  # Default to 1.0.0 if not specified
+        "version": frontmatter.get("version"),  # None if missing; validator requires it
     }
 
 

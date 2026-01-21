@@ -23,7 +23,7 @@ from kiwi_mcp.utils.file_search import search_python_files, score_relevance
 from kiwi_mcp.utils.env_manager import EnvManager
 from kiwi_mcp.utils.output_manager import OutputManager, truncate_for_response
 from kiwi_mcp.utils.metadata_manager import MetadataManager
-from kiwi_mcp.utils.validators import ValidationManager
+from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 
 
 class ScriptHandler:
@@ -350,6 +350,65 @@ class ScriptHandler:
 
         return None
 
+    async def _check_for_newer_version(
+        self, script_name: str, current_version: str, current_source: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check for newer versions of a script in other locations.
+        From project: check userspace and registry. From user: check registry only.
+        """
+        newest_version = current_version
+        newest_location = None
+
+        if current_source == "project":
+            try:
+                user_path = self._find_script_in_path(script_name, self.resolver.user_scripts)
+                if user_path and user_path.exists():
+                    try:
+                        user_meta = parse_script_metadata(user_path)
+                        user_version = user_meta.get("version")
+                        if user_version:
+                            try:
+                                if compare_versions(current_version, user_version) < 0:
+                                    if compare_versions(newest_version, user_version) < 0:
+                                        newest_version = user_version
+                                        newest_location = "user"
+                            except Exception as e:
+                                self.logger.warning(f"Failed to compare versions with user space: {e}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse user space script {script_name}: {e}")
+            except Exception as e:
+                self.logger.warning(f"Failed to check user space for script {script_name}: {e}")
+
+        try:
+            reg = await self.registry.get(script_name)
+            if reg and reg.get("version"):
+                rv = reg["version"]
+                try:
+                    if compare_versions(current_version, rv) < 0:
+                        if compare_versions(newest_version, rv) < 0:
+                            newest_version = rv
+                            newest_location = "registry"
+                except Exception as e:
+                    self.logger.warning(f"Failed to compare versions with registry: {e}")
+        except Exception as e:
+            self.logger.warning(f"Failed to check registry for script {script_name}: {e}")
+
+        if newest_location and newest_version != current_version:
+            sugg = (
+                "Use load() to download the newer version from registry"
+                if newest_location == "registry"
+                else "Use load() to copy the newer version from user space"
+            )
+            return {
+                "message": "A newer version of this script is available",
+                "current_version": current_version,
+                "newer_version": newest_version,
+                "location": newest_location,
+                "suggestion": sugg,
+            }
+        return None
+
     def _extract_lib_dependencies(self, script_path: Path) -> List[Dict[str, Any]]:
         """
         Extract dependencies from lib modules imported by the script.
@@ -491,12 +550,25 @@ class ScriptHandler:
         dependencies = script_meta.get("dependencies", [])
 
         # Determine storage location (project or user)
-        is_project_script = str(file_path).startswith(str(self.project_path / ".ai"))
+        is_project_script = str(file_path).startswith(str(self.resolver.project_scripts))
         storage_location = "project" if is_project_script else "user"
 
-        # Update env_manager based on script location
+        # Check for newer versions (only when script has __version__)
+        version_warning = None
+        current_version = script_meta.get("version")
+        if current_version:
+            version_warning = await self._check_for_newer_version(
+                script_name, current_version, storage_location
+            )
+
+        # Update env_manager: userspace script -> user venv; project script -> project venv
+        # if it exists, else fall back to user venv
         if storage_location == "project":
-            self.env_manager = EnvManager(project_path=self.project_path)
+            project_venv = self.project_path / ".ai" / "scripts" / ".venv"
+            if EnvManager.venv_has_python(project_venv):
+                self.env_manager = EnvManager(project_path=self.project_path)
+            else:
+                self.env_manager = EnvManager(project_path=None)
         else:
             self.env_manager = EnvManager(project_path=None)
 
@@ -539,7 +611,7 @@ class ScriptHandler:
 
         if dry_run:
             env_info = self.env_manager.get_info()
-            return {
+            out = {
                 "status": "validation_passed",
                 "message": "Script is ready to execute",
                 "path": str(file_path),
@@ -547,6 +619,9 @@ class ScriptHandler:
                 "dependencies": dependencies,
                 "lib_dependencies": lib_deps,
             }
+            if version_warning:
+                out["version_warning"] = version_warning
+            return out
 
         # Build execution context
         search_paths = self._build_search_paths(file_path, storage_location)
@@ -604,6 +679,8 @@ class ScriptHandler:
                         "Large response truncated. Full results saved to output file."
                     )
 
+            if version_warning:
+                result["version_warning"] = version_warning
             return result
 
         except subprocess.TimeoutExpired:
@@ -718,29 +795,30 @@ class ScriptHandler:
             Dict with execution result
         """
         # Extract dry_run from parameters if present
-        if parameters and "dry_run" in parameters:
-            dry_run = parameters.pop("dry_run")
+        params = parameters or {}
+        if params and "dry_run" in params:
+            dry_run = params.pop("dry_run")
 
         try:
             if action == "run":
-                return await self._run_script(script_name, parameters or {}, dry_run)
+                return await self._run_script(script_name, params, dry_run)
 
             elif action == "publish":
-                return await self._publish_script(script_name, kwargs.get("version"))
+                return await self._publish_script(script_name, params.get("version"))
 
             elif action == "delete":
-                return await self._delete_script(script_name, kwargs.get("confirm", False))
+                return await self._delete_script(script_name, params.get("confirm", False))
 
             elif action == "create":
                 return await self._create_script(
                     script_name,
-                    kwargs.get("content"),
-                    kwargs.get("location", "project"),
-                    kwargs.get("category"),
+                    params.get("content"),
+                    params.get("location", "project"),
+                    params.get("category"),
                 )
 
             elif action == "update":
-                return await self._update_script(script_name, kwargs.get("updates", {}))
+                return await self._update_script(script_name, params.get("updates", {}))
 
             else:
                 return {"error": f"Unknown action: {action}"}

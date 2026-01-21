@@ -17,7 +17,7 @@ from kiwi_mcp.utils.resolvers import KnowledgeResolver, get_user_space
 from kiwi_mcp.utils.parsers import parse_knowledge_entry
 from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
 from kiwi_mcp.utils.metadata_manager import MetadataManager
-from kiwi_mcp.utils.validators import ValidationManager
+from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 
 
 class KnowledgeHandler:
@@ -335,6 +335,65 @@ class KnowledgeHandler:
 
         return None
 
+    async def _check_for_newer_version(
+        self, zettel_id: str, current_version: str, current_source: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check for newer versions of a knowledge entry in other locations.
+        From project: check userspace and registry. From user: check registry only.
+        """
+        newest_version = current_version
+        newest_location = None
+
+        if current_source == "project":
+            try:
+                user_path = self._find_entry_in_path(zettel_id, self.resolver.user_knowledge)
+                if user_path and user_path.exists():
+                    try:
+                        user_data = parse_knowledge_entry(user_path)
+                        user_version = user_data.get("version")
+                        if user_version:
+                            try:
+                                if compare_versions(current_version, user_version) < 0:
+                                    if compare_versions(newest_version, user_version) < 0:
+                                        newest_version = user_version
+                                        newest_location = "user"
+                            except Exception as e:
+                                self.logger.warning(f"Failed to compare versions with user space: {e}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse user space knowledge {zettel_id}: {e}")
+            except Exception as e:
+                self.logger.warning(f"Failed to check user space for knowledge {zettel_id}: {e}")
+
+        try:
+            reg = await self.registry.get(zettel_id)
+            if reg and reg.get("version"):
+                rv = reg["version"]
+                try:
+                    if compare_versions(current_version, rv) < 0:
+                        if compare_versions(newest_version, rv) < 0:
+                            newest_version = rv
+                            newest_location = "registry"
+                except Exception as e:
+                    self.logger.warning(f"Failed to compare versions with registry: {e}")
+        except Exception as e:
+            self.logger.warning(f"Failed to check registry for knowledge {zettel_id}: {e}")
+
+        if newest_location and newest_version != current_version:
+            sugg = (
+                "Use load() to download the newer version from registry"
+                if newest_location == "registry"
+                else "Use load() to copy the newer version from user space"
+            )
+            return {
+                "message": "A newer version of this knowledge entry is available",
+                "current_version": current_version,
+                "newer_version": newest_version,
+                "location": newest_location,
+                "suggestion": sugg,
+            }
+        return None
+
     async def execute(
         self, action: str, zettel_id: str, parameters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -464,13 +523,25 @@ class KnowledgeHandler:
                     "path": str(file_path),
                 }
 
-            # Return content for decision making
-            return {
+            current_version = entry_data.get("version") or "1.0.0"
+            current_source = (
+                "project"
+                if str(file_path).startswith(str(self.resolver.project_knowledge))
+                else "user"
+            )
+            version_warning = await self._check_for_newer_version(
+                zettel_id, current_version, current_source
+            )
+
+            out = {
                 "status": "ready",
                 "title": entry_data["title"],
                 "content": entry_data["content"],
                 "instructions": "Use this knowledge to inform your decisions.",
             }
+            if version_warning:
+                out["version_warning"] = version_warning
+            return out
         except Exception as e:
             return {"error": f"Failed to parse knowledge entry: {str(e)}", "path": str(file_path)}
 

@@ -10,16 +10,29 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from kiwi_mcp.utils.validators import compare_versions
-from kiwi_mcp.utils.parsers import parse_directive_file
+from kiwi_mcp.utils.parsers import parse_directive_file, parse_script_metadata, parse_knowledge_entry
 
-# Import DirectiveHandler - may fail if supabase not installed
+# Import handlers - may fail if supabase not installed
 try:
     from kiwi_mcp.handlers.directive.handler import DirectiveHandler
     HAS_DIRECTIVE_HANDLER = True
 except (ImportError, ModuleNotFoundError):
-    # If supabase is not available, we'll skip DirectiveHandler tests
     DirectiveHandler = None
     HAS_DIRECTIVE_HANDLER = False
+
+try:
+    from kiwi_mcp.handlers.script.handler import ScriptHandler
+    HAS_SCRIPT_HANDLER = True
+except (ImportError, ModuleNotFoundError):
+    ScriptHandler = None
+    HAS_SCRIPT_HANDLER = False
+
+try:
+    from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
+    HAS_KNOWLEDGE_HANDLER = True
+except (ImportError, ModuleNotFoundError):
+    KnowledgeHandler = None
+    HAS_KNOWLEDGE_HANDLER = False
 
 
 class TestCompareVersions:
@@ -459,3 +472,148 @@ class TestDirectiveHandlerRunWithVersionWarning:
         # Should fail validation, not reach version checking
         assert "error" in result
         assert "version" in result["error"].lower() or any("version" in issue.lower() for issue in result.get("details", []))
+
+
+class TestParseScriptMetadataVersion:
+    """Test parse_script_metadata __version__ extraction."""
+
+    @pytest.mark.unit
+    @pytest.mark.parser
+    def test_parse_script_with_version(self, tmp_path):
+        """Should extract __version__ from script."""
+        script = tmp_path / "v_script.py"
+        script.write_text('__version__ = "2.3.4"\n"""Docstring."""\n')
+        meta = parse_script_metadata(script)
+        assert meta.get("version") == "2.3.4"
+
+    @pytest.mark.unit
+    @pytest.mark.parser
+    def test_parse_script_without_version(self, tmp_path):
+        """Should set version to None when __version__ is missing."""
+        script = tmp_path / "nov_script.py"
+        script.write_text('"""Docstring."""\nimport os\n')
+        meta = parse_script_metadata(script)
+        assert meta.get("version") is None
+
+
+@pytest.mark.skipif(not HAS_SCRIPT_HANDLER, reason="ScriptHandler requires supabase")
+class TestScriptHandlerVersionChecking:
+    """Test ScriptHandler._check_for_newer_version."""
+
+    @pytest.fixture
+    def handler(self, tmp_path):
+        return ScriptHandler(project_path=str(tmp_path))
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    @pytest.mark.version
+    async def test_script_check_registry_has_newer(self, handler):
+        with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
+            m.return_value = {"version": "1.2.0"}
+            r = await handler._check_for_newer_version("s", "1.0.0", "project")
+        assert r is not None and r["newer_version"] == "1.2.0" and r["location"] == "registry"
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    @pytest.mark.version
+    async def test_script_check_no_newer(self, handler):
+        with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
+            m.return_value = {"version": "1.0.0"}
+            r = await handler._check_for_newer_version("s", "1.0.0", "project")
+        assert r is None
+
+
+@pytest.mark.skipif(not HAS_SCRIPT_HANDLER, reason="ScriptHandler requires supabase")
+class TestScriptHandlerRunWithVersionWarning:
+    """Test _run_script adds version_warning when newer exists."""
+
+    @pytest.fixture
+    def handler(self, tmp_path):
+        return ScriptHandler(project_path=str(tmp_path))
+
+    @pytest.fixture
+    def valid_script_with_version(self, tmp_path):
+        from kiwi_mcp.utils.metadata_manager import MetadataManager
+        d = tmp_path / ".ai" / "scripts" / "test"
+        d.mkdir(parents=True)
+        content = '__version__ = "1.0.0"\n"""Test."""\nimport json\nprint(json.dumps({"status":"success","data":{}}))\n'
+        p = d / "valid_script.py"
+        p.write_text(content)
+        signed = MetadataManager.sign_content("script", content)
+        p.write_text(signed)
+        return p
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    @pytest.mark.version
+    async def test_script_run_adds_version_warning_when_newer(self, handler, valid_script_with_version):
+        with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
+            m.return_value = {"version": "1.2.0"}
+            with patch.object(handler, "_execute_subprocess") as sub:
+                sub.return_value = {"status": "success", "data": {}}
+                r = await handler.execute("run", "valid_script", {})
+        assert "version_warning" in r and r["version_warning"]["newer_version"] == "1.2.0"
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    @pytest.mark.version
+    async def test_script_dry_run_adds_version_warning(self, handler, valid_script_with_version):
+        with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
+            m.return_value = {"version": "1.2.0"}
+            r = await handler.execute("run", "valid_script", {"dry_run": True})
+        assert r.get("status") == "validation_passed" and "version_warning" in r
+
+
+@pytest.mark.skipif(not HAS_KNOWLEDGE_HANDLER, reason="KnowledgeHandler requires supabase")
+class TestKnowledgeHandlerVersionChecking:
+    """Test KnowledgeHandler._check_for_newer_version."""
+
+    @pytest.fixture
+    def handler(self, tmp_path):
+        return KnowledgeHandler(project_path=str(tmp_path))
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    @pytest.mark.version
+    async def test_knowledge_check_registry_has_newer(self, handler):
+        with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
+            m.return_value = {"version": "1.2.0"}
+            r = await handler._check_for_newer_version("k1", "1.0.0", "project")
+        assert r is not None and r["newer_version"] == "1.2.0" and r["location"] == "registry"
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    @pytest.mark.version
+    async def test_knowledge_check_no_newer(self, handler):
+        with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
+            m.return_value = {"version": "1.0.0"}
+            r = await handler._check_for_newer_version("k1", "1.0.0", "project")
+        assert r is None
+
+
+@pytest.mark.skipif(not HAS_KNOWLEDGE_HANDLER, reason="KnowledgeHandler requires supabase")
+class TestKnowledgeHandlerRunWithVersionWarning:
+    """Test _run_knowledge adds version_warning when newer exists."""
+
+    @pytest.fixture
+    def handler(self, tmp_path):
+        return KnowledgeHandler(project_path=str(tmp_path))
+
+    @pytest.fixture
+    def valid_knowledge_with_version(self, tmp_path):
+        d = tmp_path / ".ai" / "knowledge" / "test"
+        d.mkdir(parents=True)
+        raw = "---\nzettel_id: k1\ntitle: K1\nversion: 1.0.0\n---\n\nContent here.\n"
+        p = d / "k1.md"
+        p.write_text(raw)
+        return p
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    @pytest.mark.version
+    async def test_knowledge_run_adds_version_warning_when_newer(self, handler, valid_knowledge_with_version):
+        with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
+            m.return_value = {"version": "1.2.0"}
+            with patch("kiwi_mcp.handlers.knowledge.handler.MetadataManager.verify_signature", return_value=None):
+                r = await handler.execute("run", "k1", {})
+        assert "version_warning" in r and r["version_warning"]["newer_version"] == "1.2.0"

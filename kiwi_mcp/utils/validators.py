@@ -262,6 +262,14 @@ class ScriptValidator(BaseValidator):
         if not name:
             issues.append("Script name is required")
 
+        # Version is required (enables version-warning when running)
+        script_version = parsed_data.get("version")
+        if not script_version or script_version == "0.0.0":
+            issues.append(
+                "Script is missing required __version__. "
+                'Add at module level: __version__ = "1.0.0"'
+            )
+
         return {
             "valid": len(issues) == 0,
             "issues": issues,
@@ -317,6 +325,14 @@ class KnowledgeValidator(BaseValidator):
         content = parsed_data.get("content")
         if not content:
             issues.append("Content is required")
+
+        # Version is required (enables version-warning when running)
+        entry_version = parsed_data.get("version")
+        if not entry_version or entry_version == "0.0.0":
+            issues.append(
+                "Knowledge entry is missing required 'version' in YAML frontmatter. "
+                'Add to frontmatter: version: "1.0.0"'
+            )
 
         return {
             "valid": len(issues) == 0,

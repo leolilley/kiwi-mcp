@@ -2,10 +2,13 @@
 Environment Manager for Kiwi MCP
 
 Manages virtual environments for script execution:
-- Project-level: .ai/scripts/.venv/ (when project_path provided)
-- User-level: $USER_SPACE/.venv/ or ~/.ai/.venv/ (default fallback)
+- Project-level: .ai/scripts/.venv/ (when project_path provided and it exists)
+- User-level: $USER_SPACE/.venv/ or default path ~/.ai/.venv/ (when running from userspace, or when running from project but no project venv exists)
 
-This ensures scripts run in isolated environments with their own dependencies.
+Venv selection:
+- Script from userspace -> always use ~/.ai/.venv
+- Script from project -> use .ai/scripts/.venv if it exists; else fall back to ~/.ai/.venv
+  (caller performs this check; EnvManager does not create a project venv when absent)
 """
 
 import os
@@ -63,6 +66,15 @@ class EnvManager:
 
         self.venv_dir = self.env_root / ".venv"
         self._lock_file: Optional[int] = None
+
+    @staticmethod
+    def venv_has_python(venv_dir: Path) -> bool:
+        """Return True if venv_dir exists and contains a python executable."""
+        if not venv_dir.exists():
+            return False
+        if os.name == "nt":
+            return (venv_dir / "Scripts" / "python.exe").exists()
+        return (venv_dir / "bin" / "python").exists()
 
     def _acquire_lock(self) -> bool:
         """
