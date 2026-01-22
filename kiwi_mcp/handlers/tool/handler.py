@@ -23,6 +23,8 @@ from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 from .manifest import ToolManifest
 from .executors import ExecutorRegistry, ExecutionResult
 from .executors.python import PythonExecutor
+from .executors.bash import BashExecutor
+from .executors.api import APIExecutor
 
 
 class ToolHandler:
@@ -48,6 +50,14 @@ class ToolHandler:
         # Register Python executor
         python_executor = PythonExecutor(self.project_path)
         ExecutorRegistry.register("python", python_executor)
+
+        # Register Bash executor
+        bash_executor = BashExecutor()
+        ExecutorRegistry.register("bash", bash_executor)
+
+        # Register API executor
+        api_executor = APIExecutor()
+        ExecutorRegistry.register("api", api_executor)
 
     async def search(
         self, query: str, source: str = "all", limit: int = 10, sort_by: SortBy = "score"

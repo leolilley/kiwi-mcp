@@ -5,6 +5,8 @@ Provides consistent validation across directives, scripts, and knowledge entries
 """
 
 import re
+import subprocess
+import urllib.parse
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -15,7 +17,9 @@ class BaseValidator(ABC):
     """Base validator for item-type-specific validation."""
 
     @abstractmethod
-    def validate_filename_match(self, file_path: Path, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_filename_match(
+        self, file_path: Path, parsed_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Validate that filename matches item identifier."""
 
     @abstractmethod
@@ -25,7 +29,7 @@ class BaseValidator(ABC):
     def validate(self, file_path: Path, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Run all validations.
-        
+
         Returns:
             {"valid": bool, "issues": List[str], "warnings": List[str]}
         """
@@ -56,11 +60,13 @@ class BaseValidator(ABC):
 class DirectiveValidator(BaseValidator):
     """Validator for directives."""
 
-    def validate_filename_match(self, file_path: Path, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_filename_match(
+        self, file_path: Path, parsed_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Validate filename matches directive name and name format."""
         issues = []
         directive_name = parsed_data.get("name")
-        
+
         if not directive_name:
             return {
                 "valid": False,
@@ -68,7 +74,7 @@ class DirectiveValidator(BaseValidator):
             }
 
         # Validate name format (must be snake_case)
-        if not re.match(r'^[a-z][a-z0-9_]*$', directive_name):
+        if not re.match(r"^[a-z][a-z0-9_]*$", directive_name):
             issues.append(
                 f"Invalid directive name '{directive_name}'. Must be snake_case "
                 "(lowercase letters, numbers, underscores, starting with a letter)"
@@ -116,16 +122,16 @@ class DirectiveValidator(BaseValidator):
                 else:
                     # Check that there's no content after </directive> in the original content
                     # Find the position of the extracted XML in the original content
-                    start_match = re.search(r'<directive[^>]*>', content)
+                    start_match = re.search(r"<directive[^>]*>", content)
                     if start_match:
                         start_idx = start_match.start()
-                        end_tag = '</directive>'
+                        end_tag = "</directive>"
                         end_idx = content.rfind(end_tag)
                         if end_idx != -1:
                             # Check if there's any non-whitespace content after </directive> before the code block ends
-                            after_closing = content[end_idx + len(end_tag):]
+                            after_closing = content[end_idx + len(end_tag) :]
                             # Find the end of the XML code block (```)
-                            code_block_end = after_closing.find('```')
+                            code_block_end = after_closing.find("```")
                             if code_block_end != -1:
                                 # Check content between </directive> and closing ```
                                 content_before_close = after_closing[:code_block_end].strip()
@@ -134,14 +140,14 @@ class DirectiveValidator(BaseValidator):
                                         "Directive XML must end with </directive> tag with no content after it. "
                                         f"Found content after closing tag (before code block end): {repr(content_before_close[:50])}"
                                     )
-                                
+
                                 # Also check for content after the closing ``` that looks like it shouldn't be there
                                 # (e.g., XML-like tags or other structured content)
-                                after_code_block = after_closing[code_block_end + 3:].strip()
+                                after_code_block = after_closing[code_block_end + 3 :].strip()
                                 # Look for XML-like tags or other suspicious content
                                 if after_code_block:
                                     # Check if it looks like XML tags or structured content
-                                    xml_like_pattern = r'<[^>]+>'
+                                    xml_like_pattern = r"<[^>]+>"
                                     if re.search(xml_like_pattern, after_code_block):
                                         issues.append(
                                             "Directive XML code block should end immediately after closing ```. "
@@ -180,14 +186,14 @@ class DirectiveValidator(BaseValidator):
             if tier is None or tier == "":
                 issues.append(
                     "Model tag exists but is missing required 'tier' attribute. "
-                    "Example: <model tier=\"reasoning\">...</model>"
+                    'Example: <model tier="reasoning">...</model>'
                 )
             elif not isinstance(tier, str) or not tier.strip():
-                issues.append(f"Model 'tier' attribute must be a non-empty string, got: {repr(tier)}")
-            elif tier not in valid_tiers:
                 issues.append(
-                    f"Invalid model tier '{tier}'. Must be one of: {valid_tiers}"
+                    f"Model 'tier' attribute must be a non-empty string, got: {repr(tier)}"
                 )
+            elif tier not in valid_tiers:
+                issues.append(f"Invalid model tier '{tier}'. Must be one of: {valid_tiers}")
 
             # Check fallback
             fallback = model_data.get("fallback")
@@ -209,16 +215,18 @@ class DirectiveValidator(BaseValidator):
         if not directive_version or directive_version == "0.0.0":
             issues.append(
                 "Directive is missing required 'version' attribute. "
-                "Add version attribute to <directive> tag: <directive name=\"...\" version=\"1.0.0\">"
+                'Add version attribute to <directive> tag: <directive name="..." version="1.0.0">'
             )
-        elif not re.match(r'^\d+\.\d+\.\d+$', str(directive_version)):
+        elif not re.match(r"^\d+\.\d+\.\d+$", str(directive_version)):
             issues.append(
                 f"Invalid version format '{directive_version}'. Must be semver (e.g., 1.0.0, 2.1.3)"
             )
 
         # Check for legacy model_class warning
         if parsed_data.get("legacy_warning"):
-            warnings.append(parsed_data["legacy_warning"].get("message", "Legacy model_class tag detected"))
+            warnings.append(
+                parsed_data["legacy_warning"].get("message", "Legacy model_class tag detected")
+            )
 
         return {
             "valid": len(issues) == 0,
@@ -228,23 +236,25 @@ class DirectiveValidator(BaseValidator):
 
     def _extract_xml_from_content(self, content: str) -> Optional[str]:
         """Extract XML directive from markdown content."""
-        start_match = re.search(r'<directive[^>]*>', content)
+        start_match = re.search(r"<directive[^>]*>", content)
         if not start_match:
             return None
 
         start_idx = start_match.start()
-        end_tag = '</directive>'
+        end_tag = "</directive>"
         end_idx = content.rfind(end_tag)
         if end_idx == -1 or end_idx < start_idx:
             return None
 
-        return content[start_idx:end_idx + len(end_tag)].strip()
+        return content[start_idx : end_idx + len(end_tag)].strip()
 
 
 class ScriptValidator(BaseValidator):
     """Validator for scripts."""
 
-    def validate_filename_match(self, file_path: Path, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_filename_match(
+        self, file_path: Path, parsed_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Validate filename matches script name."""
         script_name = parsed_data.get("name")
         if not script_name:
@@ -287,8 +297,7 @@ class ScriptValidator(BaseValidator):
         script_version = parsed_data.get("version")
         if not script_version or script_version == "0.0.0":
             issues.append(
-                "Script is missing required __version__. "
-                'Add at module level: __version__ = "1.0.0"'
+                'Script is missing required __version__. Add at module level: __version__ = "1.0.0"'
             )
 
         return {
@@ -301,7 +310,9 @@ class ScriptValidator(BaseValidator):
 class KnowledgeValidator(BaseValidator):
     """Validator for knowledge entries."""
 
-    def validate_filename_match(self, file_path: Path, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_filename_match(
+        self, file_path: Path, parsed_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Validate filename matches zettel_id."""
         zettel_id = parsed_data.get("zettel_id")
         if not zettel_id:
@@ -365,18 +376,18 @@ class KnowledgeValidator(BaseValidator):
 def compare_versions(version1: str, version2: str) -> int:
     """
     Compare two semantic version strings using packaging library.
-    
+
     Assumes versions are valid strings (missing versions are caught by validator).
-    
+
     Args:
         version1: First version string
         version2: Second version string
-    
+
     Returns:
         -1 if version1 < version2
          0 if version1 == version2
          1 if version1 > version2
-    
+
     Raises:
         ValueError: If version strings are invalid (packaging will raise)
     """
@@ -387,6 +398,68 @@ def compare_versions(version1: str, version2: str) -> int:
     elif v1 > v2:
         return 1
     return 0
+
+
+class ValidationResult:
+    """Result from a validation operation."""
+
+    def __init__(self, valid: bool, error: str = None):
+        self.valid = valid
+        self.error = error
+
+
+class BashValidator:
+    """Validator for bash scripts in tool manifests."""
+
+    async def validate(self, script_path: Path) -> ValidationResult:
+        """Validate a bash script for syntax and structure."""
+        try:
+            # Check shebang exists
+            content = script_path.read_text()
+            if not content.startswith("#!"):
+                return ValidationResult(valid=False, error="Missing shebang")
+
+            # Syntax check with bash -n
+            result = subprocess.run(
+                ["bash", "-n", str(script_path)], capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                return ValidationResult(valid=False, error=result.stderr)
+
+            return ValidationResult(valid=True)
+        except Exception as e:
+            return ValidationResult(valid=False, error=str(e))
+
+
+class APIValidator:
+    """Validator for API tool manifests."""
+
+    async def validate(self, manifest) -> ValidationResult:
+        """Validate an API tool manifest configuration."""
+        config = manifest.executor_config
+
+        # Check required fields
+        if "endpoint" not in config:
+            return ValidationResult(valid=False, error="Missing endpoint")
+
+        # Validate URL format
+        if not self._is_valid_url(config["endpoint"]):
+            return ValidationResult(valid=False, error="Invalid endpoint URL")
+
+        # Check auth config if present
+        if "auth" in config:
+            if config["auth"]["type"] not in ["bearer", "api_key", "basic"]:
+                return ValidationResult(valid=False, error="Unknown auth type")
+
+        return ValidationResult(valid=True)
+
+    def _is_valid_url(self, url: str) -> bool:
+        """Check if URL is valid."""
+        try:
+            result = urllib.parse.urlparse(url)
+            return all([result.scheme, result.netloc])
+        except Exception:
+            return False
 
 
 class ValidationManager:
@@ -403,14 +476,18 @@ class ValidationManager:
         """Get validator for item type."""
         validator = cls.VALIDATORS.get(item_type)
         if not validator:
-            raise ValueError(f"Unknown item_type: {item_type}. Supported: {list(cls.VALIDATORS.keys())}")
+            raise ValueError(
+                f"Unknown item_type: {item_type}. Supported: {list(cls.VALIDATORS.keys())}"
+            )
         return validator
 
     @classmethod
-    def validate(cls, item_type: str, file_path: Path, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
+    def validate(
+        cls, item_type: str, file_path: Path, parsed_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Validate item using appropriate validator.
-        
+
         Returns:
             {"valid": bool, "issues": List[str], "warnings": List[str]}
         """
