@@ -20,6 +20,11 @@ except ImportError as e:
     ScriptHandler = None
 
 try:
+    from kiwi_mcp.handlers.tool.handler import ToolHandler
+except ImportError as e:
+    ToolHandler = None
+
+try:
     from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
 except ImportError as e:
     KnowledgeHandler = None
@@ -43,6 +48,7 @@ class TypeHandlerRegistry:
             DirectiveHandler(project_path=project_path) if DirectiveHandler else None
         )
         self.script_handler = ScriptHandler(project_path=project_path) if ScriptHandler else None
+        self.tool_handler = ToolHandler(project_path=project_path) if ToolHandler else None
         self.knowledge_handler = (
             KnowledgeHandler(project_path=project_path) if KnowledgeHandler else None
         )
@@ -51,8 +57,15 @@ class TypeHandlerRegistry:
         self.handlers: Dict[str, Any] = {}
         if self.directive_handler:
             self.handlers["directive"] = self.directive_handler
-        if self.script_handler:
+
+        # Choose between script handler and tool handler
+        # Tool handler takes precedence for both "tool" and "script" types
+        if self.tool_handler:
+            self.handlers["tool"] = self.tool_handler
+            self.handlers["script"] = self.tool_handler  # Backward compatibility alias
+        elif self.script_handler:
             self.handlers["script"] = self.script_handler
+
         if self.knowledge_handler:
             self.handlers["knowledge"] = self.knowledge_handler
 
@@ -116,12 +129,20 @@ class TypeHandlerRegistry:
             self.logger.info(f"Loading {item_type}: {item_id}")
 
             # Map item_id to handler-specific parameter names
+            result = None
             if item_type == "directive":
                 result = await handler.load(directive_name=item_id, **kwargs)
-            elif item_type == "script":
-                result = await handler.load(script_name=item_id, **kwargs)
+            elif item_type in ["script", "tool"]:
+                # Handle both script and tool types with appropriate parameter names
+                if hasattr(handler, "load") and "tool_name" in handler.load.__code__.co_varnames:
+                    result = await handler.load(tool_name=item_id, **kwargs)
+                else:
+                    result = await handler.load(script_name=item_id, **kwargs)
             elif item_type == "knowledge":
                 result = await handler.load(zettel_id=item_id, **kwargs)
+
+            if result is None:
+                return {"error": f"Unsupported item_type: {item_type}"}
 
             return result
         except Exception as e:
@@ -165,18 +186,31 @@ class TypeHandlerRegistry:
             self.logger.info(f"Executing {item_type}.{action}: {item_id}")
 
             # Map item_id to handler-specific parameter names
+            result = None
             if item_type == "directive":
                 result = await handler.execute(
                     action=action, directive_name=item_id, parameters=parameters, **kwargs
                 )
-            elif item_type == "script":
-                result = await handler.execute(
-                    action=action, script_name=item_id, parameters=parameters, **kwargs
-                )
+            elif item_type in ["script", "tool"]:
+                # Handle both script and tool types with appropriate parameter names
+                if (
+                    hasattr(handler, "execute")
+                    and "tool_name" in handler.execute.__code__.co_varnames
+                ):
+                    result = await handler.execute(
+                        action=action, tool_name=item_id, parameters=parameters, **kwargs
+                    )
+                else:
+                    result = await handler.execute(
+                        action=action, script_name=item_id, parameters=parameters, **kwargs
+                    )
             elif item_type == "knowledge":
                 result = await handler.execute(
                     action=action, zettel_id=item_id, parameters=parameters, **kwargs
                 )
+
+            if result is None:
+                return {"error": f"Unsupported item_type: {item_type}"}
 
             return result
         except Exception as e:
