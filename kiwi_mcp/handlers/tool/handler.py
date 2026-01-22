@@ -45,6 +45,18 @@ class ToolHandler:
         # Initialize and register executors
         self._setup_executors()
 
+    def _has_git(self) -> bool:
+        """Check if project is in a git repository."""
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-dir"], cwd=self.project_path, capture_output=True
+            )
+            return result.returncode == 0
+        except FileNotFoundError:
+            return False
+
     def _setup_executors(self):
         """Setup and register available executors."""
         # Register Python executor
@@ -121,8 +133,8 @@ class ToolHandler:
                     # Calculate relevance score
                     searchable_text = f"{script['name']} {script['description']}"
                     score = score_relevance(
-                        [query], searchable_text
-                    )  # Fix: pass list instead of string
+                        searchable_text, query.split()
+                    )  # Fix: correct parameter order
 
                     results.append(
                         {
@@ -458,7 +470,7 @@ class ToolHandler:
 
             # Convert ExecutionResult to expected format
             if result.success:
-                return {
+                response = {
                     "status": "success",
                     "data": {"output": result.output},
                     "metadata": {
@@ -467,6 +479,17 @@ class ToolHandler:
                         "executor": executor.__class__.__name__,
                     },
                 }
+
+                # Add checkpoint recommendation if tool mutates state
+                if manifest.mutates_state and self._has_git():
+                    response["checkpoint_recommended"] = True
+                    response["checkpoint_hint"] = (
+                        "This tool mutates state. Consider running git_checkpoint: "
+                        f"execute(item_type='directive', action='run', item_id='git_checkpoint', "
+                        f"parameters={{'operation': '{manifest.tool_id}'}})"
+                    )
+
+                return response
             else:
                 return {
                     "status": "error",
