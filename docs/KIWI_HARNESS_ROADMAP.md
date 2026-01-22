@@ -228,41 +228,185 @@ kiwi_mcp/utils/validators.py  # Add BashValidator, APIValidator
 
 ---
 
-## Phase 3: Kiwi Proxy Layer (Weeks 5-6)
+## Phase 3: Kiwi Proxy Layer & Permission Enforcement (Weeks 5-7)
 
-**Goal:** Route all tool calls through a proxy that enforces permissions and logs actions.
+**Goal:** Route all tool calls through a proxy that enforces permissions, logs actions, and provides agent control signals.
+
+**Design Document:** [RUNTIME_PERMISSION_DESIGN.md](./RUNTIME_PERMISSION_DESIGN.md)
+
+### Core Concept: Runtime Permission Enforcement
+
+Permissions declared in directives are **hard-enforced** at the proxy layer, not just "suggested" to the LLM:
+
+```
+Agent Request → KiwiProxy → Permission Check → IF allowed → Execute
+                                             │
+                                             └─ IF denied → Error + Optional Annealing
+```
+
+This prevents:
+- Subagents escalating privileges beyond parent's scope
+- Model hallucinations causing unauthorized actions
+- Recursive agents going rogue
 
 ### Deliverables
 
-1. **KiwiProxy class**
+1. **KiwiProxy class** with permission enforcement
 
    ```python
    class KiwiProxy:
+       def __init__(self, permission_context: PermissionContext):
+           self.permissions = permission_context  # From directive <permissions>
+           self.audit = AuditLogger()
+       
        async def call_tool(self, tool_id: str, params: dict) -> Any:
-           # Permission check
-           # Rate limit check
-           # Audit log
-           # Route to executor
+           # 1. Audit log (always, even for denied)
+           self.audit.log_request(tool_id, params)
+           
+           # 2. Permission check (hard enforcement)
+           if not self._check_permission(tool_id, params):
+               return self._deny(tool_id, params)
+           
+           # 3. Rate limit check
+           if not self._check_rate_limit(tool_id):
+               return self._rate_limited(tool_id)
+           
+           # 4. Route to executor
+           result = await self.executor_registry.execute(tool_id, params)
+           
+           # 5. Log result
+           self.audit.log_result(tool_id, result)
+           
+           return result
    ```
 
-2. **FilesystemExecutor** (builtin proxy)
+2. **PermissionContext** from directive parsing
+
+   ```python
+   @dataclass
+   class PermissionContext:
+       filesystem_read: list[str]   # Glob patterns: ["src/**", "tests/**"]
+       filesystem_write: list[str]  # Glob patterns: ["tests/**"]
+       tools_allowed: list[str]     # Tool IDs: ["pytest", "search"]
+       shell_commands: list[str]    # Commands: ["git", "npm"]
+       mcp_actions: dict[str, list[str]]  # {"supabase": ["query", "migrate"]}
+       
+       def can_read(self, path: str) -> bool:
+           return any(fnmatch(path, pat) for pat in self.filesystem_read)
+       
+       def can_execute(self, tool_id: str) -> bool:
+           return tool_id in self.tools_allowed
+   ```
+
+3. **Help Tool Redesign: "Call for Help" Signal**
+
+   The help tool is extended to serve as an **agent control signal**:
+   
+   ```python
+   class HelpTool(BaseTool):
+       # Existing: Get guidance
+       # NEW: Signal for human attention
+       
+       async def execute(self, arguments: dict) -> str:
+           action = arguments.get("action", "guidance")
+           
+           if action == "stuck":
+               # Agent signals it's caught in a loop or confused
+               return await self._signal_stuck(arguments)
+           elif action == "escalate":
+               # Agent needs human decision
+               return await self._signal_escalate(arguments)
+           elif action == "checkpoint":
+               # Agent wants to save state before risky operation
+               return await self._request_checkpoint(arguments)
+           else:
+               # Original guidance behavior
+               return self._get_guidance(arguments.get("topic"))
+       
+       async def _signal_stuck(self, arguments: dict) -> str:
+           """Signal that agent is stuck and needs intervention."""
+           session_id = arguments.get("session_id")
+           reason = arguments.get("reason", "Unknown")
+           attempts = arguments.get("attempts", 0)
+           
+           # Log to monitoring system
+           await self.monitor.signal_stuck(
+               session_id=session_id,
+               reason=reason,
+               attempts=attempts,
+               context=arguments.get("context")
+           )
+           
+           # Trigger annealing review if configured
+           if attempts > 3:
+               await self.annealing.queue_for_review(session_id)
+           
+           return {
+               "status": "stuck_acknowledged",
+               "action": "awaiting_intervention",
+               "session_id": session_id
+           }
+   ```
+
+4. **FilesystemExecutor** with path enforcement
 
    - `filesystem.read`, `filesystem.write`, `filesystem.list`
-   - Path enforcement from directive permissions
+   - Path validation against `permission_context.filesystem_read/write`
 
-3. **ShellExecutor** (builtin proxy)
+5. **ShellExecutor** with command allowlist
 
-   - `shell.run` with command allowlist
+   - `shell.run` validates against `permission_context.shell_commands`
    - Timeout and output capture
 
-4. **Audit logging**
+6. **Audit logging**
 
    - `.ai/logs/audit/{date}/{session}.jsonl`
-   - Tool call, params, result, timing
+   - Every tool call: request, permission check result, execution result, timing
+   - Denial reasons logged for annealing analysis
 
-5. **Directive context threading**
-   - Pass directive context through tool calls
-   - Enforce permissions at proxy level
+7. **Loop Detection & Stuck Signaling**
+
+   ```python
+   class LoopDetector:
+       """Detects when agents are stuck in repetitive patterns."""
+       
+       def __init__(self, window_size: int = 10, similarity_threshold: float = 0.9):
+           self.recent_calls: list[dict] = []
+           self.window = window_size
+           self.threshold = similarity_threshold
+       
+       def record_call(self, tool_id: str, params: dict) -> Optional[StuckSignal]:
+           self.recent_calls.append({"tool": tool_id, "params": params})
+           if len(self.recent_calls) > self.window:
+               self.recent_calls.pop(0)
+           
+           # Check for repetitive patterns
+           if self._detect_loop():
+               return StuckSignal(
+                   reason="repetitive_calls",
+                   pattern=self._extract_pattern(),
+                   suggestion="Consider using help(action='stuck') to signal for intervention"
+               )
+           return None
+   ```
+
+### Permission Inheritance in Recursion
+
+When a directive spawns a subagent, permissions are **scoped down, never up**:
+
+```python
+def spawn_subagent(self, child_directive: str, inputs: dict):
+    child_permissions = self._load_child_permissions(child_directive)
+    
+    # Intersection: child can only have what parent has AND what child declares
+    scoped_permissions = self.permissions.intersect(child_permissions)
+    
+    # Verify no escalation
+    if child_permissions.exceeds(self.permissions):
+        return {"error": "Permission escalation denied"}
+    
+    return Executor(permissions=scoped_permissions, ...)
+```
 
 ### Files Changed/Created
 
@@ -270,25 +414,86 @@ kiwi_mcp/utils/validators.py  # Add BashValidator, APIValidator
 kiwi_mcp/
 ├── runtime/             # NEW directory
 │   ├── __init__.py
-│   ├── proxy.py         # KiwiProxy
-│   └── audit.py         # AuditLogger
+│   ├── proxy.py         # KiwiProxy with permission enforcement
+│   ├── permissions.py   # PermissionContext, PermissionChecker
+│   ├── audit.py         # AuditLogger
+│   └── loop_detector.py # LoopDetector for stuck detection
+├── tools/
+│   └── help.py          # Extended with call-for-help signals
 └── handlers/tool/executors/
-    ├── filesystem.py    # NEW: FilesystemExecutor
-    └── shell.py         # NEW: ShellExecutor
+    ├── filesystem.py    # FilesystemExecutor with path checks
+    └── shell.py         # ShellExecutor with command allowlist
 ```
 
 ### Success Criteria
 
 - [ ] All tool calls logged to audit file
-- [ ] Permission denied when tool not in directive
-- [ ] Filesystem paths enforced
-- [ ] Shell commands filtered
+- [ ] Permission denied when tool not in directive scope
+- [ ] Filesystem paths enforced via glob matching
+- [ ] Shell commands filtered against allowlist
+- [ ] Subagents cannot exceed parent permissions
+- [ ] `help(action="stuck")` signals for intervention
+- [ ] Loop detection suggests help signal when stuck
+
+### Effort: 8 days (increased from 6 due to help redesign)
+
+---
+
+## Phase 4: Git Checkpoint Integration (Weeks 8-9)
+
+**Goal:** Audit trail via git commits for state-mutating operations at the proxy layer.
+
+### Deliverables
+
+1. **git_checkpoint directive**
+
+   - Show diff
+   - Generate commit message
+   - Commit or rollback
+
+2. **`mutates_state` handling**
+
+   - Tool manifests declare mutation
+   - Proxy layer recommends checkpoint after mutating tools
+   - Integrated with permission enforcement
+
+3. **Rollback support**
+
+   - `execute(action="rollback", item_id="{session_id}")`
+   - Revert to pre-execution state
+
+4. **Git helper utilities**
+   - `GitHelper.status()`, `GitHelper.commit()`, `GitHelper.reset()`
+   - Integrated with AuditLogger for traceability
+
+### Files Changed/Created
+
+```
+kiwi_mcp/handlers/git/
+├── __init__.py
+├── checkpoint.py    # GitCheckpoint helper
+└── helper.py        # Git operations
+
+kiwi_mcp/runtime/
+└── git_integration.py  # Git proxy layer integration
+
+.ai/directives/core/
+└── git_checkpoint.md  # Checkpoint directive
+```
+
+### Success Criteria
+
+- [ ] Mutating tool triggers checkpoint recommendation at proxy layer
+- [ ] Checkpoint creates commit with directive reference and audit trail
+- [ ] Rollback reverts changes and updates git history
+- [ ] Git operations logged in audit trail
+- [ ] Integration with permission enforcement working
 
 ### Effort: 6 days
 
 ---
 
-## Phase 4: MCP Client Pool (Weeks 7-8)
+## Phase 5: MCP Client Pool (Weeks 10-11)
 
 **Goal:** Connect to external MCPs, fetch schemas, route calls.
 
@@ -347,7 +552,134 @@ kiwi_mcp/
 
 ---
 
-## Phase 5: Directive Executor Runtime (Weeks 9-11)
+## Phase 6: RAG & Vector Search (Weeks 12-14)
+
+**Goal:** Implement vector database storage for directives, scripts, and knowledge to enable semantic search at scale (1M+ items).
+
+**Design Document:** [RAG_VECTOR_SEARCH_DESIGN.md](./RAG_VECTOR_SEARCH_DESIGN.md)
+
+### The Problem
+
+Current keyword-based search doesn't scale:
+
+- Registry could grow to millions of directives/scripts
+- Keyword matching misses semantic intent
+- Can't discover "similar" directives for reuse
+- No learning from usage patterns
+
+### The Solution: Validation-Gated Vector Storage
+
+When items are **validated** (signature verified, structure checked), they're eligible for vector storage. This creates a security layer—only trusted content enters the vector DB.
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                      RAG Pipeline                                   │
+│                                                                     │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐  │
+│  │  Validation  │───►│  Embedding   │───►│  Vector Storage      │  │
+│  │  (existing)  │    │  Generation  │    │  (ChromaDB/Qdrant)   │  │
+│  └──────────────┘    └──────────────┘    └──────────────────────┘  │
+│         │                                          │               │
+│         │                                          ▼               │
+│         │                              ┌──────────────────────┐    │
+│         │                              │  Semantic Search     │    │
+│         │                              │  (replaces keyword)  │    │
+│         │                              └──────────────────────┘    │
+│         │                                                          │
+│  Security: Only validated content is embedded                      │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Three-Tier Vector Storage
+
+| Tier         | Location            | Content                            | Use Case                       |
+| ------------ | ------------------- | ---------------------------------- | ------------------------------ |
+| **Project**  | `.ai/vectors/`      | Local directives/scripts/knowledge | Project-specific search        |
+| **User**     | `~/.ai/vectors/`    | User's shared items                | Cross-project personal library |
+| **Registry** | Supabase + pgvector | Global published items             | Discovery across all users     |
+
+### Deliverables
+
+1. **VectorStore abstraction**
+
+   ```python
+   class VectorStore(ABC):
+       async def embed_and_store(self, item_id: str, content: str, metadata: dict)
+       async def search(self, query: str, limit: int, filters: dict) -> list[SearchResult]
+       async def delete(self, item_id: str)
+
+   class LocalVectorStore(VectorStore):
+       """ChromaDB for project/user level"""
+
+   class RegistryVectorStore(VectorStore):
+       """pgvector via Supabase for registry"""
+   ```
+
+2. **Embedding pipeline**
+
+   - Embed on validation success (hook into ValidationManager)
+   - Use lightweight model (all-MiniLM-L6-v2 or similar)
+   - Batch embedding for bulk imports
+   - Incremental updates on edit
+
+3. **Enhanced search handler**
+
+   ```python
+   async def search(self, query: str, source: str = "local"):
+       # Semantic search with optional keyword fallback
+       results = await self.vector_store.search(query, limit=20)
+       # Merge with keyword results for hybrid approach
+       return self._rank_hybrid(results, keyword_results)
+   ```
+
+4. **Validation-to-Vector hook**
+
+   ```python
+   # In ValidationManager
+   async def validate(self, content: str, item_type: str):
+       result = await self._validate_structure(content)
+       if result.valid:
+           # Security gate: only valid content gets embedded
+           await self.vector_store.embed_and_store(
+               item_id=result.item_id,
+               content=self._extract_searchable(content),
+               metadata={"type": item_type, "validated_at": now()}
+           )
+       return result
+   ```
+
+### Files Changed/Created
+
+```
+kiwi_mcp/storage/
+├── __init__.py
+├── vector/
+│   ├── __init__.py
+│   ├── base.py          # VectorStore ABC
+│   ├── local.py         # ChromaDB implementation
+│   ├── registry.py      # pgvector/Supabase implementation
+│   └── embeddings.py    # Embedding model wrapper
+
+kiwi_mcp/utils/
+└── validation.py        # Add embed_on_validate hook
+
+kiwi_mcp/handlers/
+└── search.py            # Upgrade to hybrid search
+```
+
+### Success Criteria
+
+- [ ] Validated directives automatically embedded
+- [ ] Semantic search returns relevant results
+- [ ] Three-tier storage (project/user/registry) working
+- [ ] Hybrid search outperforms keyword-only
+- [ ] Vector DB syncs with registry publishes
+
+### Effort: 7 days
+
+---
+
+## Phase 7: Directive Executor Runtime (Weeks 15-17)
 
 **Goal:** Spawn purpose-built executors for directives instead of returning content.
 
@@ -408,7 +740,7 @@ kiwi_mcp/handlers/directive/handler.py  # Modified _run_directive
 
 ---
 
-## Phase 6: Annealing Integration (Week 12)
+## Phase 8: Annealing Integration (Weeks 18-19)
 
 **Goal:** Auto-improve directives on failure.
 
@@ -454,54 +786,7 @@ kiwi_mcp/runtime/
 
 ---
 
-## Phase 7: Git Checkpoint Integration (Weeks 13-14)
-
-**Goal:** Audit trail via git commits for state-mutating operations.
-
-### Deliverables
-
-1. **git_checkpoint directive**
-
-   - Show diff
-   - Generate commit message
-   - Commit or rollback
-
-2. **`mutates_state` handling**
-
-   - Tool manifests declare mutation
-   - Executor recommends checkpoint after mutating tools
-
-3. **Rollback support**
-
-   - `execute(action="rollback", item_id="{session_id}")`
-   - Revert to pre-execution state
-
-4. **Git helper utilities**
-   - `GitHelper.status()`, `GitHelper.commit()`, `GitHelper.reset()`
-
-### Files Changed/Created
-
-```
-kiwi_mcp/handlers/git/
-├── __init__.py
-├── checkpoint.py    # GitCheckpoint helper
-└── helper.py        # Git operations
-
-.ai/directives/core/
-└── git_checkpoint.md  # Checkpoint directive
-```
-
-### Success Criteria
-
-- [ ] Mutating tool triggers checkpoint recommendation
-- [ ] Checkpoint creates commit with directive reference
-- [ ] Rollback reverts changes
-
-### Effort: 5 days
-
----
-
-## Phase 8: Human Approval & Checkpoints (Weeks 15-16)
+## Phase 9: Human Approval (Weeks 20-21)
 
 **Goal:** Pause execution for human approval on sensitive operations.
 
@@ -556,7 +841,7 @@ kiwi_mcp/cli/
 
 ---
 
-## Phase 9: Pre-Loading & Environments (Weeks 17-18)
+## Phase 10: Pre-Loading & Environments (Weeks 22-23)
 
 **Goal:** Pre-load directives and tools for batch/pipeline execution.
 
@@ -597,7 +882,7 @@ kiwi_mcp/runtime/
 
 ---
 
-## Phase 10: Docker Executor & Advanced Isolation (Weeks 19-20)
+## Phase 11: Docker Executor & Advanced Isolation (Weeks 24-25)
 
 **Goal:** Run untrusted tools in Docker containers.
 
@@ -642,22 +927,352 @@ kiwi_mcp/runtime/
 
 ---
 
+## Phase 12: MCP 2.0 - Intent-Based Tool Calling (Weeks 26-28)
+
+**Goal:** Abstract tool calling from syntax to intent. Agents express what they want; FunctionGemma resolves to actual tool calls.
+
+**Design Document:** [MCP_2_INTENT_DESIGN.md](./MCP_2_INTENT_DESIGN.md)
+
+### The Problem
+
+As directives/tools scale to 1M+:
+- Can't front-load all tool schemas into agent context
+- Agents hallucinate tool args/syntax
+- Context bloat limits recursion depth
+- Every agent must "know" every tool
+
+### The Solution: Intent Abstraction
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      MCP 2.0 Architecture                            │
+│                                                                      │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                    Front-End Agent (Any LLM)                   │  │
+│  │  "To find leads, I need [TOOL: search for email scripts]"     │  │
+│  └───────────────────────────────────┬───────────────────────────┘  │
+│                                      │                               │
+│                                      ▼                               │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                    Intent Parser                               │  │
+│  │  Regex: \[TOOL:\s*(.+?)\]  →  intent_string                   │  │
+│  └───────────────────────────────────┬───────────────────────────┘  │
+│                                      │                               │
+│                                      ▼                               │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                    FunctionGemma (Tool Resolver)               │  │
+│  │  Input: intent + context + relevant schemas (from RAG)         │  │
+│  │  Output: <tool_call name="search"><arg>...</arg></tool_call>  │  │
+│  └───────────────────────────────────┬───────────────────────────┘  │
+│                                      │                               │
+│                                      ▼                               │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                    Executor (Existing)                         │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+1. **Agent expresses intent** (not syntax):
+   ```
+   "To enrich leads, I need [TOOL: search for enrichment scripts that use Apollo API]"
+   ```
+
+2. **Intent Parser extracts**:
+   ```python
+   intent = "search for enrichment scripts that use Apollo API"
+   context = conversation_history[-5:]
+   ```
+
+3. **FunctionGemma resolves** (with RAG-fetched schemas):
+   ```xml
+   <tool_call name="search">
+     <arg name="query">enrichment scripts Apollo API</arg>
+     <arg name="item_type">script</arg>
+     <arg name="source">registry</arg>
+   </tool_call>
+   ```
+
+4. **Executor runs** the resolved call.
+
+### Deliverables
+
+1. **Intent Parser**
+
+   ```python
+   class IntentParser:
+       INTENT_PATTERN = r'\[TOOL:\s*(.+?)\]'
+       
+       def parse(self, agent_output: str) -> list[Intent]:
+           matches = re.findall(self.INTENT_PATTERN, agent_output)
+           return [Intent(text=m) for m in matches]
+   ```
+
+2. **FunctionGemma Resolver**
+
+   ```python
+   class ToolResolver:
+       def __init__(self, model: str = "google/gemma-2-2b"):
+           self.model = load_model(model)
+           self.vector_store = VectorStore()  # From Phase 11
+       
+       async def resolve(self, intent: Intent, context: list[Message]) -> ToolCall:
+           # RAG: Find relevant tool schemas
+           schemas = await self.vector_store.search(
+               intent.text, 
+               item_type="tool",
+               limit=10
+           )
+           
+           # Prompt FunctionGemma
+           prompt = self._build_prompt(intent, context, schemas)
+           response = await self.model.generate(prompt)
+           
+           return self._parse_tool_call(response)
+   ```
+
+3. **Updated Agent Prompt** (in AGENTS.md):
+
+   ```markdown
+   ## Tool Calling
+   
+   Express tool needs as intents: `[TOOL: description of what you need]`
+   
+   Examples:
+   - `[TOOL: search for email campaign directives]`
+   - `[TOOL: execute the deploy_staging script with env=prod]`
+   - `[TOOL: load knowledge about API rate limiting]`
+   
+   Do NOT worry about exact syntax or arguments—the system resolves them.
+   ```
+
+4. **Fallback mode**: Direct tool calls still work for backward compat.
+
+### Files Changed/Created
+
+```
+kiwi_mcp/intent/
+├── __init__.py
+├── parser.py           # IntentParser
+├── resolver.py         # ToolResolver (FunctionGemma)
+└── prompts.py          # Resolver prompt templates
+
+kiwi_mcp/server.py      # Hook intent parsing into harness loop
+
+AGENTS.md               # Update with intent syntax
+```
+
+### Success Criteria
+
+- [ ] Intent syntax `[TOOL: ...]` parsed correctly
+- [ ] FunctionGemma resolves intents to valid tool calls
+- [ ] RAG integration provides relevant schemas
+- [ ] Fallback to direct calls works
+- [ ] Latency < 500ms for resolution
+
+### Effort: 6 days
+
+---
+
+## Phase 13: MCP 2.5 - Predictive Pre-Fetching (Weeks 29-31)
+
+**Design Document:** [MCP_2_INTENT_DESIGN.md](./MCP_2_INTENT_DESIGN.md) (Section 3)
+
+**Goal:** Predict tool intents during agent generation and pre-fetch search results, enabling FunctionGemma to skip search/load and execute directly.
+
+### The Insight
+
+While the front-end agent generates its response, we can:
+1. Snapshot the conversation periodically
+2. Predict likely tool intents
+3. Pre-fetch search results for predicted intents
+4. When actual intent arrives, if it matches prediction → shortcut to execute
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      MCP 2.5 Architecture                            │
+│                                                                      │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                    Front-End Agent (Generating...)             │  │
+│  │  "To handle the campaign, I need to first..."                 │  │
+│  └───────────────────────────┬───────────────────────────────────┘  │
+│                              │ (parallel snapshot)                   │
+│          ┌───────────────────┴───────────────────┐                  │
+│          │                                       │                   │
+│          ▼                                       ▼                   │
+│  ┌───────────────────┐                 ┌────────────────────────┐   │
+│  │  Intent Predictor │                 │  Agent Completes       │   │
+│  │  (BERT/small LLM) │                 │  "[TOOL: search...]"   │   │
+│  └─────────┬─────────┘                 └───────────┬────────────┘   │
+│            │                                       │                 │
+│            ▼                                       │                 │
+│  ┌───────────────────┐                             │                 │
+│  │  Pre-Fetch        │                             │                 │
+│  │  Dispatcher       │                             │                 │
+│  │  (runs predicted  │                             │                 │
+│  │   searches)       │                             │                 │
+│  └─────────┬─────────┘                             │                 │
+│            │                                       │                 │
+│            ▼                                       ▼                 │
+│  ┌─────────────────────────────────────────────────────────────────┐│
+│  │                    Intent Resolution (MCP 2.0)                   ││
+│  │  IF actual ≈ predicted → use cached results → skip search       ││
+│  │  ELSE → normal resolution                                        ││
+│  └─────────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+1. **Periodic snapshot** during agent generation:
+   ```python
+   # Every 100 tokens or at newlines
+   snapshot = {"history": messages[-5:], "partial": agent_buffer}
+   ```
+
+2. **Intent Predictor** (lightweight BERT or small LLM):
+   ```python
+   predictions = predictor.predict(snapshot)
+   # Output: [
+   #   {"intent": "search scripts for email", "confidence": 0.85},
+   #   {"intent": "load directive outbound_campaign", "confidence": 0.6}
+   # ]
+   ```
+
+3. **Pre-Fetch Dispatcher**:
+   ```python
+   # For top N predictions (confidence > threshold)
+   for pred in predictions[:2]:
+       if pred.confidence > 0.7:
+           results = await self.search(pred.intent)
+           self.cache[pred.intent_hash] = results  # TTL: 10s
+   ```
+
+4. **Resolution with cache**:
+   ```python
+   # When actual intent arrives
+   if semantic_match(actual_intent, cached_predictions):
+       # Shortcut: FunctionGemma gets pre-fetched results
+       return await resolver.resolve(intent, context, prefetched=cache[match])
+   else:
+       # Normal path
+       return await resolver.resolve(intent, context)
+   ```
+
+### Deliverables
+
+1. **Intent Predictor**
+
+   ```python
+   class IntentPredictor:
+       def __init__(self):
+           self.model = load_model("sentence-transformers/all-MiniLM-L6-v2")
+           # Fine-tuned on audit logs: conversation → intent mappings
+       
+       async def predict(self, snapshot: dict) -> list[Prediction]:
+           # Encode snapshot
+           embedding = self.model.encode(snapshot["partial"])
+           
+           # Match against common intent patterns
+           # Return ranked predictions with confidence
+   ```
+
+2. **Pre-Fetch Cache**
+
+   ```python
+   class PreFetchCache:
+       def __init__(self, ttl_seconds: int = 10):
+           self.cache: dict[str, CacheEntry] = {}
+           self.ttl = ttl_seconds
+       
+       async def store(self, intent_hash: str, results: list):
+           self.cache[intent_hash] = CacheEntry(
+               results=results,
+               expires=time.time() + self.ttl
+           )
+       
+       async def match(self, actual_intent: str) -> Optional[list]:
+           # Semantic similarity match
+           for key, entry in self.cache.items():
+               if entry.is_valid() and similarity(key, actual_intent) > 0.8:
+                   return entry.results
+           return None
+   ```
+
+3. **Parallel Pipeline**
+
+   ```python
+   class MCP25Harness:
+       async def process_agent_stream(self, stream: AsyncIterator[str]):
+           buffer = ""
+           async for chunk in stream:
+               buffer += chunk
+               
+               # Snapshot every 100 chars
+               if len(buffer) % 100 == 0:
+                   asyncio.create_task(self._predict_and_prefetch(buffer))
+               
+               # Check for intent
+               if "[TOOL:" in buffer:
+                   intent = self.parser.parse(buffer)
+                   cached = await self.cache.match(intent)
+                   if cached:
+                       # Shortcut!
+                       result = await self.resolver.resolve(intent, prefetched=cached)
+                   else:
+                       result = await self.resolver.resolve(intent)
+   ```
+
+4. **Learning loop**:
+   - Log prediction accuracy (hit/miss)
+   - Fine-tune predictor on misses
+   - Store patterns in knowledge entries
+
+### Files Changed/Created
+
+```
+kiwi_mcp/intent/
+├── predictor.py        # IntentPredictor
+├── prefetch.py         # PreFetchCache + Dispatcher
+└── pipeline.py         # MCP25Harness (streaming)
+
+kiwi_mcp/training/
+├── __init__.py
+└── predictor_training.py  # Fine-tuning on audit logs
+```
+
+### Success Criteria
+
+- [ ] Predictions generated during agent streaming
+- [ ] Pre-fetch cache hit rate > 60%
+- [ ] End-to-end latency reduced by 30%+
+- [ ] Predictor improves from audit logs
+- [ ] Graceful fallback on cache miss
+
+### Effort: 7 days
+
+---
+
 ## Summary Timeline
 
-| Phase | Focus                 | Weeks | Days | Dependencies |
-| ----- | --------------------- | ----- | ---- | ------------ |
-| 1     | Tool Foundation       | 1-2   | 5    | None         |
-| 2     | Bash & API Executors  | 3-4   | 5    | Phase 1      |
-| 3     | Kiwi Proxy Layer      | 5-6   | 6    | Phase 2      |
-| 4     | MCP Client Pool       | 7-8   | 6    | Phase 3      |
-| 5     | Directive Executor    | 9-11  | 8    | Phase 4      |
-| 6     | Annealing Integration | 12    | 4    | Phase 5      |
-| 7     | Git Checkpoint        | 13-14 | 5    | Phase 5      |
-| 8     | Human Approval        | 15-16 | 6    | Phase 5, 7   |
-| 9     | Environments          | 17-18 | 5    | Phase 5      |
-| 10    | Docker Executor       | 19-20 | 6    | Phase 3      |
+| Phase | Focus                         | Weeks | Days | Dependencies   |
+| ----- | ----------------------------- | ----- | ---- | -------------- |
+| 1     | Tool Foundation               | 1-2   | 5    | None           |
+| 2     | Bash & API Executors          | 3-4   | 5    | Phase 1        |
+| 3     | Proxy & Permission Enforce    | 5-7   | 8    | Phase 2        |
+| 4     | Git Checkpoint                | 8-9   | 6    | Phase 3        |
+| 5     | MCP Client Pool               | 10-11 | 6    | Phase 4        |
+| 6     | RAG & Vector Search           | 12-14 | 7    | Phase 5        |
+| 7     | Directive Executor            | 15-17 | 8    | Phase 6        |
+| 8     | Annealing Integration         | 18-19 | 4    | Phase 7        |
+| 9     | Human Approval                | 20-21 | 6    | Phase 7, 8     |
+| 10    | Environments                  | 22-23 | 5    | Phase 7        |
+| 11    | Docker Executor               | 24-25 | 6    | Phase 3        |
+| 12    | MCP 2.0 Intent Calling        | 26-28 | 6    | Phase 6        |
+| 13    | MCP 2.5 Predictive            | 29-31 | 7    | Phase 12       |
 
-**Total: ~20 weeks, 56 days of development**
+**Total: ~31 weeks, 79 days of development**
 
 ---
 
@@ -687,26 +1302,41 @@ These are independent improvements that can be done in parallel:
 
 ## Success Metrics
 
-**Phase 5 Completion (MVP):**
+**Phase 5 Completion (Scalable Search):**
+
+- Semantic search across 100K+ directives
+- Three-tier vector storage operational (project/user/registry)
+- Validation-gated embedding (security layer)
+- Hybrid search (semantic + keyword) outperforms baseline
+
+**Phase 6 Completion (MVP Harness):**
 
 - Directives spawn isolated executors
 - Tool calls proxied through Kiwi
 - Audit log for all operations
 - At least 2 external MCPs working (supabase + github)
 
-**Phase 8 Completion (Production Ready):**
+**Phase 9 Completion (Production Ready):**
 
 - Human approval flow working
 - Git checkpoints for mutations
 - Annealing improves failed directives
 - Cost tracking per execution
 
-**Phase 10 Completion (Full Harness):**
+**Phase 11 Completion (Full Harness):**
 
 - Docker isolation for untrusted tools
 - Pre-loaded environments for pipelines
 - All tool types working (Python, Bash, API, MCP, Docker)
 - CLI for session management
+
+**Phase 13 Completion (MCP 2.5 - Intent OS):**
+
+- Agents express intents, not syntax
+- FunctionGemma resolves with <500ms latency
+- Predictive pre-fetching achieves >60% hit rate
+- End-to-end latency reduced by 30%+
+- System scales to 1M+ tools without context bloat
 
 ---
 
@@ -724,5 +1354,9 @@ These are independent improvements that can be done in parallel:
 - [TOOLS_EVOLUTION_PROPOSAL.md](./TOOLS_EVOLUTION_PROPOSAL.md) - Scripts → Tools design
 - [MCP_ORCHESTRATION_DESIGN.md](./MCP_ORCHESTRATION_DESIGN.md) - MCP routing design
 - [DIRECTIVE_RUNTIME_ARCHITECTURE.md](./DIRECTIVE_RUNTIME_ARCHITECTURE.md) - Executor design
+- [RUNTIME_PERMISSION_DESIGN.md](./RUNTIME_PERMISSION_DESIGN.md) - Permission enforcement & help tool
+- [RAG_VECTOR_SEARCH_DESIGN.md](./RAG_VECTOR_SEARCH_DESIGN.md) - Vector DB and semantic search
+- [MCP_2_INTENT_DESIGN.md](./MCP_2_INTENT_DESIGN.md) - Intent-based tool calling (2.0 & 2.5)
+- [AGENT_ARCHITECTURE_COMPARISON.md](./AGENT_ARCHITECTURE_COMPARISON.md) - Normal vs Kiwi MCP approach
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - Current system architecture
 - [LILUX_VISION.md](./LILUX_VISION.md) - Long-term OS vision

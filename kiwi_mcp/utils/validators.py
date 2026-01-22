@@ -57,23 +57,35 @@ class DirectiveValidator(BaseValidator):
     """Validator for directives."""
 
     def validate_filename_match(self, file_path: Path, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate filename matches directive name."""
+        """Validate filename matches directive name and name format."""
+        issues = []
         directive_name = parsed_data.get("name")
+        
         if not directive_name:
             return {
                 "valid": False,
                 "issues": ["Directive name not found in parsed data"],
             }
 
+        # Validate name format (must be snake_case)
+        if not re.match(r'^[a-z][a-z0-9_]*$', directive_name):
+            issues.append(
+                f"Invalid directive name '{directive_name}'. Must be snake_case "
+                "(lowercase letters, numbers, underscores, starting with a letter)"
+            )
+
         expected_filename = f"{directive_name}.md"
         actual_filename = file_path.name
 
         if actual_filename != expected_filename:
+            issues.append(
+                f"Filename mismatch: expected '{expected_filename}', got '{actual_filename}'"
+            )
+
+        if issues:
             return {
                 "valid": False,
-                "issues": [
-                    f"Filename mismatch: expected '{expected_filename}', got '{actual_filename}'"
-                ],
+                "issues": issues,
                 "error_details": {
                     "expected": expected_filename,
                     "actual": actual_filename,
@@ -162,8 +174,9 @@ class DirectiveValidator(BaseValidator):
                 "Add a <model> tag with required 'tier' attribute inside <metadata>."
             )
         else:
-            # Check tier
+            # Check tier - must be one of the valid values
             tier = model_data.get("tier")
+            valid_tiers = ["fast", "balanced", "general", "reasoning", "expert", "orchestrator"]
             if tier is None or tier == "":
                 issues.append(
                     "Model tag exists but is missing required 'tier' attribute. "
@@ -171,6 +184,10 @@ class DirectiveValidator(BaseValidator):
                 )
             elif not isinstance(tier, str) or not tier.strip():
                 issues.append(f"Model 'tier' attribute must be a non-empty string, got: {repr(tier)}")
+            elif tier not in valid_tiers:
+                issues.append(
+                    f"Invalid model tier '{tier}'. Must be one of: {valid_tiers}"
+                )
 
             # Check fallback
             fallback = model_data.get("fallback")
@@ -187,12 +204,16 @@ class DirectiveValidator(BaseValidator):
             if model_id and (not isinstance(model_id, str) or not model_id.strip()):
                 issues.append("model id must be a non-empty string or omitted")
 
-        # Validate version (REQUIRED)
+        # Validate version (REQUIRED) - must be semver format
         directive_version = parsed_data.get("version")
         if not directive_version or directive_version == "0.0.0":
             issues.append(
                 "Directive is missing required 'version' attribute. "
                 "Add version attribute to <directive> tag: <directive name=\"...\" version=\"1.0.0\">"
+            )
+        elif not re.match(r'^\d+\.\d+\.\d+$', str(directive_version)):
+            issues.append(
+                f"Invalid version format '{directive_version}'. Must be semver (e.g., 1.0.0, 2.1.3)"
             )
 
         # Check for legacy model_class warning

@@ -454,22 +454,37 @@ class DirectiveHandler:
             file_content = file_path.read_text()
             signature_status = MetadataManager.verify_signature("directive", file_content)
 
-            # Block execution if signature is invalid or modified
-            if signature_status:
-                if signature_status.get("status") == "modified":
-                    return {
-                        "error": "Directive content has been modified since last validation",
-                        "signature": signature_status,
-                        "path": str(file_path),
-                        "solution": "Use execute action 'update' or 'create' to re-validate the directive",
-                    }
-                elif signature_status.get("status") == "invalid":
-                    return {
-                        "error": "Directive signature is invalid",
-                        "signature": signature_status,
-                        "path": str(file_path),
-                        "solution": "Use execute action 'update' or 'create' to re-validate the directive",
-                    }
+            # Block execution if signature is missing, invalid, or modified
+            # Missing signature means directive was created manually (bypassing create_directive)
+            if signature_status is None:
+                # Check if it has pending-validation marker
+                has_pending = "kiwi-mcp:pending-validation" in file_content
+                return {
+                    "error": "Directive has no valid signature",
+                    "status": "missing",
+                    "path": str(file_path),
+                    "hint": "Directives must be created via create_directive, not create_file" if has_pending else "Directive needs validation",
+                    "solution": (
+                        f"Run: execute(item_type='directive', action='update', "
+                        f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
+                        f"project_path='{self.project_path}')"
+                    ),
+                }
+            
+            if signature_status.get("status") == "modified":
+                return {
+                    "error": "Directive content has been modified since last validation",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Use execute action 'update' or 'create' to re-validate the directive",
+                }
+            elif signature_status.get("status") == "invalid":
+                return {
+                    "error": "Directive signature is invalid",
+                    "signature": signature_status,
+                    "path": str(file_path),
+                    "solution": "Use execute action 'update' or 'create' to re-validate the directive",
+                }
 
             # Extract process steps and inputs for execution
             parsed = directive_data["parsed"]
@@ -674,22 +689,35 @@ class DirectiveHandler:
         file_content = file_path.read_text()
         signature_status = MetadataManager.verify_signature("directive", file_content)
 
-        # Block publishing if signature is invalid or modified
-        if signature_status:
-            if signature_status.get("status") == "modified":
-                return {
-                    "error": "Directive content has been modified since last validation",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the directive before publishing",
-                }
-            elif signature_status.get("status") == "invalid":
-                return {
-                    "error": "Directive signature is invalid",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the directive before publishing",
-                }
+        # Block publishing if signature is missing, invalid, or modified
+        if signature_status is None:
+            has_pending = "kiwi-mcp:pending-validation" in file_content
+            return {
+                "error": "Cannot publish: directive has no valid signature",
+                "status": "missing",
+                "path": str(file_path),
+                "hint": "Directives must be validated before publishing",
+                "solution": (
+                    f"Run: execute(item_type='directive', action='update', "
+                    f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
+                    f"project_path='{self.project_path}')"
+                ),
+            }
+        
+        if signature_status.get("status") == "modified":
+            return {
+                "error": "Directive content has been modified since last validation",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the directive before publishing",
+            }
+        elif signature_status.get("status") == "invalid":
+            return {
+                "error": "Directive signature is invalid",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the directive before publishing",
+            }
 
         # Parse directive to get content and metadata (including version from XML)
         # parse_directive_file() will validate filename/directive name match and raise if mismatch

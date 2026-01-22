@@ -1,0 +1,491 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                  MISSION CONTROL: COMPLETE ROADMAP                        ║
+║                    Intelligent Observability Platform                     ║
+║                          28 Weeks, 5 Phases                               ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+PHASE 14: BACKEND & WEBSOCKET SERVER (Weeks 1-4, 25 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 1 | Project Setup & WebSocket Basics
+       ├─ Next.js project scaffold
+       ├─ FastAPI server (uvicorn)
+       ├─ PostgreSQL setup
+       ├─ WebSocket connection pool
+       └─ Docker Compose dev environment
+
+Week 2 | MCP Gateway & Discovery
+       ├─ Multi-MCP connection manager
+       ├─ MCP discovery service
+       ├─ Health monitoring (periodic pings)
+       ├─ Reconnection logic (exponential backoff)
+       └─ Tool routing
+
+Week 3 | Session & Log Management
+       ├─ Thread/session tracking
+       ├─ Execution timeline building
+       ├─ Log aggregation from all MCPs
+       ├─ LLM transcript collection
+       └─ Permission event logging
+
+Week 4 | Query API & Audit Logging
+       ├─ REST endpoints (threads, logs, MCPs, graph)
+       ├─ Historical data queries
+       ├─ Audit trail queries
+       ├─ Search implementation
+       └─ Error handling & resilience
+
+DELIVERABLES:
+  ✓ WebSocket server (< 100ms latency)
+  ✓ MCP connection manager (10+ concurrent)
+  ✓ Session state tracking
+  ✓ Log persistence & streaming
+  ✓ Query API with filtering
+  ✓ Docker Compose setup
+  ✓ Unit + integration tests (>80% coverage)
+
+───────────────────────────────────────────────────────────────────────────
+
+PHASE 15: CORE UI SCREENS (Weeks 5-7, 21 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 5 | Project Setup & Layout
+       ├─ Next.js 14 app scaffold
+       ├─ Tailwind CSS setup
+       ├─ Core layout (sidebar + navbar)
+       ├─ Tab-based navigation
+       ├─ Dark mode toggle
+       └─ Mobile responsive grid
+
+Week 6 | Dashboard & Thread Inspector
+       ├─ Dashboard screen
+       │  ├─ Active threads list
+       │  ├─ MCP health status
+       │  ├─ Recent events feed
+       │  └─ System statistics
+       ├─ Thread inspector
+       │  ├─ Execution timeline
+       │  ├─ LLM transcript viewer
+       │  └─ Live metrics (memory, CPU)
+       └─ WebSocket integration
+
+Week 7 | Logs & Terminal
+       ├─ Log stream screen
+       │  ├─ Real-time log viewer
+       │  ├─ Filtering (thread, MCP, level, service)
+       │  └─ Search functionality
+       ├─ Terminal emulator (Xterm.js)
+       │  ├─ Connected to backend CLI
+       │  └─ Command history
+       └─ Settings screen
+
+DELIVERABLES:
+  ✓ All screens functional & responsive
+  ✓ Real-time WebSocket updates (<200ms)
+  ✓ Keyboard navigation throughout
+  ✓ Dark mode polished
+  ✓ Mobile layout responsive
+  ✓ Terminal working seamlessly
+  ✓ >80% test coverage (Vitest + Playwright)
+
+───────────────────────────────────────────────────────────────────────────
+
+PHASE 16: VISUALIZATION & GRAPHS (Weeks 8-9, 12 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 8 | Cytoscape & Relationship Graphs
+       ├─ Cytoscape.js integration
+       ├─ Relationship graph rendering
+       │  ├─ Nodes (directives, scripts, knowledge)
+       │  ├─ Edges (uses, references, inherits)
+       │  └─ Color-coded by type
+       ├─ Interactive controls
+       │  ├─ Zoom, pan, drag
+       │  ├─ Search with highlighting
+       │  └─ Click to inspect
+       └─ Schema explorer (filter, search)
+
+Week 9 | Timeline & Permission Visualization
+       ├─ Execution timeline (flamegraph)
+       │  ├─ Horizontal bars by step
+       │  ├─ Nesting shows parent-child
+       │  ├─ Color-coded by type
+       │  └─ Hover for details
+       ├─ Permission flow visualization
+       │  ├─ Hierarchical tree
+       │  ├─ Color: green (granted), red (denied)
+       │  └─ Click to see rule details
+       └─ Changepoint detection visualization
+
+DELIVERABLES:
+  ✓ Graph renders 10k+ nodes smoothly
+  ✓ Interactive zoom/pan/search working
+  ✓ Timeline shows causality correctly
+  ✓ Permission traces accurate & auditable
+  ✓ Performance optimized (virtualization, WebGL)
+  ✓ All visualizations update in real-time
+
+───────────────────────────────────────────────────────────────────────────
+
+PHASE 17: POLISH & OBSERVABILITY (Weeks 10-11, 11 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 10 | Export, Search & Saved Views
+        ├─ Export functionality
+        │  ├─ JSON, CSV, PDF, JSONL formats
+        │  └─ Bulk downloads
+        ├─ Full-text search
+        │  ├─ Global search box
+        │  ├─ Type filtering
+        │  └─ Recent searches
+        └─ Saved dashboards/views
+           ├─ Save custom layouts
+           ├─ Load saved views
+           └─ Share with others
+
+Week 11 | Performance Metrics & Audit
+        ├─ Performance metrics dashboard
+        │  ├─ WebSocket connections
+        │  ├─ Message throughput
+        │  ├─ API latency (p50/p95/p99)
+        │  └─ DB query times
+        ├─ Audit trail browser
+        │  ├─ All permission checks
+        │  ├─ Tool calls & results
+        │  └─ Permission violations
+        └─ Production hardening
+           ├─ Security audit
+           ├─ Performance testing
+           ├─ Deployment guide
+           └─ Documentation complete
+
+DELIVERABLES:
+  ✓ All export formats working
+  ✓ Search returns results <500ms
+  ✓ UI feels polished & responsive
+  ✓ Performance dashboard showing real metrics
+  ✓ Complete audit trail visible & searchable
+  ✓ >95% test coverage
+  ✓ Production-ready deployment
+  ✓ Full documentation
+
+═══════════════════════════════════════════════════════════════════════════
+
+PHASE 18: EMBEDDED KIWI MCP & SELF-MANAGEMENT (Weeks 12-14, 15 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 12 | Embed Kiwi MCP
+        ├─ Integrate Kiwi MCP core
+        ├─ Internal directive registry
+        ├─ Internal script registry
+        ├─ Internal knowledge base
+        └─ Wire up to backend services
+
+Week 13 | Self-Management Workflows
+        ├─ Automatic health monitoring
+        │  ├─ Monitor thread health
+        │  ├─ Detect anomalies
+        │  └─ Cleanup stale sessions
+        ├─ Self-healing directives
+        │  ├─ Detect broken connections
+        │  ├─ Attempt reconnect
+        │  └─ Auto-restart if needed
+        └─ Admin dashboard
+           ├─ Available directives list
+           ├─ Execution history
+           └─ Manual execution buttons
+
+Week 14 | Performance Optimization & Automation
+        ├─ Performance optimization directive
+        │  ├─ Detect slow queries
+        │  ├─ Suggest indexes
+        │  └─ Recommend optimizations
+        ├─ Pattern learning directive
+        │  ├─ Analyze thread patterns
+        │  ├─ ML pattern analyzer
+        │  └─ Generate recommendations
+        └─ User-defined automation builder
+           ├─ Create custom workflows
+           ├─ Schedule triggers (cron)
+           └─ Manual/alert triggers
+
+DELIVERABLES:
+  ✓ Embedded Kiwi MCP fully integrated
+  ✓ 5+ system directives operational
+  ✓ Automatic health monitoring running
+  ✓ Self-healing workflows tested
+  ✓ Admin dashboard functional
+  ✓ Users can create custom automations
+  ✓ Internal knowledge base growing
+  ✓ >90% test coverage
+
+───────────────────────────────────────────────────────────────────────────
+
+PHASE 19: AI-ASSISTED DEBUGGING (Weeks 15-18, 20 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 15 | Anomaly Detection
+        ├─ Isolation Forest setup
+        ├─ Latency spike detection
+        ├─ Error rate spike detection
+        ├─ Permission denial spikes
+        ├─ Memory leak detection
+        └─ Connection instability detection
+
+Week 16 | LLM Root Cause Analysis
+        ├─ OpenAI API integration
+        ├─ Prompt engineering
+        ├─ Context gathering
+        │  ├─ Recent logs
+        │  ├─ Thread details
+        │  └─ MCP status
+        └─ Analysis formatting
+
+Week 17 | Auto-Healing Workflows
+        ├─ Latency spike responses
+        ├─ Error spike responses
+        ├─ Permission spike responses
+        ├─ Memory leak responses
+        └─ Connection failure responses
+
+Week 18 | Intelligent Alerting
+        ├─ Alert component UI
+        ├─ LLM analysis display
+        ├─ Suggested fixes with confidence
+        ├─ One-click action approval
+        └─ Alert history & analytics
+
+DELIVERABLES:
+  ✓ 80%+ anomaly detection accuracy
+  ✓ LLM root cause analysis working
+  ✓ Auto-healing workflows tested
+  ✓ Intelligent alerting functional
+  ✓ Suggested actions with confidence scores
+  ✓ Users can approve/deny actions
+
+───────────────────────────────────────────────────────────────────────────
+
+PHASE 20: PREDICTIVE OPTIMIZATION (Weeks 19-21, 15 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 19 | Predictive Models
+        ├─ Latency spike forecasting
+        │  ├─ Gradient boosting regression
+        │  ├─ Feature engineering
+        │  └─ Confidence intervals
+        ├─ Memory leak prediction
+        ├─ Connection failure forecast
+        └─ Error rate prediction
+
+Week 20 | Proactive Scaling
+        ├─ Scaling directives
+        ├─ Resource provisioning
+        ├─ Timeout adjustment
+        ├─ Worker scaling
+        └─ Monitoring during proactive actions
+
+Week 21 | Trend Detection & Reporting
+        ├─ Trend analysis dashboard
+        ├─ Forecast visualization
+        ├─ Confidence bands
+        ├─ Weekly/monthly reports
+        └─ Optimization recommendations
+
+DELIVERABLES:
+  ✓ 70%+ prediction accuracy
+  ✓ Proactive scaling working
+  ✓ Trend forecasting accurate
+  ✓ Forecast confidence intervals shown
+  ✓ Proactive actions logged & traceable
+  ✓ Trend reports generated automatically
+
+───────────────────────────────────────────────────────────────────────────
+
+PHASE 21: COLLABORATIVE INTELLIGENCE (Weeks 22-25, 18 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 22 | Cross-User Pattern Learning
+        ├─ Aggregate patterns from all users
+        ├─ Find common issues
+        ├─ Identify common solutions
+        ├─ Calculate solution effectiveness
+        └─ Broadcast findings
+
+Week 23 | Solution Sharing
+        ├─ Solution validation
+        ├─ User notifications
+        ├─ Apply solutions one-click
+        ├─ Feedback collection
+        └─ Effectiveness tracking
+
+Week 24-25 | Community Features
+          ├─ Community best practices dashboard
+          ├─ Upvote/downvote solutions
+          ├─ User profiles & contributions
+          ├─ Leaderboards
+          └─ Solution marketplace
+
+DELIVERABLES:
+  ✓ 50%+ users sharing solutions
+  ✓ Common issues identified across users
+  ✓ Solutions validated before sharing
+  ✓ Community best practices curated
+  ✓ Impact metrics tracked
+  ✓ Collaborative learning working
+
+───────────────────────────────────────────────────────────────────────────
+
+PHASE 22: ADVANCED ANALYTICS (Weeks 26-28, 14 dev days)
+═══════════════════════════════════════════════════════════════════════════
+
+Week 26 | Time-Series Analysis
+        ├─ Seasonal decomposition
+        ├─ Trend extraction
+        ├─ Residual analysis
+        ├─ Strength of trend calculation
+        └─ Seasonality strength calculation
+
+Week 27 | Changepoint Detection
+        ├─ PELT algorithm implementation
+        ├─ Changepoint significance
+        ├─ Likely cause inference
+        ├─ Timeline visualization
+        └─ Alert on significant changes
+
+Week 28 | Optimization Recommendations
+        ├─ Cache hit rate optimization
+        ├─ Query optimization advice
+        ├─ Resource right-sizing
+        ├─ Cost savings calculations
+        ├─ ROI impact estimation
+        └─ Prioritized action list
+
+DELIVERABLES:
+  ✓ Time-series decomposition working
+  ✓ Changepoints detected accurately
+  ✓ Likely causes inferred
+  ✓ Optimization recommendations generated
+  ✓ Cost/ROI estimations accurate
+  ✓ Custom analytics dashboard functional
+
+═══════════════════════════════════════════════════════════════════════════
+
+OVERALL STATISTICS
+═══════════════════════════════════════════════════════════════════════════
+
+TIMELINE:
+  Phase 14-17 (Core):     11 weeks
+  Phase 18 (Self-Mgmt):    3 weeks
+  Phase 19-22 (Advanced): 14 weeks
+  ─────────────────────────────────
+  TOTAL:                  28 weeks
+
+EFFORT:
+  Phase 14-17: 48 dev days (production-ready platform)
+  Phase 18:     15 dev days (self-management)
+  Phase 19-22: 82 dev days (intelligent features)
+  ─────────────────────────────────
+  TOTAL:      145 dev days
+
+TEAM SCENARIOS:
+  1 person full-time:     28 weeks (7 months)
+  2 people parallel:      15-17 weeks (3.5-4 months)
+  3 people parallel:      10-12 weeks (2.5-3 months)
+  4 people parallel:       7-9 weeks (1.5-2 months)
+
+CODE STATISTICS (estimated):
+  Frontend:   ~8,000 lines (React/TypeScript)
+  Backend:    ~6,000 lines (FastAPI/Python)
+  ML/AI:      ~2,000 lines (anomaly detection, forecasting)
+  Directives: ~5,000 lines (system + user workflows)
+  Tests:      ~4,000 lines (unit + integration + E2E)
+  ─────────────────────────────────
+  TOTAL:     ~25,000 lines of code
+
+═══════════════════════════════════════════════════════════════════════════
+
+KEY MILESTONES
+═══════════════════════════════════════════════════════════════════════════
+
+Week 4:   Phase 14 Complete (Backend MVP)
+          ✓ Can connect to MCPs
+          ✓ Can stream logs
+          ✓ WebSocket working
+
+Week 7:   Phase 15 Complete (UI MVP)
+          ✓ Dashboard shows live threads
+          ✓ Can inspect threads
+          ✓ Real-time updates working
+
+Week 9:   Phase 16 Complete (Graphs)
+          ✓ Relationship visualization working
+          ✓ Thread timeline showing causality
+
+Week 11:  Phase 17 Complete (Production Ready)
+          ✓ Ready for GA release
+          ✓ Full observability platform
+
+Week 14:  Phase 18 Complete (Self-Aware)
+          ✓ Mission Control manages itself
+          ✓ Auto-healing working
+
+Week 18:  Phase 19 Complete (AI-Powered)
+          ✓ Anomalies detected automatically
+          ✓ LLM analysis working
+
+Week 21:  Phase 20 Complete (Predictive)
+          ✓ Can forecast spikes
+          ✓ Proactive scaling working
+
+Week 25:  Phase 21 Complete (Collaborative)
+          ✓ Community learning active
+          ✓ Solutions being shared
+
+Week 28:  Phase 22 Complete (Full Intelligence)
+          ✓ Intelligent observability platform
+          ✓ Self-improving, self-aware
+          ✓ Predicts issues before they occur
+
+═══════════════════════════════════════════════════════════════════════════
+
+COMPETITIVE POSITION
+═══════════════════════════════════════════════════════════════════════════
+
+By Week 11:
+  ✓ Real-time observability (vs Datadog initial delay)
+  ✓ Directive-driven (vs hardcoded tools)
+  ✓ Permission visibility (vs black-box APM)
+
+By Week 18:
+  ✓ AI-powered debugging (new vs traditional tools)
+  ✓ LLM integration (new)
+
+By Week 21:
+  ✓ Predictive anomaly detection (advanced)
+  ✓ Proactive auto-healing (new)
+
+By Week 28:
+  ✓ Self-aware (unique)
+  ✓ Self-improving (unique)
+  ✓ Collaborative intelligence (unique)
+  ✓ Full observability + automation + prediction (comprehensive)
+
+═══════════════════════════════════════════════════════════════════════════
+
+NEXT STEPS
+═══════════════════════════════════════════════════════════════════════════
+
+1. Review this roadmap & architecture
+2. Assess team capacity & timeline
+3. Setup development environment
+4. Start Phase 14 (Week 1)
+5. Deploy Phase 15 UI (Week 5)
+6. Launch Phase 17 (Week 11)
+7. Add Phase 18 (Week 12)
+8. Continue to Phase 22 (Week 28)
+
+═══════════════════════════════════════════════════════════════════════════
+
+Documentation: /home/leo/projects/kiwi-mcp/docs/MISSION_CONTROL_*.md
+
+Ready to build? Start with Phase 14! 🚀
