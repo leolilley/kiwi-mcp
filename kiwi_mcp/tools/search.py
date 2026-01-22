@@ -1,6 +1,7 @@
 """Search tool - unified search across directives, scripts, and knowledge."""
 
 import json
+from pathlib import Path
 from mcp.types import Tool
 from kiwi_mcp.tools.base import BaseTool
 from kiwi_mcp.utils.logger import get_logger
@@ -13,6 +14,8 @@ class SearchTool(BaseTool):
         """Initialize with optional registry reference."""
         self.registry = registry
         self.logger = get_logger("search_tool")
+        self._vector_manager = None
+        self._hybrid_search = None
 
     @property
     def schema(self) -> Tool:
@@ -51,8 +54,69 @@ class SearchTool(BaseTool):
             },
         )
 
+    def _has_vector_search(self, project_path: str) -> bool:
+        """Check if vector search dependencies and setup are available."""
+        try:
+            # Check if vector storage directory exists
+            vector_path = Path(project_path) / ".ai" / "vector"
+            return vector_path.exists()
+        except Exception:
+            return False
+
+    def _setup_vector_search(self, project_path: str):
+        """Setup vector search components."""
+        if self._vector_manager is not None:
+            return
+
+        try:
+            from kiwi_mcp.storage.vector import (
+                LocalVectorStore,
+                RegistryVectorStore,
+                ThreeTierVectorManager,
+                HybridSearch,
+                EmbeddingModel,
+            )
+
+            # Setup paths
+            project_vector_path = Path(project_path) / ".ai" / "vector" / "project"
+            user_vector_path = Path.home() / ".ai" / "vector" / "user"
+
+            # Create embedding model
+            embedding_model = EmbeddingModel()
+
+            # Setup stores
+            project_store = LocalVectorStore(
+                storage_path=project_vector_path,
+                collection_name="project_items",
+                embedding_model=embedding_model,
+            )
+
+            user_store = LocalVectorStore(
+                storage_path=user_vector_path,
+                collection_name="user_items",
+                embedding_model=embedding_model,
+            )
+
+            registry_store = RegistryVectorStore(embedding_model=embedding_model)
+
+            # Setup manager and hybrid search
+            self._vector_manager = ThreeTierVectorManager(
+                project_store=project_store, user_store=user_store, registry_store=registry_store
+            )
+
+            self._hybrid_search = HybridSearch(self._vector_manager)
+
+        except ImportError as e:
+            self.logger.info(f"Vector search dependencies not available: {e}")
+            self._vector_manager = None
+            self._hybrid_search = None
+        except Exception as e:
+            self.logger.warning(f"Failed to setup vector search: {e}")
+            self._vector_manager = None
+            self._hybrid_search = None
+
     async def execute(self, arguments: dict) -> str:
-        """Execute search with dynamic handler creation."""
+        """Execute search with vector search priority and keyword fallback."""
         item_type = arguments.get("item_type")
         query = arguments.get("query")
         source = arguments.get("source", "local")
@@ -75,36 +139,97 @@ class SearchTool(BaseTool):
                 }
             )
 
-        # Create handler dynamically with project_path
         try:
-            from kiwi_mcp.handlers.directive.handler import DirectiveHandler
-            from kiwi_mcp.handlers.script.handler import ScriptHandler
-            from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
+            # Try vector search first if available
+            if self._has_vector_search(project_path):
+                return await self._vector_search(item_type, query, source, limit, project_path)
 
-            handlers = {
-                "directive": DirectiveHandler,
-                "script": ScriptHandler,
-                "knowledge": KnowledgeHandler,
-            }
+            # Fallback to keyword search
+            return await self._keyword_search(item_type, query, source, limit, project_path)
 
-            handler_class = handlers.get(item_type)
-            if not handler_class:
-                return self._format_response(
-                    {
-                        "error": f"Unknown item_type: {item_type}",
-                        "supported_types": list(handlers.keys()),
-                    }
-                )
-
-            handler = handler_class(project_path=project_path)
-            result = await handler.search(query, source=source, limit=limit)
-            self.logger.info(
-                f"SearchTool result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}"
-            )
-            self.logger.info(
-                f"SearchTool result total: {result.get('total', 'N/A') if isinstance(result, dict) else 'N/A'}"
-            )
-            return self._format_response(result)
         except Exception as e:
             self.logger.error(f"Search failed: {e}")
             return self._format_response({"error": str(e)})
+
+    async def _vector_search(
+        self, item_type: str, query: str, source: str, limit: int, project_path: str
+    ) -> str:
+        """Perform vector-based semantic search."""
+        try:
+            self._setup_vector_search(project_path)
+
+            if self._hybrid_search is None:
+                # Fall back to keyword search
+                return await self._keyword_search(item_type, query, source, limit, project_path)
+
+            # Perform hybrid search
+            results = await self._hybrid_search.search(
+                query=query, source=source, item_type=item_type, limit=limit
+            )
+
+            # Convert to standard format
+            items = []
+            for result in results:
+                items.append(
+                    {
+                        "id": result.item_id,
+                        "type": result.item_type,
+                        "score": result.score,
+                        "preview": result.content_preview,
+                        "metadata": result.metadata,
+                        "source": result.source,
+                    }
+                )
+
+            return self._format_response(
+                {
+                    "items": items,
+                    "total": len(items),
+                    "query": query,
+                    "search_type": "vector_hybrid",
+                    "source": source,
+                }
+            )
+
+        except Exception as e:
+            self.logger.warning(f"Vector search failed, falling back to keyword search: {e}")
+            return await self._keyword_search(item_type, query, source, limit, project_path)
+
+    async def _keyword_search(
+        self, item_type: str, query: str, source: str, limit: int, project_path: str
+    ) -> str:
+        """Perform traditional keyword-based search."""
+        # Create handler dynamically with project_path
+        from kiwi_mcp.handlers.directive.handler import DirectiveHandler
+        from kiwi_mcp.handlers.script.handler import ScriptHandler
+        from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
+
+        handlers = {
+            "directive": DirectiveHandler,
+            "script": ScriptHandler,
+            "knowledge": KnowledgeHandler,
+        }
+
+        handler_class = handlers.get(item_type)
+        if not handler_class:
+            return self._format_response(
+                {
+                    "error": f"Unknown item_type: {item_type}",
+                    "supported_types": list(handlers.keys()),
+                }
+            )
+
+        handler = handler_class(project_path=project_path)
+        result = await handler.search(query, source=source, limit=limit)
+
+        # Add search type indicator
+        if isinstance(result, dict):
+            result["search_type"] = "keyword"
+
+        self.logger.info(
+            f"SearchTool result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}"
+        )
+        self.logger.info(
+            f"SearchTool result total: {result.get('total', 'N/A') if isinstance(result, dict) else 'N/A'}"
+        )
+        return self._format_response(result)
