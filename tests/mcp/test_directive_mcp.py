@@ -1,0 +1,269 @@
+"""Tests for directive MCP parsing functionality."""
+
+import pytest
+from unittest.mock import AsyncMock, patch
+from pathlib import Path
+from kiwi_mcp.handlers.directive.handler import DirectiveHandler
+
+
+@pytest.fixture
+def handler(tmp_path):
+    """Create a directive handler with temporary project path."""
+    return DirectiveHandler(str(tmp_path))
+
+
+def test_parse_mcps_empty():
+    """Test parsing empty MCP declarations."""
+    handler = DirectiveHandler("/tmp")
+
+    # Empty directive data
+    result = handler._parse_mcps({})
+    assert result == []
+
+    # No mcps section
+    result = handler._parse_mcps({"parsed": {}})
+    assert result == []
+
+
+def test_parse_mcps_single():
+    """Test parsing single MCP declaration."""
+    handler = DirectiveHandler("/tmp")
+
+    directive_data = {
+        "parsed": {
+            "mcps": {
+                "mcp": {
+                    "_attrs": {
+                        "name": "github",
+                        "required": "true",
+                        "tools": "list_repos,get_repo",
+                        "refresh": "false",
+                    }
+                }
+            }
+        }
+    }
+
+    result = handler._parse_mcps(directive_data)
+    expected = [
+        {"name": "github", "required": True, "tools": ["list_repos", "get_repo"], "refresh": False}
+    ]
+
+    assert result == expected
+
+
+def test_parse_mcps_multiple():
+    """Test parsing multiple MCP declarations."""
+    handler = DirectiveHandler("/tmp")
+
+    directive_data = {
+        "parsed": {
+            "mcps": {
+                "mcp": [
+                    {"_attrs": {"name": "github", "required": "true"}},
+                    {
+                        "_attrs": {
+                            "name": "supabase",
+                            "required": "false",
+                            "tools": "query",
+                            "refresh": "true",
+                        }
+                    },
+                ]
+            }
+        }
+    }
+
+    result = handler._parse_mcps(directive_data)
+    expected = [
+        {"name": "github", "required": True, "tools": None, "refresh": False},
+        {"name": "supabase", "required": False, "tools": ["query"], "refresh": True},
+    ]
+
+    assert result == expected
+
+
+def test_parse_mcps_minimal_attributes():
+    """Test parsing MCP with minimal attributes."""
+    handler = DirectiveHandler("/tmp")
+
+    directive_data = {"parsed": {"mcps": {"mcp": {"_attrs": {"name": "filesystem"}}}}}
+
+    result = handler._parse_mcps(directive_data)
+    expected = [
+        {
+            "name": "filesystem",
+            "required": False,  # Default
+            "tools": None,  # Default (all tools)
+            "refresh": False,  # Default
+        }
+    ]
+
+    assert result == expected
+
+
+def test_parse_mcps_with_empty_tools():
+    """Test parsing MCP with empty tools attribute."""
+    handler = DirectiveHandler("/tmp")
+
+    directive_data = {"parsed": {"mcps": {"mcp": {"_attrs": {"name": "test", "tools": ""}}}}}
+
+    result = handler._parse_mcps(directive_data)
+    expected = [
+        {
+            "name": "test",
+            "required": False,
+            "tools": None,  # Empty string should result in None
+            "refresh": False,
+        }
+    ]
+
+    assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_run_directive_with_mcps_success(handler):
+    """Test running directive with successful MCP connections."""
+    # Mock the directive file and parsing
+    mock_file_path = Path("/tmp/test.md")
+    mock_directive_data = {
+        "name": "test_directive",
+        "description": "Test directive",
+        "version": "1.0.0",
+        "parsed": {"mcps": {"mcp": {"_attrs": {"name": "github", "required": "false"}}}},
+    }
+
+    mock_schemas = [{"name": "list_repos", "description": "List repositories"}]
+
+    with (
+        patch.object(handler.resolver, "resolve", return_value=mock_file_path),
+        patch(
+            "kiwi_mcp.handlers.directive.handler.parse_directive_file",
+            return_value=mock_directive_data,
+        ),
+        patch("kiwi_mcp.handlers.directive.handler.ValidationManager") as mock_validator,
+        patch("kiwi_mcp.handlers.directive.handler.MetadataManager") as mock_metadata,
+        patch.object(handler.schema_cache, "get", return_value=None),
+        patch.object(
+            handler.mcp_pool, "get_tool_schemas", return_value=mock_schemas
+        ) as mock_get_schemas,
+        patch.object(handler.schema_cache, "set") as mock_cache_set,
+    ):
+        # Mock validation and metadata checks
+        mock_validator.validate.return_value = {"valid": True, "issues": []}
+        mock_metadata.verify_signature.return_value = {"status": "valid"}
+
+        # Mock file operations
+        mock_file_path.read_text = lambda: "directive content"
+
+        result = await handler._run_directive("test_directive", {})
+
+        # Verify MCP tools were fetched and cached
+        mock_get_schemas.assert_called_once_with("github", None)
+        mock_cache_set.assert_called_once_with("github", mock_schemas)
+
+        # Verify result includes tool context
+        assert result["status"] == "ready"
+        assert "tool_context" in result
+        assert "github" in result["tool_context"]
+        assert result["tool_context"]["github"]["available"] is True
+        assert result["tool_context"]["github"]["tools"] == mock_schemas
+        assert "call_format" in result
+
+
+@pytest.mark.asyncio
+async def test_run_directive_with_required_mcp_failure(handler):
+    """Test running directive when required MCP connection fails."""
+    mock_file_path = Path("/tmp/test.md")
+    mock_directive_data = {
+        "name": "test_directive",
+        "description": "Test directive",
+        "version": "1.0.0",
+        "parsed": {
+            "mcps": {
+                "mcp": {
+                    "_attrs": {
+                        "name": "github",
+                        "required": "true",  # Required MCP
+                    }
+                }
+            }
+        },
+    }
+
+    with (
+        patch.object(handler.resolver, "resolve", return_value=mock_file_path),
+        patch(
+            "kiwi_mcp.handlers.directive.handler.parse_directive_file",
+            return_value=mock_directive_data,
+        ),
+        patch("kiwi_mcp.handlers.directive.handler.ValidationManager") as mock_validator,
+        patch("kiwi_mcp.handlers.directive.handler.MetadataManager") as mock_metadata,
+        patch.object(handler.schema_cache, "get", return_value=None),
+        patch.object(
+            handler.mcp_pool, "get_tool_schemas", side_effect=Exception("Connection failed")
+        ),
+    ):
+        # Mock validation and metadata checks
+        mock_validator.validate.return_value = {"valid": True, "issues": []}
+        mock_metadata.verify_signature.return_value = {"status": "valid"}
+
+        # Mock file operations
+        mock_file_path.read_text = lambda: "directive content"
+
+        result = await handler._run_directive("test_directive", {})
+
+        # Should return error for required MCP failure
+        assert "error" in result
+        assert "Required MCP 'github' connection failed" in result["error"]
+        assert "Connection failed" in result["mcp_error"]
+
+
+@pytest.mark.asyncio
+async def test_run_directive_with_optional_mcp_failure(handler):
+    """Test running directive when optional MCP connection fails."""
+    mock_file_path = Path("/tmp/test.md")
+    mock_directive_data = {
+        "name": "test_directive",
+        "description": "Test directive",
+        "version": "1.0.0",
+        "parsed": {
+            "mcps": {
+                "mcp": {
+                    "_attrs": {
+                        "name": "github",
+                        "required": "false",  # Optional MCP
+                    }
+                }
+            }
+        },
+    }
+
+    with (
+        patch.object(handler.resolver, "resolve", return_value=mock_file_path),
+        patch(
+            "kiwi_mcp.handlers.directive.handler.parse_directive_file",
+            return_value=mock_directive_data,
+        ),
+        patch("kiwi_mcp.handlers.directive.handler.ValidationManager") as mock_validator,
+        patch("kiwi_mcp.handlers.directive.handler.MetadataManager") as mock_metadata,
+        patch.object(handler.schema_cache, "get", return_value=None),
+        patch.object(
+            handler.mcp_pool, "get_tool_schemas", side_effect=Exception("Connection failed")
+        ),
+    ):
+        # Mock validation and metadata checks
+        mock_validator.validate.return_value = {"valid": True, "issues": []}
+        mock_metadata.verify_signature.return_value = {"status": "valid"}
+
+        # Mock file operations
+        mock_file_path.read_text = lambda: "directive content"
+
+        result = await handler._run_directive("test_directive", {})
+
+        # Should succeed but mark MCP as unavailable
+        assert result["status"] == "ready"
+        assert "tool_context" in result
+        assert "github" in result["tool_context"]
+        assert result["tool_context"]["github"]["available"] is False
+        assert "error" in result["tool_context"]["github"]

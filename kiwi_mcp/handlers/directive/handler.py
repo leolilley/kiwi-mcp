@@ -19,6 +19,7 @@ from kiwi_mcp.utils.parsers import parse_directive_file
 from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
 from kiwi_mcp.utils.metadata_manager import MetadataManager
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
+from kiwi_mcp.mcp import MCPClientPool, SchemaCache
 
 
 class DirectiveHandler:
@@ -33,6 +34,10 @@ class DirectiveHandler:
         # Local file handling
         self.resolver = DirectiveResolver(self.project_path)
         self.search_paths = [self.resolver.project_directives, self.resolver.user_directives]
+
+        # MCP support
+        self.mcp_pool = MCPClientPool()
+        self.schema_cache = SchemaCache()
 
     async def search(
         self,
@@ -154,7 +159,7 @@ class DirectiveHandler:
             # Determine if this is read-only mode (no copy)
             # Read-only when: destination is None OR destination equals source (for non-registry)
             is_read_only = destination is None or (source == destination and source != "registry")
-            
+
             # LOAD FROM REGISTRY
             if source == "registry":
                 # Fetch from registry
@@ -198,13 +203,13 @@ class DirectiveHandler:
                 # Verify hash after download for safety
                 file_content = target_path.read_text()
                 signature_status = MetadataManager.verify_signature("directive", file_content)
-                
+
                 # Parse and return
                 directive_data = parse_directive_file(target_path)
                 directive_data["source"] = "registry"
                 directive_data["destination"] = effective_destination
                 directive_data["path"] = str(target_path)
-                
+
                 # Add warning if signature is invalid or modified (registry content should be valid)
                 if signature_status and signature_status.get("status") in ["modified", "invalid"]:
                     directive_data["warning"] = {
@@ -212,8 +217,10 @@ class DirectiveHandler:
                         "signature": signature_status,
                         "solution": "Use execute action 'update' or 'create' to re-validate the directive",
                     }
-                    self.logger.warning(f"Registry directive '{directive_name}' has invalid signature: {signature_status}")
-                
+                    self.logger.warning(
+                        f"Registry directive '{directive_name}' has invalid signature: {signature_status}"
+                    )
+
                 return directive_data
 
             # LOAD FROM PROJECT
@@ -227,7 +234,7 @@ class DirectiveHandler:
                 if destination == "user":
                     # Copy from project to user space
                     content = file_path.read_text()
-                    
+
                     # Verify hash before copying
                     signature_status = MetadataManager.verify_signature("directive", content)
                     if signature_status:
@@ -238,7 +245,7 @@ class DirectiveHandler:
                                 "path": str(file_path),
                                 "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
                             }
-                    
+
                     # Determine category from source path
                     relative_path = file_path.relative_to(search_base)
                     target_path = Path.home() / ".ai" / "directives" / relative_path
@@ -255,19 +262,22 @@ class DirectiveHandler:
                     # Read-only mode: verify and warn, but don't block
                     file_content = file_path.read_text()
                     signature_status = MetadataManager.verify_signature("directive", file_content)
-                    
+
                     directive_data = parse_directive_file(file_path)
                     directive_data["source"] = "project"
                     directive_data["path"] = str(file_path)
                     directive_data["mode"] = "read_only"
-                    
-                    if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+
+                    if signature_status and signature_status.get("status") in [
+                        "modified",
+                        "invalid",
+                    ]:
                         directive_data["warning"] = {
                             "message": "Directive content has been modified or signature is invalid",
                             "signature": signature_status,
                             "solution": "Use execute action 'update' or 'create' to re-validate",
                         }
-                    
+
                     return directive_data
 
             # LOAD FROM USER
@@ -281,7 +291,7 @@ class DirectiveHandler:
             if destination == "project":
                 # Copy from user to project space
                 content = file_path.read_text()
-                
+
                 # Verify hash before copying
                 signature_status = MetadataManager.verify_signature("directive", content)
                 if signature_status:
@@ -292,7 +302,7 @@ class DirectiveHandler:
                             "path": str(file_path),
                             "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
                         }
-                
+
                 # Determine category from source path
                 relative_path = file_path.relative_to(search_base)
                 target_path = self.project_path / ".ai" / "directives" / relative_path
@@ -309,19 +319,19 @@ class DirectiveHandler:
                 # Read-only mode: verify and warn, but don't block
                 file_content = file_path.read_text()
                 signature_status = MetadataManager.verify_signature("directive", file_content)
-                
+
                 directive_data = parse_directive_file(file_path)
                 directive_data["source"] = "user"
                 directive_data["path"] = str(file_path)
                 directive_data["mode"] = "read_only"
-                
+
                 if signature_status and signature_status.get("status") in ["modified", "invalid"]:
                     directive_data["warning"] = {
                         "message": "Directive content has been modified or signature is invalid",
                         "signature": signature_status,
                         "solution": "Use execute action 'update' or 'create' to re-validate",
                     }
-                
+
                 return directive_data
         except Exception as e:
             return {"error": str(e), "message": f"Failed to load directive '{directive_name}'"}
@@ -438,15 +448,25 @@ class DirectiveHandler:
                     error_response["error"] = "Directive model not valid"
                     model_data = directive_data.get("model") or directive_data.get("model_class")
                     error_response["model_found"] = model_data
-                    error_response["hint"] = "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
-                elif any("code block" in issue.lower() or "closing" in issue.lower() or "must end" in issue.lower() or "unexpected content" in issue.lower() for issue in validation_result["issues"]):
+                    error_response["hint"] = (
+                        "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
+                    )
+                elif any(
+                    "code block" in issue.lower()
+                    or "closing" in issue.lower()
+                    or "must end" in issue.lower()
+                    or "unexpected content" in issue.lower()
+                    for issue in validation_result["issues"]
+                ):
                     error_response["error"] = "Directive XML structure not valid"
-                    error_response["hint"] = "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    error_response["hint"] = (
+                        "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    )
                     error_response["solution"] = {
                         "message": "Remove any content after the closing ``` in the directive file",
                         "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
                         "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
-                        "example": "```xml\n<directive name=\"example\" version=\"1.0.0\">\n  ...\n</directive>\n```"
+                        "example": '```xml\n<directive name="example" version="1.0.0">\n  ...\n</directive>\n```',
                     }
                 return error_response
 
@@ -463,14 +483,16 @@ class DirectiveHandler:
                     "error": "Directive has no valid signature",
                     "status": "missing",
                     "path": str(file_path),
-                    "hint": "Directives must be created via create_directive, not create_file" if has_pending else "Directive needs validation",
+                    "hint": "Directives must be created via create_directive, not create_file"
+                    if has_pending
+                    else "Directive needs validation",
                     "solution": (
                         f"Run: execute(item_type='directive', action='update', "
                         f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
                         f"project_path='{self.project_path}')"
                     ),
                 }
-            
+
             if signature_status.get("status") == "modified":
                 return {
                     "error": "Directive content has been modified since last validation",
@@ -488,7 +510,7 @@ class DirectiveHandler:
 
             # Extract process steps and inputs for execution
             parsed = directive_data["parsed"]
-            
+
             # Get process steps from parsed XML
             process_steps = []
             if "process" in parsed and "step" in parsed["process"]:
@@ -498,12 +520,14 @@ class DirectiveHandler:
                     steps = [steps]
                 for step in steps:
                     attrs = step.get("_attrs", {})
-                    process_steps.append({
-                        "name": attrs.get("name", ""),
-                        "description": step.get("description", ""),
-                        "action": step.get("action", ""),
-                    })
-            
+                    process_steps.append(
+                        {
+                            "name": attrs.get("name", ""),
+                            "description": step.get("description", ""),
+                            "action": step.get("action", ""),
+                        }
+                    )
+
             # Get inputs from parsed XML
             inputs_spec = []
             if "inputs" in parsed and "input" in parsed["inputs"]:
@@ -512,26 +536,34 @@ class DirectiveHandler:
                     inp_list = [inp_list]
                 for inp in inp_list:
                     attrs = inp.get("_attrs", {})
-                    inputs_spec.append({
-                        "name": attrs.get("name", ""),
-                        "type": attrs.get("type", "string"),
-                        "required": attrs.get("required", "false") == "true",
-                        "description": inp.get("_text", ""),
-                    })
-            
+                    inputs_spec.append(
+                        {
+                            "name": attrs.get("name", ""),
+                            "type": attrs.get("type", "string"),
+                            "required": attrs.get("required", "false") == "true",
+                            "description": inp.get("_text", ""),
+                        }
+                    )
+
             # Validate required inputs are provided
             missing_inputs = []
             for inp in inputs_spec:
                 if inp["required"]:
                     input_name = inp["name"]
                     # Check if input is provided (handle None, empty string, etc.)
-                    if input_name not in params or params[input_name] is None or (isinstance(params[input_name], str) and not params[input_name].strip()):
-                        missing_inputs.append({
-                            "name": input_name,
-                            "type": inp["type"],
-                            "description": inp["description"],
-                        })
-            
+                    if (
+                        input_name not in params
+                        or params[input_name] is None
+                        or (isinstance(params[input_name], str) and not params[input_name].strip())
+                    ):
+                        missing_inputs.append(
+                            {
+                                "name": input_name,
+                                "type": inp["type"],
+                                "description": inp["description"],
+                            }
+                        )
+
             # If required inputs are missing, return error instead of "ready"
             if missing_inputs:
                 return {
@@ -543,7 +575,37 @@ class DirectiveHandler:
                     "provided_inputs": params,
                     "solution": f"Provide the missing required inputs in the 'parameters' field. Example: parameters={{'{missing_inputs[0]['name']}': 'value'}}",
                 }
-            
+
+            # Parse MCP declarations and fetch tool schemas
+            mcps_required = self._parse_mcps(directive_data)
+            mcp_tools = {}
+
+            if mcps_required:
+                for mcp_decl in mcps_required:
+                    mcp_name = mcp_decl["name"]
+                    tool_filter = mcp_decl.get("tools")
+                    refresh = mcp_decl.get("refresh", False)
+
+                    if not mcp_name:
+                        continue
+
+                    try:
+                        # Check cache first
+                        schemas = self.schema_cache.get(mcp_name, force_refresh=refresh)
+                        if schemas is None:
+                            schemas = await self.mcp_pool.get_tool_schemas(mcp_name, tool_filter)
+                            self.schema_cache.set(mcp_name, schemas)
+
+                        mcp_tools[mcp_name] = {"available": True, "tools": schemas}
+                    except Exception as e:
+                        if mcp_decl.get("required"):
+                            return {
+                                "error": f"Required MCP '{mcp_name}' connection failed",
+                                "mcp_error": str(e),
+                                "solution": "Check MCP configuration and credentials",
+                            }
+                        mcp_tools[mcp_name] = {"available": False, "error": str(e)}
+
             result = {
                 "status": "ready",
                 "name": directive_data["name"],
@@ -556,7 +618,15 @@ class DirectiveHandler:
                     "Use provided_inputs for any matching input names."
                 ),
             }
-            
+
+            # Add MCP tool context if any MCPs were declared
+            if mcp_tools:
+                result["tool_context"] = mcp_tools
+                result["call_format"] = {
+                    "description": "All MCP tools called via Kiwi execute",
+                    "example": "execute(item_type='tool', action='call', ...)",
+                }
+
             # Add legacy warning if present (non-blocking)
             if legacy_warning:
                 result["warning"] = legacy_warning
@@ -568,7 +638,7 @@ class DirectiveHandler:
                 # Determine source location
                 is_project = str(file_path).startswith(str(self.resolver.project_directives))
                 current_source = "project" if is_project else "user"
-                
+
                 version_warning = await self._check_for_newer_version(
                     directive_name=directive_name,
                     current_version=current_version,
@@ -589,18 +659,18 @@ class DirectiveHandler:
     ) -> Optional[Dict[str, Any]]:
         """
         Check for newer versions of a directive in other locations.
-        
+
         Args:
             directive_name: Name of directive
             current_version: Current version being run (guaranteed to exist - validated)
             current_source: "project" or "user"
-        
+
         Returns:
             Warning dict if newer version found, None otherwise
         """
         newest_version = current_version
         newest_location = None
-        
+
         # Check user space (if running from project)
         if current_source == "project":
             try:
@@ -617,12 +687,18 @@ class DirectiveHandler:
                                         newest_version = user_version
                                         newest_location = "user"
                             except Exception as e:
-                                self.logger.warning(f"Failed to compare versions with user space: {e}")
+                                self.logger.warning(
+                                    f"Failed to compare versions with user space: {e}"
+                                )
                     except Exception as e:
-                        self.logger.warning(f"Failed to parse user space directive {directive_name}: {e}")
+                        self.logger.warning(
+                            f"Failed to parse user space directive {directive_name}: {e}"
+                        )
             except Exception as e:
-                self.logger.warning(f"Failed to check user space for directive {directive_name}: {e}")
-        
+                self.logger.warning(
+                    f"Failed to check user space for directive {directive_name}: {e}"
+                )
+
         # Check registry (always)
         try:
             registry_data = await self.registry.get(directive_name)
@@ -638,7 +714,7 @@ class DirectiveHandler:
                     self.logger.warning(f"Failed to compare versions with registry: {e}")
         except Exception as e:
             self.logger.warning(f"Failed to check registry for directive {directive_name}: {e}")
-        
+
         # Return warning if newer version found
         if newest_location and newest_version != current_version:
             suggestion = (
@@ -653,8 +729,35 @@ class DirectiveHandler:
                 "location": newest_location,
                 "suggestion": suggestion,
             }
-        
+
         return None
+
+    def _parse_mcps(self, directive_data: dict) -> list[dict]:
+        """Parse <mcps> declarations from directive metadata."""
+        # Try to get MCPs from parsed XML structure
+        parsed = directive_data.get("parsed", {})
+        mcps_list = []
+
+        # Check if there's an <mcps> section in the parsed data
+        if "mcps" in parsed and "mcp" in parsed["mcps"]:
+            mcp_data = parsed["mcps"]["mcp"]
+
+            # Handle single MCP vs list of MCPs
+            if isinstance(mcp_data, dict):
+                mcp_data = [mcp_data]
+
+            for mcp in mcp_data:
+                attrs = mcp.get("_attrs", {})
+                mcps_list.append(
+                    {
+                        "name": attrs.get("name"),
+                        "required": attrs.get("required", "false").lower() == "true",
+                        "tools": attrs.get("tools", "").split(",") if attrs.get("tools") else None,
+                        "refresh": attrs.get("refresh", "false").lower() == "true",
+                    }
+                )
+
+        return mcps_list
 
     def _find_in_path(self, directive_name: str, base_path: Path) -> Optional[Path]:
         """Find directive file in specified path."""
@@ -671,7 +774,6 @@ class DirectiveHandler:
                 return md_file
 
         return None
-
 
     async def _publish_directive(
         self, directive_name: str, params: Dict[str, Any]
@@ -703,7 +805,7 @@ class DirectiveHandler:
                     f"project_path='{self.project_path}')"
                 ),
             }
-        
+
         if signature_status.get("status") == "modified":
             return {
                 "error": "Directive content has been modified since last validation",
@@ -728,9 +830,9 @@ class DirectiveHandler:
             return {
                 "error": "Cannot publish: filename and directive name mismatch",
                 "details": str(e),
-                "path": str(file_path)
+                "path": str(file_path),
             }
-        
+
         # Explicit validation check after parsing (double-check for clarity)
         parsed_name = directive_data["name"]
         expected_filename = f"{parsed_name}.md"
@@ -741,14 +843,14 @@ class DirectiveHandler:
                     "expected": expected_filename,
                     "actual": file_path.name,
                     "directive_name": parsed_name,
-                    "path": str(file_path)
+                    "path": str(file_path),
                 },
                 "solution": {
                     "message": "Filename must match the directive name attribute in XML",
                     "option_1": f"Rename file: mv '{file_path}' '{file_path.parent / expected_filename}'",
-                    "option_2": f"Update XML: Change <directive name=\"{file_path.stem}\" ...> in {file_path}",
-                    "option_3": f"Use edit_directive directive to fix"
-                }
+                    "option_2": f'Update XML: Change <directive name="{file_path.stem}" ...> in {file_path}',
+                    "option_3": f"Use edit_directive directive to fix",
+                },
             }
 
         # Use explicit param if provided, otherwise fall back to XML version
@@ -897,7 +999,7 @@ class DirectiveHandler:
         try:
             directive_data = parse_directive_file(file_path)
             legacy_warning = directive_data.get("legacy_warning")
-            
+
             # Validate using centralized validator
             validation_result = ValidationManager.validate("directive", file_path, directive_data)
             if not validation_result["valid"]:
@@ -907,9 +1009,16 @@ class DirectiveHandler:
                     "details": validation_result["issues"],
                     "path": str(file_path),
                 }
-                
+
                 # Add filename mismatch details if applicable
-                filename_issue = next((issue for issue in validation_result["issues"] if "filename" in issue.lower() or "mismatch" in issue.lower()), None)
+                filename_issue = next(
+                    (
+                        issue
+                        for issue in validation_result["issues"]
+                        if "filename" in issue.lower() or "mismatch" in issue.lower()
+                    ),
+                    None,
+                )
                 if filename_issue:
                     parsed_name = directive_data["name"]
                     expected_filename = f"{parsed_name}.md"
@@ -918,13 +1027,13 @@ class DirectiveHandler:
                         "expected": expected_filename,
                         "actual": file_path.name,
                         "directive_name": parsed_name,
-                        "path": str(file_path)
+                        "path": str(file_path),
                     }
                     error_response["solution"] = {
                         "message": "Filename must match the directive name attribute in XML",
                         "option_1": f"Rename file: mv '{file_path}' '{file_path.parent / expected_filename}'",
-                        "option_2": f"Update XML: Change <directive name=\"{file_path.stem}\" ...> in {file_path}",
-                        "option_3": f"Use edit_directive directive to fix"
+                        "option_2": f'Update XML: Change <directive name="{file_path.stem}" ...> in {file_path}',
+                        "option_3": f"Use edit_directive directive to fix",
                     }
                 elif any("permission" in issue.lower() for issue in validation_result["issues"]):
                     error_response["error"] = "Directive permissions not satisfied"
@@ -933,24 +1042,34 @@ class DirectiveHandler:
                     error_response["error"] = "Directive model not valid"
                     model_data = directive_data.get("model") or directive_data.get("model_class")
                     error_response["model_found"] = model_data
-                    error_response["hint"] = "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
-                elif any("code block" in issue.lower() or "closing" in issue.lower() or "must end" in issue.lower() or "unexpected content" in issue.lower() for issue in validation_result["issues"]):
+                    error_response["hint"] = (
+                        "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
+                    )
+                elif any(
+                    "code block" in issue.lower()
+                    or "closing" in issue.lower()
+                    or "must end" in issue.lower()
+                    or "unexpected content" in issue.lower()
+                    for issue in validation_result["issues"]
+                ):
                     error_response["error"] = "Directive XML structure not valid"
-                    error_response["hint"] = "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    error_response["hint"] = (
+                        "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    )
                     error_response["solution"] = {
                         "message": "Remove any content after the closing ``` in the directive file",
                         "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
                         "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
-                        "example": "```xml\n<directive name=\"example\" version=\"1.0.0\">\n  ...\n</directive>\n```"
+                        "example": '```xml\n<directive name="example" version="1.0.0">\n  ...\n</directive>\n```',
                     }
-                
+
                 return error_response
         except ValueError as e:
             # Convert parse validation error to structured response
             return {
                 "error": "Cannot create: filename and directive name mismatch",
                 "details": str(e),
-                "path": str(file_path)
+                "path": str(file_path),
             }
         except Exception as e:
             return {
@@ -964,7 +1083,7 @@ class DirectiveHandler:
 
         # Update file with signature
         file_path.write_text(signed_content)
-        
+
         # Get signature info for response
         signature_info = MetadataManager.get_signature_info("directive", signed_content)
         content_hash = signature_info["hash"] if signature_info else None
@@ -989,11 +1108,11 @@ class DirectiveHandler:
             "signature": {"hash": content_hash, "timestamp": timestamp},
             "message": f"Directive validated and signed. Ready to use.",
         }
-        
+
         # Add legacy warning if present (non-blocking)
         if legacy_warning:
             result["warning"] = legacy_warning
-        
+
         return result
 
     async def _update_directive(
@@ -1051,7 +1170,7 @@ class DirectiveHandler:
         try:
             directive_data = parse_directive_file(file_path)
             legacy_warning = directive_data.get("legacy_warning")
-            
+
             # Validate using centralized validator
             validation_result = ValidationManager.validate("directive", file_path, directive_data)
             if not validation_result["valid"]:
@@ -1061,9 +1180,16 @@ class DirectiveHandler:
                     "details": validation_result["issues"],
                     "path": str(file_path),
                 }
-                
+
                 # Add filename mismatch details if applicable
-                filename_issue = next((issue for issue in validation_result["issues"] if "filename" in issue.lower() or "mismatch" in issue.lower()), None)
+                filename_issue = next(
+                    (
+                        issue
+                        for issue in validation_result["issues"]
+                        if "filename" in issue.lower() or "mismatch" in issue.lower()
+                    ),
+                    None,
+                )
                 if filename_issue:
                     file_directive_name = directive_data["name"]
                     expected_filename = f"{file_directive_name}.md"
@@ -1072,13 +1198,13 @@ class DirectiveHandler:
                         "expected": expected_filename,
                         "actual": file_path.name,
                         "directive_name": file_directive_name,
-                        "path": str(file_path)
+                        "path": str(file_path),
                     }
                     error_response["solution"] = {
                         "message": "Filename must match the directive name attribute in XML",
                         "option_1": f"Rename file: mv '{file_path}' '{file_path.parent / expected_filename}'",
-                        "option_2": f"Update XML: Change <directive name=\"{file_path.stem}\" ...> in {file_path}",
-                        "option_3": f"Use edit_directive directive to fix"
+                        "option_2": f'Update XML: Change <directive name="{file_path.stem}" ...> in {file_path}',
+                        "option_3": f"Use edit_directive directive to fix",
                     }
                 elif any("permission" in issue.lower() for issue in validation_result["issues"]):
                     error_response["error"] = "Directive permissions not satisfied"
@@ -1087,24 +1213,34 @@ class DirectiveHandler:
                     error_response["error"] = "Directive model not valid"
                     model_data = directive_data.get("model") or directive_data.get("model_class")
                     error_response["model_found"] = model_data
-                    error_response["hint"] = "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
-                elif any("code block" in issue.lower() or "closing" in issue.lower() or "must end" in issue.lower() or "unexpected content" in issue.lower() for issue in validation_result["issues"]):
+                    error_response["hint"] = (
+                        "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
+                    )
+                elif any(
+                    "code block" in issue.lower()
+                    or "closing" in issue.lower()
+                    or "must end" in issue.lower()
+                    or "unexpected content" in issue.lower()
+                    for issue in validation_result["issues"]
+                ):
                     error_response["error"] = "Directive XML structure not valid"
-                    error_response["hint"] = "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    error_response["hint"] = (
+                        "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
+                    )
                     error_response["solution"] = {
                         "message": "Remove any content after the closing ``` in the directive file",
                         "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
                         "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
-                        "example": "```xml\n<directive name=\"example\" version=\"1.0.0\">\n  ...\n</directive>\n```"
+                        "example": '```xml\n<directive name="example" version="1.0.0">\n  ...\n</directive>\n```',
                     }
-                
+
                 return error_response
         except ValueError as e:
             # Convert parse validation error to structured response
             return {
                 "error": "Cannot update: filename and directive name mismatch",
                 "details": str(e),
-                "path": str(file_path)
+                "path": str(file_path),
             }
         except Exception as e:
             return {
@@ -1118,7 +1254,7 @@ class DirectiveHandler:
 
         # Update file
         file_path.write_text(signed_content)
-        
+
         # Get signature info for response
         signature_info = MetadataManager.get_signature_info("directive", signed_content)
         content_hash = signature_info["hash"] if signature_info else None
@@ -1140,7 +1276,7 @@ class DirectiveHandler:
         current_category = None
         if file_path.parent.name != "directives":
             current_category = file_path.parent.name
-        
+
         # Handle category change: move file if category changed
         moved = False
         final_path = file_path
@@ -1152,16 +1288,19 @@ class DirectiveHandler:
             else:
                 # User space
                 from kiwi_mcp.utils.paths import get_user_space
+
                 new_dir = get_user_space() / "directives" / new_category
-            
+
             new_dir.mkdir(parents=True, exist_ok=True)
             final_path = new_dir / file_path.name
-            
+
             # Move file
             file_path.rename(final_path)
             moved = True
-            self.logger.info(f"Moved directive from {file_path} to {final_path} (category: {current_category} -> {new_category})")
-            
+            self.logger.info(
+                f"Moved directive from {file_path} to {final_path} (category: {current_category} -> {new_category})"
+            )
+
             # Clean up empty old directory if it's a category folder
             old_dir = file_path.parent
             if old_dir.name != "directives" and not any(old_dir.iterdir()):
@@ -1180,20 +1319,22 @@ class DirectiveHandler:
             "signature": {"hash": content_hash, "timestamp": timestamp},
             "message": f"Directive validated and signed. Ready to use.",
         }
-        
+
         if moved:
             result["moved"] = True
             result["old_category"] = current_category
             result["new_category"] = new_category
-            result["message"] = f"Directive validated, signed, and moved to category '{new_category}'."
+            result["message"] = (
+                f"Directive validated, signed, and moved to category '{new_category}'."
+            )
             result["registry_sync_note"] = (
                 "Category changed. If this directive is published to the registry, "
                 "republish it to sync the category: "
                 f"execute(action='publish', item_id='{directive_name}', parameters={{'version': '...'}})"
             )
-        
+
         # Add legacy warning if present (non-blocking)
         if legacy_warning:
             result["warning"] = legacy_warning
-        
+
         return result
