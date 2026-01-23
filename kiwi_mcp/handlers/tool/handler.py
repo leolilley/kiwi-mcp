@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, List, Literal
 from pathlib import Path
 
 from kiwi_mcp.handlers import SortBy
-from kiwi_mcp.api.script_registry import ScriptRegistry  # Still using ScriptRegistry for now
+from kiwi_mcp.api.tool_registry import ToolRegistry
 from kiwi_mcp.utils.logger import get_logger
 from kiwi_mcp.utils.resolvers import ScriptResolver, get_user_space
 from kiwi_mcp.utils.parsers import parse_script_metadata
@@ -21,10 +21,7 @@ from kiwi_mcp.utils.metadata_manager import MetadataManager
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 
 from .manifest import ToolManifest
-from .executors import ExecutorRegistry, ExecutionResult
-from .executors.python import PythonExecutor
-from .executors.bash import BashExecutor
-from .executors.api import APIExecutor
+from kiwi_mcp.primitives.executor import PrimitiveExecutor, ExecutionResult
 
 
 class ToolHandler:
@@ -33,17 +30,15 @@ class ToolHandler:
     def __init__(self, project_path: str):
         """Initialize handler with project path."""
         self.project_path = Path(project_path)
-        self.resolver = ScriptResolver(
-            project_path=self.project_path
-        )  # Still using ScriptResolver for compatibility
-        self.registry = ScriptRegistry()  # Still using ScriptRegistry for compatibility
+        self.resolver = ScriptResolver(project_path=self.project_path)
+        self.registry = ToolRegistry()
         self.logger = get_logger("tool_handler")
 
         # Output manager for saving large results
         self.output_manager = OutputManager(project_path=self.project_path)
 
-        # Initialize and register executors
-        self._setup_executors()
+        # Initialize primitive executor
+        self.primitive_executor = PrimitiveExecutor(self.registry)
 
     def _has_git(self) -> bool:
         """Check if project is in a git repository."""
@@ -56,20 +51,6 @@ class ToolHandler:
             return result.returncode == 0
         except FileNotFoundError:
             return False
-
-    def _setup_executors(self):
-        """Setup and register available executors."""
-        # Register Python executor
-        python_executor = PythonExecutor(self.project_path)
-        ExecutorRegistry.register("python", python_executor)
-
-        # Register Bash executor
-        bash_executor = BashExecutor()
-        ExecutorRegistry.register("bash", bash_executor)
-
-        # Register API executor
-        api_executor = APIExecutor()
-        ExecutorRegistry.register("api", api_executor)
 
     async def search(
         self, query: str, source: str = "all", limit: int = 10, sort_by: SortBy = "score"
@@ -154,18 +135,13 @@ class ToolHandler:
     async def _search_registry(
         self, query: str, limit: int, sort_by: SortBy
     ) -> List[Dict[str, Any]]:
-        """Search registry for tools/scripts."""
+        """Search registry for tools using ToolRegistry."""
         if not self.registry.is_configured:
             return []
 
         try:
-            results = await self.registry.search(query, limit=limit)  # Remove sort_by for now
-
-            # Add source marker
-            for result in results:
-                result["source"] = "registry"
-                result["tool_type"] = "python"  # Default for registry scripts
-
+            # ToolRegistry.search returns tools with source already set
+            results = await self.registry.search(query, limit=limit)
             return results
         except Exception as e:
             self.logger.error(f"Registry search failed: {e}")
@@ -455,28 +431,21 @@ class ToolHandler:
                 },
             }
 
-        # Get executor for tool type
-        executor = ExecutorRegistry.get(manifest.tool_type)
-        if not executor:
-            return {
-                "status": "error",
-                "error": f"No executor available for tool type '{manifest.tool_type}'",
-                "available_types": ExecutorRegistry.list_types(),
-            }
-
-        # Execute using appropriate executor
+        # Execute using PrimitiveExecutor with chain resolution
         try:
-            result = await executor.execute(manifest, params)
+            result = await self.primitive_executor.execute(manifest.tool_id, params)
 
             # Convert ExecutionResult to expected format
             if result.success:
                 response = {
                     "status": "success",
-                    "data": {"output": result.output},
+                    "data": result.data,
                     "metadata": {
                         "duration_ms": result.duration_ms,
                         "tool_type": manifest.tool_type,
-                        "executor": executor.__class__.__name__,
+                        "primitive_type": result.metadata.get("type")
+                        if result.metadata
+                        else "unknown",
                     },
                 }
 
@@ -497,7 +466,9 @@ class ToolHandler:
                     "metadata": {
                         "duration_ms": result.duration_ms,
                         "tool_type": manifest.tool_type,
-                        "executor": executor.__class__.__name__,
+                        "primitive_type": result.metadata.get("type")
+                        if result.metadata
+                        else "unknown",
                     },
                 }
 

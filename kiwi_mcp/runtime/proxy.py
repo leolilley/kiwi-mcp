@@ -1,4 +1,4 @@
-"""KiwiProxy - Central proxy for all tool calls with permission enforcement.
+"""ToolProxy - Central proxy for all tool calls with permission enforcement.
 
 This is the core runtime security component that intercepts all tool calls,
 enforces permissions, detects stuck patterns, and logs all operations.
@@ -8,7 +8,7 @@ import time
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
-from ..handlers.tool.executors import ExecutorRegistry
+
 from ..handlers.tool.manifest import ToolManifest
 from .permissions import PermissionContext, PermissionChecker
 from .loop_detector import LoopDetector, StuckSignal
@@ -26,17 +26,17 @@ class ToolResult:
     duration_ms: Optional[float] = None
 
 
-class KiwiProxy:
+class ToolProxy:
     """Central proxy for all tool calls with permission enforcement."""
 
     def __init__(
         self,
         permission_context: PermissionContext,
-        executor_registry: ExecutorRegistry,
+        primitive_executor,  # PrimitiveExecutor instance
         audit_logger: AuditLogger,
     ):
         self.permissions = PermissionChecker(permission_context)
-        self.executors = executor_registry
+        self.primitive_executor = primitive_executor
         self.audit = audit_logger
         self.loop_detector = LoopDetector()
 
@@ -80,27 +80,16 @@ class KiwiProxy:
                     annealing_hint="Check tool name spelling or create the tool",
                 )
 
-            # 4. Execute via appropriate executor
-            executor = self.executors.get(manifest.tool_type)
-            if not executor:
-                error = f"No executor available for tool type '{manifest.tool_type}'"
-                self.audit.log_error(session_id, tool_id, error, params)
-                return ToolResult(
-                    success=False,
-                    error=error,
-                    annealing_hint=f"Register an executor for type '{manifest.tool_type}'",
-                )
-
-            # Execute the tool
-            execution_result = await executor.execute(manifest, params)
+            # 4. Execute via PrimitiveExecutor
+            execution_result = await self.primitive_executor.execute(tool_id, params)
 
             # Convert to ToolResult format
             duration_ms = (time.time() - start_time) * 1000
             result = ToolResult(
                 success=execution_result.success,
-                output=execution_result.output,
+                output=execution_result.data,
                 error=execution_result.error,
-                duration_ms=duration_ms,
+                duration_ms=execution_result.duration_ms,
             )
 
             # Log execution
@@ -144,7 +133,7 @@ class KiwiProxy:
             version="1.0.0",
             description=f"Tool: {tool_id}",
             executor_config={},
-            parameters={},
+            parameters=[],
             mutates_state=False,
         )
 

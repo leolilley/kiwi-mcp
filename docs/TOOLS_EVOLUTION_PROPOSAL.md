@@ -667,12 +667,12 @@ ALTER TABLE scripts ADD COLUMN executor_config JSONB;
 
 **Recommendation: Layered isolation based on trust level.**
 
-| Trust Level | Isolation | Use Case |
-|-------------|-----------|----------|
-| `trusted` | None (runs in main process) | Internal scripts, known-safe |
-| `standard` | Subprocess with timeout | Most bash scripts |
-| `sandboxed` | Docker container | Untrusted/external tools |
-| `restricted` | Docker + network isolation | High-risk operations |
+| Trust Level  | Isolation                   | Use Case                     |
+| ------------ | --------------------------- | ---------------------------- |
+| `trusted`    | None (runs in main process) | Internal scripts, known-safe |
+| `standard`   | Subprocess with timeout     | Most bash scripts            |
+| `sandboxed`  | Docker container            | Untrusted/external tools     |
+| `restricted` | Docker + network isolation  | High-risk operations         |
 
 - Declare in tool manifest: `isolation: standard`
 - Default: `standard` for bash, `trusted` for python (venv provides isolation)

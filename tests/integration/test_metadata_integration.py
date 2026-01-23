@@ -28,7 +28,9 @@ class TestMetadataValidationIntegration:
         parsed_data = parse_directive_file(sample_directive_file)
 
         # Validate
-        validation_result = ValidationManager.validate("directive", sample_directive_file, parsed_data)
+        validation_result = ValidationManager.validate(
+            "directive", sample_directive_file, parsed_data
+        )
         assert validation_result["valid"] is True
 
         # Sign
@@ -70,22 +72,25 @@ class TestMetadataValidationIntegration:
         parsed_data = parse_knowledge_entry(sample_knowledge_file)
 
         # Validate
-        validation_result = ValidationManager.validate("knowledge", sample_knowledge_file, parsed_data)
+        validation_result = ValidationManager.validate(
+            "knowledge", sample_knowledge_file, parsed_data
+        )
         assert validation_result["valid"] is True
 
         # For knowledge, signature is in frontmatter, so we need to rebuild it
         from kiwi_mcp.utils.metadata_manager import compute_content_hash, generate_timestamp
+
         content = parsed_data["content"]
         content_hash = compute_content_hash(content)
         timestamp = generate_timestamp()
 
         # Rebuild with signature
         frontmatter = f"""---
-zettel_id: {parsed_data['zettel_id']}
-title: {parsed_data['title']}
-entry_type: {parsed_data['entry_type']}
-category: {parsed_data['category']}
-tags: {parsed_data.get('tags', [])}
+zettel_id: {parsed_data["zettel_id"]}
+title: {parsed_data["title"]}
+entry_type: {parsed_data["entry_type"]}
+category: {parsed_data["category"]}
+tags: {parsed_data.get("tags", [])}
 validated_at: {timestamp}
 content_hash: {content_hash}
 ---
@@ -143,7 +148,9 @@ class TestHandlerIntegration:
     @pytest.mark.handlers
     @pytest.mark.metadata
     @pytest.mark.asyncio
-    async def test_directive_handler_uses_metadata_manager(self, tmp_path, sample_directive_content):
+    async def test_directive_handler_uses_metadata_manager(
+        self, tmp_path, sample_directive_content
+    ):
         """Test that DirectiveHandler uses MetadataManager for signature operations."""
         from kiwi_mcp.handlers.directive.handler import DirectiveHandler
 
@@ -177,7 +184,9 @@ class TestHandlerIntegration:
     @pytest.mark.handlers
     @pytest.mark.validation
     @pytest.mark.asyncio
-    async def test_directive_handler_uses_validation_manager(self, tmp_path, sample_directive_content):
+    async def test_directive_handler_uses_validation_manager(
+        self, tmp_path, sample_directive_content
+    ):
         """Test that DirectiveHandler uses ValidationManager for validation."""
         from kiwi_mcp.handlers.directive.handler import DirectiveHandler
 
@@ -239,7 +248,8 @@ class TestHandlerIntegration:
     @pytest.mark.integration
     @pytest.mark.handlers
     @pytest.mark.validation
-    def test_script_handler_uses_validation_manager(self, tmp_path, sample_script_content):
+    @pytest.mark.asyncio
+    async def test_script_handler_uses_validation_manager(self, tmp_path, sample_script_content):
         """Test that ScriptHandler uses ValidationManager for validation."""
         from kiwi_mcp.handlers.script.handler import ScriptHandler
 
@@ -261,7 +271,9 @@ class TestHandlerIntegration:
     @pytest.mark.handlers
     @pytest.mark.metadata
     @pytest.mark.asyncio
-    async def test_knowledge_handler_uses_metadata_manager(self, tmp_path, sample_knowledge_content):
+    async def test_knowledge_handler_uses_metadata_manager(
+        self, tmp_path, sample_knowledge_content
+    ):
         """Test that KnowledgeHandler uses MetadataManager for signature operations."""
         from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
 
@@ -295,7 +307,9 @@ class TestHandlerIntegration:
     @pytest.mark.handlers
     @pytest.mark.validation
     @pytest.mark.asyncio
-    async def test_knowledge_handler_uses_validation_manager(self, tmp_path, sample_knowledge_content):
+    async def test_knowledge_handler_uses_validation_manager(
+        self, tmp_path, sample_knowledge_content
+    ):
         """Test that KnowledgeHandler uses ValidationManager for validation."""
         from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
 
@@ -423,4 +437,7 @@ class TestEndToEndFlows:
 
         # Should either succeed or fail with registry error, not signature error
         if "error" in publish_result:
-            assert "signature" not in publish_result["error"].lower() or "registry" in publish_result["error"].lower()
+            assert (
+                "signature" not in publish_result["error"].lower()
+                or "registry" in publish_result["error"].lower()
+            )

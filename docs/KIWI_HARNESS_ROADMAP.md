@@ -245,6 +245,7 @@ Agent Request → KiwiProxy → Permission Check → IF allowed → Execute
 ```
 
 This prevents:
+
 - Subagents escalating privileges beyond parent's scope
 - Model hallucinations causing unauthorized actions
 - Recursive agents going rogue
@@ -258,25 +259,25 @@ This prevents:
        def __init__(self, permission_context: PermissionContext):
            self.permissions = permission_context  # From directive <permissions>
            self.audit = AuditLogger()
-       
+
        async def call_tool(self, tool_id: str, params: dict) -> Any:
            # 1. Audit log (always, even for denied)
            self.audit.log_request(tool_id, params)
-           
+
            # 2. Permission check (hard enforcement)
            if not self._check_permission(tool_id, params):
                return self._deny(tool_id, params)
-           
+
            # 3. Rate limit check
            if not self._check_rate_limit(tool_id):
                return self._rate_limited(tool_id)
-           
+
            # 4. Route to executor
            result = await self.executor_registry.execute(tool_id, params)
-           
+
            # 5. Log result
            self.audit.log_result(tool_id, result)
-           
+
            return result
    ```
 
@@ -290,10 +291,10 @@ This prevents:
        tools_allowed: list[str]     # Tool IDs: ["pytest", "search"]
        shell_commands: list[str]    # Commands: ["git", "npm"]
        mcp_actions: dict[str, list[str]]  # {"supabase": ["query", "migrate"]}
-       
+
        def can_read(self, path: str) -> bool:
            return any(fnmatch(path, pat) for pat in self.filesystem_read)
-       
+
        def can_execute(self, tool_id: str) -> bool:
            return tool_id in self.tools_allowed
    ```
@@ -301,15 +302,15 @@ This prevents:
 3. **Help Tool Redesign: "Call for Help" Signal**
 
    The help tool is extended to serve as an **agent control signal**:
-   
+
    ```python
    class HelpTool(BaseTool):
        # Existing: Get guidance
        # NEW: Signal for human attention
-       
+
        async def execute(self, arguments: dict) -> str:
            action = arguments.get("action", "guidance")
-           
+
            if action == "stuck":
                # Agent signals it's caught in a loop or confused
                return await self._signal_stuck(arguments)
@@ -322,13 +323,13 @@ This prevents:
            else:
                # Original guidance behavior
                return self._get_guidance(arguments.get("topic"))
-       
+
        async def _signal_stuck(self, arguments: dict) -> str:
            """Signal that agent is stuck and needs intervention."""
            session_id = arguments.get("session_id")
            reason = arguments.get("reason", "Unknown")
            attempts = arguments.get("attempts", 0)
-           
+
            # Log to monitoring system
            await self.monitor.signal_stuck(
                session_id=session_id,
@@ -336,11 +337,11 @@ This prevents:
                attempts=attempts,
                context=arguments.get("context")
            )
-           
+
            # Trigger annealing review if configured
            if attempts > 3:
                await self.annealing.queue_for_review(session_id)
-           
+
            return {
                "status": "stuck_acknowledged",
                "action": "awaiting_intervention",
@@ -369,17 +370,17 @@ This prevents:
    ```python
    class LoopDetector:
        """Detects when agents are stuck in repetitive patterns."""
-       
+
        def __init__(self, window_size: int = 10, similarity_threshold: float = 0.9):
            self.recent_calls: list[dict] = []
            self.window = window_size
            self.threshold = similarity_threshold
-       
+
        def record_call(self, tool_id: str, params: dict) -> Optional[StuckSignal]:
            self.recent_calls.append({"tool": tool_id, "params": params})
            if len(self.recent_calls) > self.window:
                self.recent_calls.pop(0)
-           
+
            # Check for repetitive patterns
            if self._detect_loop():
                return StuckSignal(
@@ -397,14 +398,14 @@ When a directive spawns a subagent, permissions are **scoped down, never up**:
 ```python
 def spawn_subagent(self, child_directive: str, inputs: dict):
     child_permissions = self._load_child_permissions(child_directive)
-    
+
     # Intersection: child can only have what parent has AND what child declares
     scoped_permissions = self.permissions.intersect(child_permissions)
-    
+
     # Verify no escalation
     if child_permissions.exceeds(self.permissions):
         return {"error": "Permission escalation denied"}
-    
+
     return Executor(permissions=scoped_permissions, ...)
 ```
 
@@ -936,6 +937,7 @@ kiwi_mcp/runtime/
 ### The Problem
 
 As directives/tools scale to 1M+:
+
 - Can't front-load all tool schemas into agent context
 - Agents hallucinate tool args/syntax
 - Context bloat limits recursion depth
@@ -975,17 +977,20 @@ As directives/tools scale to 1M+:
 ### How It Works
 
 1. **Agent expresses intent** (not syntax):
+
    ```
    "To enrich leads, I need [TOOL: search for enrichment scripts that use Apollo API]"
    ```
 
 2. **Intent Parser extracts**:
+
    ```python
    intent = "search for enrichment scripts that use Apollo API"
    context = conversation_history[-5:]
    ```
 
 3. **FunctionGemma resolves** (with RAG-fetched schemas):
+
    ```xml
    <tool_call name="search">
      <arg name="query">enrichment scripts Apollo API</arg>
@@ -1003,7 +1008,7 @@ As directives/tools scale to 1M+:
    ```python
    class IntentParser:
        INTENT_PATTERN = r'\[TOOL:\s*(.+?)\]'
-       
+
        def parse(self, agent_output: str) -> list[Intent]:
            matches = re.findall(self.INTENT_PATTERN, agent_output)
            return [Intent(text=m) for m in matches]
@@ -1016,19 +1021,19 @@ As directives/tools scale to 1M+:
        def __init__(self, model: str = "google/gemma-2-2b"):
            self.model = load_model(model)
            self.vector_store = VectorStore()  # From Phase 11
-       
+
        async def resolve(self, intent: Intent, context: list[Message]) -> ToolCall:
            # RAG: Find relevant tool schemas
            schemas = await self.vector_store.search(
-               intent.text, 
+               intent.text,
                item_type="tool",
                limit=10
            )
-           
+
            # Prompt FunctionGemma
            prompt = self._build_prompt(intent, context, schemas)
            response = await self.model.generate(prompt)
-           
+
            return self._parse_tool_call(response)
    ```
 
@@ -1036,14 +1041,15 @@ As directives/tools scale to 1M+:
 
    ```markdown
    ## Tool Calling
-   
+
    Express tool needs as intents: `[TOOL: description of what you need]`
-   
+
    Examples:
+
    - `[TOOL: search for email campaign directives]`
    - `[TOOL: execute the deploy_staging script with env=prod]`
    - `[TOOL: load knowledge about API rate limiting]`
-   
+
    Do NOT worry about exact syntax or arguments—the system resolves them.
    ```
 
@@ -1084,6 +1090,7 @@ AGENTS.md               # Update with intent syntax
 ### The Insight
 
 While the front-end agent generates its response, we can:
+
 1. Snapshot the conversation periodically
 2. Predict likely tool intents
 3. Pre-fetch search results for predicted intents
@@ -1126,12 +1133,14 @@ While the front-end agent generates its response, we can:
 ### How It Works
 
 1. **Periodic snapshot** during agent generation:
+
    ```python
    # Every 100 tokens or at newlines
    snapshot = {"history": messages[-5:], "partial": agent_buffer}
    ```
 
 2. **Intent Predictor** (lightweight BERT or small LLM):
+
    ```python
    predictions = predictor.predict(snapshot)
    # Output: [
@@ -1141,6 +1150,7 @@ While the front-end agent generates its response, we can:
    ```
 
 3. **Pre-Fetch Dispatcher**:
+
    ```python
    # For top N predictions (confidence > threshold)
    for pred in predictions[:2]:
@@ -1169,11 +1179,11 @@ While the front-end agent generates its response, we can:
        def __init__(self):
            self.model = load_model("sentence-transformers/all-MiniLM-L6-v2")
            # Fine-tuned on audit logs: conversation → intent mappings
-       
+
        async def predict(self, snapshot: dict) -> list[Prediction]:
            # Encode snapshot
            embedding = self.model.encode(snapshot["partial"])
-           
+
            # Match against common intent patterns
            # Return ranked predictions with confidence
    ```
@@ -1185,13 +1195,13 @@ While the front-end agent generates its response, we can:
        def __init__(self, ttl_seconds: int = 10):
            self.cache: dict[str, CacheEntry] = {}
            self.ttl = ttl_seconds
-       
+
        async def store(self, intent_hash: str, results: list):
            self.cache[intent_hash] = CacheEntry(
                results=results,
                expires=time.time() + self.ttl
            )
-       
+
        async def match(self, actual_intent: str) -> Optional[list]:
            # Semantic similarity match
            for key, entry in self.cache.items():
@@ -1208,11 +1218,11 @@ While the front-end agent generates its response, we can:
            buffer = ""
            async for chunk in stream:
                buffer += chunk
-               
+
                # Snapshot every 100 chars
                if len(buffer) % 100 == 0:
                    asyncio.create_task(self._predict_and_prefetch(buffer))
-               
+
                # Check for intent
                if "[TOOL:" in buffer:
                    intent = self.parser.parse(buffer)
@@ -1256,21 +1266,21 @@ kiwi_mcp/training/
 
 ## Summary Timeline
 
-| Phase | Focus                         | Weeks | Days | Dependencies   |
-| ----- | ----------------------------- | ----- | ---- | -------------- |
-| 1     | Tool Foundation               | 1-2   | 5    | None           |
-| 2     | Bash & API Executors          | 3-4   | 5    | Phase 1        |
-| 3     | Proxy & Permission Enforce    | 5-7   | 8    | Phase 2        |
-| 4     | Git Checkpoint                | 8-9   | 6    | Phase 3        |
-| 5     | MCP Client Pool               | 10-11 | 6    | Phase 4        |
-| 6     | RAG & Vector Search           | 12-14 | 7    | Phase 5        |
-| 7     | Directive Executor            | 15-17 | 8    | Phase 6        |
-| 8     | Annealing Integration         | 18-19 | 4    | Phase 7        |
-| 9     | Human Approval                | 20-21 | 6    | Phase 7, 8     |
-| 10    | Environments                  | 22-23 | 5    | Phase 7        |
-| 11    | Docker Executor               | 24-25 | 6    | Phase 3        |
-| 12    | MCP 2.0 Intent Calling        | 26-28 | 6    | Phase 6        |
-| 13    | MCP 2.5 Predictive            | 29-31 | 7    | Phase 12       |
+| Phase | Focus                      | Weeks | Days | Dependencies |
+| ----- | -------------------------- | ----- | ---- | ------------ |
+| 1     | Tool Foundation            | 1-2   | 5    | None         |
+| 2     | Bash & API Executors       | 3-4   | 5    | Phase 1      |
+| 3     | Proxy & Permission Enforce | 5-7   | 8    | Phase 2      |
+| 4     | Git Checkpoint             | 8-9   | 6    | Phase 3      |
+| 5     | MCP Client Pool            | 10-11 | 6    | Phase 4      |
+| 6     | RAG & Vector Search        | 12-14 | 7    | Phase 5      |
+| 7     | Directive Executor         | 15-17 | 8    | Phase 6      |
+| 8     | Annealing Integration      | 18-19 | 4    | Phase 7      |
+| 9     | Human Approval             | 20-21 | 6    | Phase 7, 8   |
+| 10    | Environments               | 22-23 | 5    | Phase 7      |
+| 11    | Docker Executor            | 24-25 | 6    | Phase 3      |
+| 12    | MCP 2.0 Intent Calling     | 26-28 | 6    | Phase 6      |
+| 13    | MCP 2.5 Predictive         | 29-31 | 7    | Phase 12     |
 
 **Total: ~31 weeks, 79 days of development**
 
