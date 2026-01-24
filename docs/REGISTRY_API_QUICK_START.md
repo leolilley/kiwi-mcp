@@ -122,11 +122,6 @@ results = await registry.search("email validation")
 results = await registry.search("bootstrap", category="setup")
 ```
 
-### Tech Stack Filter
-```python
-results = await registry.search("api", tech_stack=["Python", "FastAPI"])
-```
-
 ### Entry Type Filter (Knowledge Only)
 ```python
 results = await registry.search("auth", entry_type="pattern")

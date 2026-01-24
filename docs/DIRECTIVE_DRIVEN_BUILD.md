@@ -88,7 +88,6 @@ The master orchestrator directive coordinates the entire build.
   </metadata>
 
   <context>
-    <tech_stack>Python 3.11+, MCP SDK, Supabase, pytest</tech_stack>
     <prerequisites>
       - context-kiwi, script-kiwi, knowledge-kiwi repos accessible
       - Supabase project configured

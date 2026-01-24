@@ -41,7 +41,6 @@ Description of what this directive does.
   </metadata>
   
   <context>
-    <tech_stack>python</tech_stack>
     <project_path>/path/to/project</project_path>
   </context>
   
@@ -82,7 +81,7 @@ Every directive MUST include:
 
 ### Optional Elements
 
-- **`<context>`**: Tech stack, project paths, environment info
+- **`<context>`**: Project paths, environment info
 - **`<inputs>`**: Parameters the directive accepts
 
 ---

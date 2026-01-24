@@ -16,8 +16,7 @@ class DirectiveRegistry(BaseRegistry):
         self,
         query: str,
         category: Optional[str] = None,
-        limit: int = 10,
-        tech_stack: Optional[List[str]] = None
+        limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
         Search directives with multi-term matching and relevance scoring.
@@ -31,7 +30,6 @@ class DirectiveRegistry(BaseRegistry):
             query: Search query (natural language, supports multiple terms)
             category: Optional category filter
             limit: Max results
-            tech_stack: Optional tech stack for compatibility scoring
         
         Returns:
             List of matching directives with relevance scores
@@ -48,7 +46,7 @@ class DirectiveRegistry(BaseRegistry):
             # Build query with DB-side filtering using ilike
             query_builder = self.client.table("directives").select(
                 "id, name, category, description, is_official, "
-                "download_count, quality_score, tech_stack, created_at, updated_at"
+                "download_count, quality_score, created_at, updated_at"
             )
             
             # Apply category filter
@@ -74,7 +72,6 @@ class DirectiveRegistry(BaseRegistry):
                     "is_official": row.get("is_official", False),
                     "download_count": row.get("download_count", 0),
                     "quality_score": row.get("quality_score", 0),
-                    "tech_stack": row.get("tech_stack", []),
                     "created_at": row.get("created_at"),
                     "updated_at": row.get("updated_at"),
                 }
@@ -85,25 +82,12 @@ class DirectiveRegistry(BaseRegistry):
                 )
                 directive["relevance_score"] = relevance_score
                 
-                # Apply tech stack compatibility
-                if tech_stack and (d_stack := directive.get("tech_stack")):
-                    overlap = set(t.lower() for t in tech_stack) & set(
-                        t.lower() if isinstance(t, str) else str(t).lower() 
-                        for t in (d_stack if isinstance(d_stack, list) else [])
-                    )
-                    if not overlap:
-                        continue  # Skip if no tech stack overlap
-                    directive["compatibility_score"] = len(overlap) / max(len(d_stack), 1)
-                else:
-                    directive["compatibility_score"] = 1.0
-                
                 directives.append(directive)
             
-            # Sort results by combined score: 70% relevance + 30% compatibility
+            # Sort results by relevance score, quality, and downloads
             directives.sort(
                 key=lambda x: (
-                    x.get("relevance_score", 0) * 0.7 + 
-                    x.get("compatibility_score", 0) * 0.3,
+                    x.get("relevance_score", 0),
                     x.get("quality_score", 0),
                     x.get("download_count", 0)
                 ),
@@ -133,7 +117,7 @@ class DirectiveRegistry(BaseRegistry):
             # Get directive metadata
             result = self.client.table("directives").select(
                 "id, name, category, description, is_official, "
-                "download_count, quality_score, tech_stack, created_at, updated_at"
+                "download_count, quality_score, created_at, updated_at"
             ).eq("name", name).single().execute()
             
             if not result.data:
@@ -197,7 +181,7 @@ class DirectiveRegistry(BaseRegistry):
         try:
             query = self.client.table("directives").select(
                 "id, name, category, description, is_official, "
-                "download_count, quality_score, tech_stack, created_at, updated_at"
+                "download_count, quality_score, created_at, updated_at"
             )
             
             if category:
@@ -217,7 +201,6 @@ class DirectiveRegistry(BaseRegistry):
         category: str,
         description: Optional[str] = None,
         changelog: Optional[str] = None,
-        tech_stack: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
@@ -232,7 +215,6 @@ class DirectiveRegistry(BaseRegistry):
             category: Category path (slash-separated, e.g., "core/api/endpoints")
             description: Optional description
             changelog: Optional changelog
-            tech_stack: Optional tech stack
             metadata: Optional additional metadata
         
         Returns:
@@ -258,8 +240,6 @@ class DirectiveRegistry(BaseRegistry):
                     update_data["description"] = description
                 if category:
                     update_data["category"] = category
-                if tech_stack:
-                    update_data["tech_stack"] = tech_stack
                 
                 if update_data:
                     self.client.table("directives").update(update_data).eq("id", directive_id).execute()
@@ -269,7 +249,6 @@ class DirectiveRegistry(BaseRegistry):
                     "name": name,
                     "category": category,
                     "description": description or "",
-                    "tech_stack": tech_stack or [],
                 }
                 
                 directive_result = self.client.table("directives").insert(directive_data).execute()

@@ -601,9 +601,6 @@ name: directive_name
 version: 1.0.0
 category: setup
 description: What this directive does
-tech_stack:
-  - Python
-  - CLI
 ---
 
 # Directive Content
@@ -625,7 +622,6 @@ Steps and instructions...
 - `version` - Semantic version (required)
 - `category` - Organization category (optional)
 - `description` - What it does (optional)
-- `tech_stack` - Technologies used (optional)
 
 ---
 

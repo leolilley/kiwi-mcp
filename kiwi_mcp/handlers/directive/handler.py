@@ -264,7 +264,6 @@ class DirectiveHandler:
         categories: Optional[List[str]] = None,
         subcategories: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
-        tech_stack: Optional[List[str]] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -279,7 +278,6 @@ class DirectiveHandler:
             categories: Filter by categories
             subcategories: Filter by subcategories
             tags: Filter by tags
-            tech_stack: Filter by tech stack
             date_from: Filter by creation date (ISO format)
             date_to: Filter by creation date (ISO format)
 
@@ -296,18 +294,18 @@ class DirectiveHandler:
             # Search local files
             if source in ("local", "all"):
                 local_results = self._search_local(
-                    query, categories, subcategories, tags, tech_stack
+                    query, categories, subcategories, tags
                 )
                 results.extend(local_results)
 
             # Search registry
             if source in ("registry", "all"):
                 try:
-                    # Registry search only accepts: query, category (singular), limit, tech_stack
+                    # Registry search only accepts: query, category (singular), limit
                     category_filter = categories[0] if categories and len(categories) > 0 else None
 
                     registry_results = await self.registry.search(
-                        query=query, category=category_filter, limit=limit, tech_stack=tech_stack
+                        query=query, category=category_filter, limit=limit
                     )
 
                     # Registry returns list directly, not dict with "results" key
@@ -589,7 +587,6 @@ class DirectiveHandler:
         categories: Optional[List[str]] = None,
         subcategories: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
-        tech_stack: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search local directive files."""
         results = []
@@ -1106,7 +1103,6 @@ class DirectiveHandler:
             content=directive_data.get("content", ""),
             category=directive_data.get("category", "custom"),
             description=directive_data.get("description", ""),
-            tech_stack=directive_data.get("tech_stack", []),
         )
 
         # Ensure response includes version actually used

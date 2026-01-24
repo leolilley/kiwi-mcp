@@ -63,11 +63,10 @@ Successfully ported all three Supabase registry API clients from source MCPs.
 #### Test Coverage
 
 ```
-Tests Executed: 21/21 PASSED (100%)
-├── DirectiveRegistryFlow: 5 tests ✅
+Tests Executed: 20/20 PASSED (100%)
+├── DirectiveRegistryFlow: 4 tests ✅
 │   ├── test_directive_search
 │   ├── test_directive_search_with_category_filter
-│   ├── test_directive_search_with_tech_stack
 │   ├── test_directive_get
 │   └── test_directive_list
 ├── ScriptRegistryFlow: 4 tests ✅
@@ -96,7 +95,7 @@ Tests Executed: 21/21 PASSED (100%)
 
 #### DirectiveRegistry
 ```python
-async def search(query, category=None, limit=10, tech_stack=None)
+async def search(query, category=None, limit=10)
 async def get(name, version=None)
 async def list(category=None, limit=100)
 async def publish(name, version, content, category, ...)

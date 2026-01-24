@@ -30,7 +30,6 @@ All three main content types in the Kiwi MCP registry now follow a consistent tw
 | **Content Type** |
 | `entry_type` | ❌ | ❌ | ✅ text | Knowledge only |
 | `tool_type` | ❌ | ✅ text | ❌ | Tools only |
-| `tech_stack` | ✅ jsonb | ❌ | ❌ | Directives only |
 | `dependencies` | ✅ jsonb | ❌ | ❌ | Directives only |
 | **Source Info** |
 | `source_type` | ❌ | ❌ | ✅ text | Knowledge only |
@@ -117,7 +116,6 @@ All three types support:
 These differences are **intentional** and reflect the unique needs of each content type:
 
 ### Directives
-- **tech_stack** - Technology requirements
 - **dependencies** - Other directives needed
 - No version in main table (only in directive_versions)
 

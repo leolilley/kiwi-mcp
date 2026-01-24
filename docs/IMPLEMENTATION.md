@@ -1067,7 +1067,6 @@ class DirectiveRegistry(BaseRegistry):
                 "subcategory": directive.get("subcategory"),
                 "version": version_result.data["version"] if version_result.data else None,
                 "content": version_result.data["content"] if version_result.data else None,
-                "tech_stack": directive.get("tech_stack", []),
                 "tags": directive.get("tags", [])
             }
         except Exception as e:
@@ -1848,8 +1847,6 @@ async def load_directive(
         frontmatter["description"] = directive["description"]
     if directive.get("category"):
         frontmatter["category"] = directive["category"]
-    if directive.get("tech_stack"):
-        frontmatter["tech_stack"] = directive["tech_stack"]
 
     write_markdown_file(file_path, directive["content"], frontmatter)
 

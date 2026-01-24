@@ -297,7 +297,7 @@ class UnifiedSearch:
    - User preference for type priority
 
 3. **Filter compatibility**: Each type has different filters:
-   - Directives: category, tech_stack, model_tier
+   - Directives: category, model_tier
    - Knowledge: entry_type, tags, relationships
    - Tools: tool_type, executor, category
 

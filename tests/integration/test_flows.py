@@ -56,22 +56,6 @@ class TestDirectiveRegistryFlow:
         assert results[0]["category"] == "setup"
     
     @pytest.mark.asyncio
-    async def test_directive_search_with_tech_stack(self, directive_registry, mock_directives_search_result):
-        """Test searching directives with tech stack filter."""
-        execute_mock = create_mock_response(mock_directives_search_result["data"])
-        # Mock the chain: table().select().or_().limit().execute()
-        table_mock = directive_registry.client.table.return_value
-        select_mock = table_mock.select.return_value
-        or_mock = select_mock.or_.return_value
-        limit_mock = or_mock.limit.return_value
-        limit_mock.execute.return_value = execute_mock
-        
-        results = await directive_registry.search("bootstrap", tech_stack=["Python"])
-        
-        # Should include directives with Python in tech stack
-        assert any("Python" in r.get("tech_stack", []) for r in results)
-    
-    @pytest.mark.asyncio
     async def test_directive_get(self, directive_registry):
         """Test getting a single directive."""
         # Setup mock
@@ -83,7 +67,6 @@ class TestDirectiveRegistryFlow:
             "is_official": True,
             "download_count": 150,
             "quality_score": 95.0,
-            "tech_stack": ["Python"],
         }
         version_data = {
             "version": "1.0.0",
