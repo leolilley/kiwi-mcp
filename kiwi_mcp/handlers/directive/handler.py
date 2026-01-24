@@ -420,9 +420,9 @@ class DirectiveHandler:
 
                 self.logger.info(f"Downloaded directive from registry to: {target_path}")
 
-                # Verify hash after download for safety
+                # Check signature after download for safety
                 file_content = target_path.read_text()
-                signature_status = MetadataManager.verify_signature("directive", file_content)
+                signature_info = MetadataManager.get_signature_info("directive", file_content)
 
                 # Parse and return
                 directive_data = parse_directive_file(target_path)
@@ -430,15 +430,14 @@ class DirectiveHandler:
                 directive_data["destination"] = effective_destination
                 directive_data["path"] = str(target_path)
 
-                # Add warning if signature is invalid or modified (registry content should be valid)
-                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                # Add warning if no signature (registry content should be signed)
+                if not signature_info:
                     directive_data["warning"] = {
-                        "message": "Registry directive content signature is invalid or modified - content may be corrupted",
-                        "signature": signature_status,
+                        "message": "Registry directive has no signature - content may be corrupted",
                         "solution": "Use execute action 'update' or 'create' to re-validate the directive",
                     }
                     self.logger.warning(
-                        f"Registry directive '{directive_name}' has invalid signature: {signature_status}"
+                        f"Registry directive '{directive_name}' has no signature"
                     )
 
                 return directive_data
@@ -455,16 +454,14 @@ class DirectiveHandler:
                     # Copy from project to user space
                     content = file_path.read_text()
 
-                    # Verify hash before copying
-                    signature_status = MetadataManager.verify_signature("directive", content)
-                    if signature_status:
-                        if signature_status.get("status") in ["modified", "invalid"]:
-                            return {
-                                "error": f"Directive content has been modified or signature is invalid",
-                                "signature": signature_status,
-                                "path": str(file_path),
-                                "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
-                            }
+                    # Check signature before copying
+                    signature_info = MetadataManager.get_signature_info("directive", content)
+                    if not signature_info:
+                        return {
+                            "error": f"Directive has no signature",
+                            "path": str(file_path),
+                            "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
+                        }
 
                     # Determine category from source path
                     relative_path = file_path.relative_to(search_base)
@@ -481,20 +478,16 @@ class DirectiveHandler:
                 else:
                     # Read-only mode: verify and warn, but don't block
                     file_content = file_path.read_text()
-                    signature_status = MetadataManager.verify_signature("directive", file_content)
+                    signature_info = MetadataManager.get_signature_info("directive", file_content)
 
                     directive_data = parse_directive_file(file_path)
                     directive_data["source"] = "project"
                     directive_data["path"] = str(file_path)
                     directive_data["mode"] = "read_only"
 
-                    if signature_status and signature_status.get("status") in [
-                        "modified",
-                        "invalid",
-                    ]:
+                    if not signature_info:
                         directive_data["warning"] = {
-                            "message": "Directive content has been modified or signature is invalid",
-                            "signature": signature_status,
+                            "message": "Directive has no signature",
                             "solution": "Use execute action 'update' or 'create' to re-validate",
                         }
 
@@ -509,19 +502,16 @@ class DirectiveHandler:
 
             # If destination differs from source, copy the file
             if destination == "project":
-                # Copy from user to project space
+                # Check signature before copying
                 content = file_path.read_text()
 
-                # Verify hash before copying
-                signature_status = MetadataManager.verify_signature("directive", content)
-                if signature_status:
-                    if signature_status.get("status") in ["modified", "invalid"]:
-                        return {
-                            "error": f"Directive content has been modified or signature is invalid",
-                            "signature": signature_status,
-                            "path": str(file_path),
-                            "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
-                        }
+                signature_info = MetadataManager.get_signature_info("directive", content)
+                if not signature_info:
+                    return {
+                        "error": f"Directive has no signature",
+                        "path": str(file_path),
+                        "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
+                    }
 
                 # Determine category from source path
                 relative_path = file_path.relative_to(search_base)
@@ -536,19 +526,18 @@ class DirectiveHandler:
                 directive_data["path"] = str(target_path)
                 return directive_data
             else:
-                # Read-only mode: verify and warn, but don't block
+                # Read-only mode: check signature and warn if missing
                 file_content = file_path.read_text()
-                signature_status = MetadataManager.verify_signature("directive", file_content)
+                signature_info = MetadataManager.get_signature_info("directive", file_content)
 
                 directive_data = parse_directive_file(file_path)
                 directive_data["source"] = "user"
                 directive_data["path"] = str(file_path)
                 directive_data["mode"] = "read_only"
 
-                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                if not signature_info:
                     directive_data["warning"] = {
-                        "message": "Directive content has been modified or signature is invalid",
-                        "signature": signature_status,
+                        "message": "Directive has no signature",
                         "solution": "Use execute action 'update' or 'create' to re-validate",
                     }
 
@@ -695,42 +684,52 @@ class DirectiveHandler:
                     }
                 return error_response
 
-            # ENFORCE hash validation - ALWAYS check, never skip
+            # Extract integrity hash from signature
             file_content = file_path.read_text()
-            signature_status = MetadataManager.verify_signature("directive", file_content)
+            stored_hash = MetadataManager.get_signature_hash("directive", file_content)
 
-            # Block execution if signature is missing, invalid, or modified
-            # Missing signature means directive was created manually (bypassing create_directive)
-            if signature_status is None:
-                # Check if it has pending-validation marker
+            if not stored_hash:
                 has_pending = "kiwi-mcp:pending-validation" in file_content
                 return {
-                    "error": "Directive has no valid signature",
+                    "error": "Directive has no signature",
                     "status": "missing",
                     "path": str(file_path),
                     "hint": "Directives must be created via create_directive, not create_file"
                     if has_pending
                     else "Directive needs validation",
                     "solution": (
-                        f"Run: execute(item_type='directive', action='update', "
+                        f"Run: execute(item_type='directive', action='create', "
                         f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
                         f"project_path='{self.project_path}')"
                     ),
                 }
 
-            if signature_status.get("status") == "modified":
+            # Verify integrity using IntegrityVerifier
+            from kiwi_mcp.primitives.integrity_verifier import IntegrityVerifier
+            verifier = IntegrityVerifier()
+            
+            # Build metadata for directive integrity computation
+            metadata = {
+                "category": directive_data.get("category"),
+                "description": directive_data.get("description"),
+                "model_tier": directive_data.get("model", {}).get("tier") if isinstance(directive_data.get("model"), dict) else None,
+            }
+            
+            verification = verifier.verify_single_file(
+                item_type="directive",
+                item_id=directive_name,
+                version=directive_data.get("version", "0.0.0"),
+                file_path=file_path,
+                stored_hash=stored_hash,
+                project_path=self.project_path
+            )
+            
+            if not verification.success:
                 return {
                     "error": "Directive content has been modified since last validation",
-                    "signature": signature_status,
+                    "details": verification.error,
                     "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the directive",
-                }
-            elif signature_status.get("status") == "invalid":
-                return {
-                    "error": "Directive signature is invalid",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the directive",
+                    "solution": "Run execute(action='update', ...) to re-validate the directive",
                 }
 
             # Extract process steps and inputs for execution
@@ -854,8 +853,9 @@ class DirectiveHandler:
                             }
                         mcp_tools[mcp_name] = {"available": False, "error": str(e)}
 
-            # Compute canonical integrity for verification reporting
-            canonical_integrity = self._compute_directive_integrity(directive_data, file_content)
+            # Get integrity hash from signature
+            signature_info = MetadataManager.get_signature_info("directive", file_content)
+            content_hash = signature_info["hash"] if signature_info else None
 
             result = {
                 "status": "ready",
@@ -865,8 +865,8 @@ class DirectiveHandler:
                 "inputs": inputs_spec,
                 "process": process_steps,
                 "provided_inputs": params,
-                "integrity": canonical_integrity,
-                "integrity_short": short_hash(canonical_integrity),
+                "integrity": content_hash,
+                "integrity_short": content_hash[:12] if content_hash else None,
                 "inputs_validated": schema_validation_result is not None,
                 "instructions": (
                     "Follow each process step in order. "
@@ -1046,15 +1046,14 @@ class DirectiveHandler:
                 "suggestion": "Create directive first before publishing",
             }
 
-        # ENFORCE hash validation - ALWAYS check, never skip
+        # Extract integrity hash from signature
         file_content = file_path.read_text()
-        signature_status = MetadataManager.verify_signature("directive", file_content)
+        stored_hash = MetadataManager.get_signature_hash("directive", file_content)
 
-        # Block publishing if signature is missing, invalid, or modified
-        if signature_status is None:
+        if not stored_hash:
             has_pending = "kiwi-mcp:pending-validation" in file_content
             return {
-                "error": "Cannot publish: directive has no valid signature",
+                "error": "Cannot publish: directive has no signature",
                 "status": "missing",
                 "path": str(file_path),
                 "hint": "Directives must be validated before publishing",
@@ -1063,21 +1062,6 @@ class DirectiveHandler:
                     f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
                     f"project_path='{self.project_path}')"
                 ),
-            }
-
-        if signature_status.get("status") == "modified":
-            return {
-                "error": "Directive content has been modified since last validation",
-                "signature": signature_status,
-                "path": str(file_path),
-                "solution": "Use execute action 'update' or 'create' to re-validate the directive before publishing",
-            }
-        elif signature_status.get("status") == "invalid":
-            return {
-                "error": "Directive signature is invalid",
-                "signature": signature_status,
-                "path": str(file_path),
-                "solution": "Use execute action 'update' or 'create' to re-validate the directive before publishing",
             }
 
         # Parse directive to get content and metadata (including version from XML)
@@ -1240,6 +1224,15 @@ class DirectiveHandler:
         # Read and validate the file
         content = file_path.read_text()
 
+        # Check if signature already exists - create fails if signature exists
+        existing_signature = MetadataManager.get_signature_info("directive", content)
+        if existing_signature:
+            return {
+                "error": f"Directive '{directive_name}' already validated",
+                "suggestion": "Use 'update' action to re-validate",
+                "path": str(file_path),
+            }
+
         # Validate XML can be parsed
         try:
             strategy = MetadataManager.get_strategy("directive")
@@ -1361,19 +1354,34 @@ class DirectiveHandler:
                 "file": str(file_path),
             }
 
-        # Generate and add signature for validated content
-        signed_content = MetadataManager.sign_content("directive", content)
+        # Compute unified integrity hash
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
+        
+        # Build metadata dict for integrity computation
+        metadata = {
+            "category": directive_data.get("category"),
+            "description": directive_data.get("description"),
+            "model_tier": directive_data.get("model", {}).get("tier") if isinstance(directive_data.get("model"), dict) else None,
+        }
+        
+        content_hash = compute_unified_integrity(
+            item_type="directive",
+            item_id=directive_name,
+            version=directive_data.get("version", "0.0.0"),
+            file_content=content,
+            file_path=file_path,
+            metadata=metadata
+        )
+        
+        # Generate and add signature for validated content with unified integrity hash
+        signed_content = MetadataManager.sign_content_with_hash("directive", content, content_hash)
 
         # Update file with signature
         file_path.write_text(signed_content)
 
         # Get signature info for response
         signature_info = MetadataManager.get_signature_info("directive", signed_content)
-        content_hash = signature_info["hash"] if signature_info else None
         timestamp = signature_info["timestamp"] if signature_info else None
-        
-        # Compute canonical integrity hash for version-aware verification
-        canonical_integrity = self._compute_directive_integrity(directive_data, signed_content)
 
         try:
             directive = parse_directive_file(file_path)
@@ -1389,8 +1397,8 @@ class DirectiveHandler:
             "category": category,
             "validated": True,
             "signature": {"hash": content_hash, "timestamp": timestamp},
-            "integrity": canonical_integrity,
-            "integrity_short": short_hash(canonical_integrity),
+            "integrity": content_hash,
+            "integrity_short": content_hash[:12],
             "message": f"Directive validated and signed. Ready to use.",
         }
 
@@ -1420,6 +1428,15 @@ class DirectiveHandler:
 
         # Read the existing file
         content = file_path.read_text()
+
+        # Check if signature exists - update fails if signature missing
+        existing_signature = MetadataManager.get_signature_info("directive", content)
+        if not existing_signature:
+            return {
+                "error": f"Directive '{directive_name}' not validated",
+                "suggestion": "Use 'create' action to validate",
+                "path": str(file_path),
+            }
 
         # Validate XML can be parsed
         try:
@@ -1542,19 +1559,34 @@ class DirectiveHandler:
                 "file": str(file_path),
             }
 
-        # Generate and add signature for validated content
-        signed_content = MetadataManager.sign_content("directive", content)
+        # Compute unified integrity hash
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
+        
+        # Build metadata dict for integrity computation
+        metadata = {
+            "category": directive_data.get("category"),
+            "description": directive_data.get("description"),
+            "model_tier": directive_data.get("model", {}).get("tier") if isinstance(directive_data.get("model"), dict) else None,
+        }
+        
+        content_hash = compute_unified_integrity(
+            item_type="directive",
+            item_id=directive_name,
+            version=directive_data.get("version", "0.0.0"),
+            file_content=content,
+            file_path=file_path,
+            metadata=metadata
+        )
+        
+        # Generate and add signature for validated content with unified integrity hash
+        signed_content = MetadataManager.sign_content_with_hash("directive", content, content_hash)
 
         # Update file
         file_path.write_text(signed_content)
 
         # Get signature info for response
         signature_info = MetadataManager.get_signature_info("directive", signed_content)
-        content_hash = signature_info["hash"] if signature_info else None
         timestamp = signature_info["timestamp"] if signature_info else None
-        
-        # Compute canonical integrity hash for version-aware verification
-        canonical_integrity = self._compute_directive_integrity(directive_data, signed_content)
 
         try:
             directive = parse_directive_file(file_path)
@@ -1614,8 +1646,8 @@ class DirectiveHandler:
             "category": new_category or current_category or "unknown",
             "validated": True,
             "signature": {"hash": content_hash, "timestamp": timestamp},
-            "integrity": canonical_integrity,
-            "integrity_short": short_hash(canonical_integrity),
+            "integrity": content_hash,
+            "integrity_short": content_hash[:12],
             "message": f"Directive validated and signed. Ready to use.",
         }
 

@@ -379,9 +379,9 @@ class KnowledgeHandler:
 
                 self.logger.info(f"Downloaded knowledge entry from registry to: {target_path}")
 
-                # Verify hash after download for safety
+                # Check signature after download for safety
                 file_content = target_path.read_text()
-                signature_status = MetadataManager.verify_signature("knowledge", file_content)
+                signature_info = MetadataManager.get_signature_info("knowledge", file_content)
 
                 # Parse and return
                 entry_data = parse_knowledge_entry(target_path)
@@ -389,14 +389,13 @@ class KnowledgeHandler:
                 entry_data["destination"] = effective_destination
                 entry_data["path"] = str(target_path)
 
-                # Add warning if signature is invalid or modified (registry content should be valid)
-                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                # Add warning if no signature (registry content should be signed)
+                if not signature_info:
                     entry_data["warning"] = {
-                        "message": "Registry knowledge entry content signature is invalid or modified - content may be corrupted",
-                        "signature": signature_status,
+                        "message": "Registry knowledge entry has no signature - content may be corrupted",
                         "solution": "Use execute action 'update' or 'create' to re-validate the entry",
                     }
-                    self.logger.warning(f"Registry knowledge entry '{zettel_id}' has invalid signature: {signature_status}")
+                    self.logger.warning(f"Registry knowledge entry '{zettel_id}' has no signature")
 
                 # Include relationships if requested
                 if include_relationships:
@@ -414,18 +413,15 @@ class KnowledgeHandler:
 
                 # If destination differs from source, copy the file
                 if destination == "user":
-                    # Copy from project to user space
-                    # Verify hash before copying
+                    # Check signature before copying
                     content = file_path.read_text()
-                    signature_status = MetadataManager.verify_signature("knowledge", content)
-                    if signature_status:
-                        if signature_status.get("status") in ["modified", "invalid"]:
-                            return {
-                                "error": f"Knowledge entry content has been modified or signature is invalid",
-                                "signature": signature_status,
-                                "path": str(file_path),
-                                "solution": "Use execute action 'update' or 'create' to re-validate the entry before copying",
-                            }
+                    signature_info = MetadataManager.get_signature_info("knowledge", content)
+                    if not signature_info:
+                        return {
+                            "error": f"Knowledge entry has no signature",
+                            "path": str(file_path),
+                            "solution": "Use execute action 'update' or 'create' to re-validate the entry before copying",
+                        }
                     
                     content = file_path.read_text()
                     # Determine category from source path
@@ -441,19 +437,18 @@ class KnowledgeHandler:
                     entry_data["path"] = str(target_path)
                     return entry_data
                 else:
-                    # Read-only mode: verify and warn, but don't block
+                    # Read-only mode: check signature and warn if missing
                     file_content = file_path.read_text()
-                    signature_status = MetadataManager.verify_signature("knowledge", file_content)
+                    signature_info = MetadataManager.get_signature_info("knowledge", file_content)
                     
                     entry_data = parse_knowledge_entry(file_path)
                     entry_data["source"] = "project"
                     entry_data["path"] = str(file_path)
                     entry_data["mode"] = "read_only"
                     
-                    if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                    if not signature_info:
                         entry_data["warning"] = {
-                            "message": "Knowledge entry content has been modified or signature is invalid",
-                            "signature": signature_status,
+                            "message": "Knowledge entry has no signature",
                             "solution": "Use execute action 'update' or 'create' to re-validate",
                         }
                     
@@ -468,20 +463,16 @@ class KnowledgeHandler:
 
             # If destination differs from source, copy the file
             if destination == "project":
-                # Copy from user to project space
-                # Verify hash before copying
+                # Check signature before copying
                 content = file_path.read_text()
-                signature_status = MetadataManager.verify_signature("knowledge", content)
-                if signature_status:
-                    if signature_status.get("status") in ["modified", "invalid"]:
-                        return {
-                            "error": f"Knowledge entry content has been modified or signature is invalid",
-                            "signature": signature_status,
-                            "path": str(file_path),
-                            "solution": "Use execute action 'update' or 'create' to re-validate the entry before copying",
-                        }
+                signature_info = MetadataManager.get_signature_info("knowledge", content)
+                if not signature_info:
+                    return {
+                        "error": f"Knowledge entry has no signature",
+                        "path": str(file_path),
+                        "solution": "Use execute action 'update' or 'create' to re-validate the entry before copying",
+                    }
                 
-                content = file_path.read_text()
                 # Determine category from source path
                 relative_path = file_path.relative_to(search_base)
                 target_path = self.project_path / ".ai" / "knowledge" / relative_path
@@ -495,19 +486,18 @@ class KnowledgeHandler:
                 entry_data["path"] = str(target_path)
                 return entry_data
             else:
-                # Read-only mode: verify and warn, but don't block
+                # Read-only mode: check signature and warn if missing
                 file_content = file_path.read_text()
-                signature_status = MetadataManager.verify_signature("knowledge", file_content)
+                signature_info = MetadataManager.get_signature_info("knowledge", file_content)
                 
                 entry_data = parse_knowledge_entry(file_path)
                 entry_data["source"] = "user"
                 entry_data["path"] = str(file_path)
                 entry_data["mode"] = "read_only"
                 
-                if signature_status and signature_status.get("status") in ["modified", "invalid"]:
+                if not signature_info:
                     entry_data["warning"] = {
-                        "message": "Knowledge entry content has been modified or signature is invalid",
-                        "signature": signature_status,
+                        "message": "Knowledge entry has no signature",
                         "solution": "Use execute action 'update' or 'create' to re-validate",
                     }
                 
@@ -682,39 +672,53 @@ class KnowledgeHandler:
                 "suggestion": "Use load() to download from registry first",
             }
 
-        # ENFORCE hash validation - ALWAYS check, never skip
+        # Extract integrity hash from signature
         file_content = file_path.read_text()
-        signature_status = MetadataManager.verify_signature("knowledge", file_content)
+        stored_hash = MetadataManager.get_signature_hash("knowledge", file_content)
 
-        # Block execution if signature is missing, invalid, or modified
-        if signature_status is None:
+        if not stored_hash:
             return {
                 "status": "error",
-                "error": "Knowledge entry has no valid signature",
+                "error": "Knowledge entry has no signature",
                 "path": str(file_path),
                 "hint": "Knowledge entry needs validation",
                 "solution": (
-                    f"Run: execute(item_type='knowledge', action='update', "
+                    f"Run: execute(item_type='knowledge', action='create', "
                     f"item_id='{zettel_id}', parameters={{'location': 'project'}}, "
                     f"project_path='{self.project_path}')"
                 ),
             }
 
-        if signature_status.get("status") == "modified":
+        # Verify integrity using IntegrityVerifier
+        from kiwi_mcp.primitives.integrity_verifier import IntegrityVerifier
+        verifier = IntegrityVerifier()
+        
+        # Parse entry to get metadata
+        try:
+            entry_data = parse_knowledge_entry(file_path)
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": f"Failed to parse knowledge entry: {e}",
+                "path": str(file_path),
+            }
+        
+        verification = verifier.verify_single_file(
+            item_type="knowledge",
+            item_id=zettel_id,
+            version=entry_data.get("version", "0.0.0"),
+            file_path=file_path,
+            stored_hash=stored_hash,
+            project_path=self.project_path
+        )
+        
+        if not verification.success:
             return {
                 "status": "error",
                 "error": "Knowledge entry content has been modified since last validation",
-                "signature": signature_status,
+                "details": verification.error,
                 "path": str(file_path),
-                "solution": "Use execute action 'update' or 'create' to re-validate the entry",
-            }
-        elif signature_status.get("status") == "invalid":
-            return {
-                "status": "error",
-                "error": "Knowledge entry signature is invalid",
-                "signature": signature_status,
-                "path": str(file_path),
-                "solution": "Use execute action 'update' or 'create' to re-validate the entry",
+                "solution": "Run execute(action='update', ...) to re-validate the entry",
             }
 
         # Parse entry file and validate
@@ -768,8 +772,9 @@ class KnowledgeHandler:
                         "solution": "Fix the validation issues in the frontmatter",
                     }
             
-            # Compute canonical integrity for verification reporting
-            canonical_integrity = self._compute_knowledge_integrity(entry_data)
+            # Get integrity hash from signature
+            signature_info = MetadataManager.get_signature_info("knowledge", file_content)
+            content_hash = signature_info["hash"] if signature_info else None
 
             out = {
                 "status": "ready",
@@ -780,8 +785,8 @@ class KnowledgeHandler:
                 "entry_type": entry_data.get("entry_type"),
                 "category": entry_data.get("category"),
                 "tags": entry_data.get("tags", []),
-                "integrity": canonical_integrity,
-                "integrity_short": short_hash(canonical_integrity),
+                "integrity": content_hash,
+                "integrity_short": content_hash[:12] if content_hash else None,
                 "frontmatter_validated": True,
                 "instructions": "Use this knowledge to inform your decisions.",
             }
@@ -842,6 +847,15 @@ class KnowledgeHandler:
         # Read and validate the file
         content = file_path.read_text()
 
+        # Check if signature already exists - create fails if signature exists
+        existing_signature = MetadataManager.get_signature_info("knowledge", content)
+        if existing_signature:
+            return {
+                "error": f"Knowledge entry '{zettel_id}' already validated",
+                "suggestion": "Use 'update' action to re-validate",
+                "path": str(file_path),
+            }
+
         # Parse and validate
         try:
             entry_data = parse_knowledge_entry(file_path)
@@ -866,13 +880,16 @@ class KnowledgeHandler:
                 "path": str(file_path),
             }
         
-        # Generate signature for validated content using MetadataManager
-        from kiwi_mcp.utils.metadata_manager import compute_content_hash, generate_timestamp
+        # Compute unified integrity hash
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, generate_timestamp
         
-        # Extract content part (without frontmatter) for hashing
-        strategy = MetadataManager.get_strategy("knowledge")
-        content_for_hash = strategy.extract_content_for_hash(content)
-        content_hash = compute_content_hash(content_for_hash)
+        content_hash = compute_unified_integrity(
+            item_type="knowledge",
+            item_id=zettel_id,
+            version=entry_data.get("version", "1.0.0"),
+            file_content=content,
+            file_path=file_path
+        )
         timestamp = generate_timestamp()
 
         # Get existing frontmatter fields from parsed data
@@ -903,9 +920,6 @@ content_hash: {content_hash}
         full_content = frontmatter + content_body
         file_path.write_text(full_content)
 
-        # Compute canonical integrity hash for version-aware verification
-        canonical_integrity = self._compute_knowledge_integrity(entry_data)
-
         # Extract category from parsed entry data (validated by parser to match path)
         category = entry_data.get("category", "")
 
@@ -917,8 +931,8 @@ content_hash: {content_hash}
             "category": category,
             "entry_type": existing_frontmatter["entry_type"],
             "signature": {"hash": content_hash, "timestamp": timestamp},
-            "integrity": canonical_integrity,
-            "integrity_short": short_hash(canonical_integrity),
+            "integrity": content_hash,
+            "integrity_short": content_hash[:12],
         }
 
     async def _update_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -929,6 +943,18 @@ content_hash: {content_hash}
             return {
                 "error": f"Knowledge entry '{zettel_id}' not found",
                 "suggestion": "Use 'create' action for new entries",
+            }
+
+        # Read current content
+        current_content = file_path.read_text()
+        
+        # Check if signature exists - update fails if signature missing
+        existing_signature = MetadataManager.get_signature_info("knowledge", current_content)
+        if not existing_signature:
+            return {
+                "error": f"Knowledge entry '{zettel_id}' not validated",
+                "suggestion": "Use 'create' action to validate",
+                "path": str(file_path),
             }
 
         # Parse existing entry
@@ -1005,18 +1031,42 @@ content_hash: {content_hash}
                 }
             }
 
-        # Generate new signature for validated content using MetadataManager
-        from kiwi_mcp.utils.metadata_manager import compute_content_hash, generate_timestamp
-        content_hash = compute_content_hash(content)  # Hash just the content part
+        # Compute unified integrity hash
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, generate_timestamp
+        
+        # Use existing version or default to 1.0.0
+        version = entry_data.get("version", "1.0.0")
+        
+        # Build full content with frontmatter (without signature fields) for integrity computation
+        temp_frontmatter = f"""---
+zettel_id: {file_zettel_id}
+title: {title}
+entry_type: {entry_type}
+category: {category}
+tags: {json.dumps(tags)}
+version: "{version}"
+---
+
+"""
+        full_content_for_hash = temp_frontmatter + content
+        
+        content_hash = compute_unified_integrity(
+            item_type="knowledge",
+            item_id=file_zettel_id,
+            version=version,
+            file_content=full_content_for_hash,
+            file_path=file_path
+        )
         timestamp = generate_timestamp()
 
-        # Recreate frontmatter with signature (use file's zettel_id, not parameter)
+        # Recreate frontmatter with signature fields (use file's zettel_id, not parameter)
         frontmatter = f"""---
 zettel_id: {file_zettel_id}
 title: {title}
 entry_type: {entry_type}
 category: {category}
 tags: {json.dumps(tags)}
+version: "{version}"
 validated_at: {timestamp}
 content_hash: {content_hash}
 ---
@@ -1024,28 +1074,14 @@ content_hash: {content_hash}
 """
         full_content = frontmatter + content
         file_path.write_text(full_content)
-        
-        # Compute canonical integrity hash for version-aware verification
-        # Use existing version or default to 1.0.0
-        version = entry_data.get("version", "1.0.0")
-        entry_data_for_integrity = {
-            "zettel_id": file_zettel_id,
-            "title": title,
-            "entry_type": entry_type,
-            "category": category,
-            "tags": tags,
-            "version": version,
-            "content": content,
-        }
-        canonical_integrity = self._compute_knowledge_integrity(entry_data_for_integrity)
 
         return {
             "status": "updated",
             "zettel_id": file_zettel_id,
             "path": str(file_path),
             "signature": {"hash": content_hash, "timestamp": timestamp},
-            "integrity": canonical_integrity,
-            "integrity_short": short_hash(canonical_integrity),
+            "integrity": content_hash,
+            "integrity_short": content_hash[:12],
         }
 
     async def _delete_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1096,14 +1132,13 @@ content_hash: {content_hash}
                 "suggestion": "Create entry first before publishing",
             }
 
-        # ENFORCE hash validation - ALWAYS check, never skip
+        # Extract integrity hash from signature
         file_content = file_path.read_text()
-        signature_status = MetadataManager.verify_signature("knowledge", file_content)
+        stored_hash = MetadataManager.get_signature_hash("knowledge", file_content)
 
-        # Block publishing if signature is missing, invalid, or modified
-        if signature_status is None:
+        if not stored_hash:
             return {
-                "error": "Cannot publish: knowledge entry has no valid signature",
+                "error": "Cannot publish: knowledge entry has no signature",
                 "path": str(file_path),
                 "hint": "Knowledge entries must be validated before publishing",
                 "solution": (
@@ -1113,22 +1148,7 @@ content_hash: {content_hash}
                 ),
             }
 
-        if signature_status.get("status") == "modified":
-            return {
-                "error": "Knowledge entry content has been modified since last validation",
-                "signature": signature_status,
-                "path": str(file_path),
-                "solution": "Use execute action 'update' or 'create' to re-validate the entry before publishing",
-            }
-        elif signature_status.get("status") == "invalid":
-            return {
-                "error": "Knowledge entry signature is invalid",
-                "signature": signature_status,
-                "path": str(file_path),
-                "solution": "Use execute action 'update' or 'create' to re-validate the entry before publishing",
-            }
-
-        # Parse entry to get content and metadata (including version)
+        # Parse entry to get metadata
         # parse_knowledge_entry() will validate filename/zettel_id match and raise if mismatch
         try:
             entry_data = parse_knowledge_entry(file_path)

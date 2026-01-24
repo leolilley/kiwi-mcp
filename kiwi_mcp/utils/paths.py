@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional, Dict, Any
 import os
+from kiwi_mcp.utils.extensions import get_tool_extensions
 
 
 def get_user_home() -> Path:
@@ -66,11 +67,27 @@ def resolve_item_path(
             search_paths.append(get_user_space() / "directives")
     
     elif item_type == "tool":
-        ext = ".py"
+        # Tools support multiple extensions from extractors
+        tool_extensions = get_tool_extensions(Path(project_path) if project_path else None)
         if source in ("local", "project") and project_path:
             search_paths.append(Path(project_path) / ".ai" / "tools")
         if source in ("local", "user"):
             search_paths.append(get_user_space() / "tools")
+        
+        # Search with all supported extensions
+        for base_path in search_paths:
+            if not base_path.exists():
+                continue
+            for ext in tool_extensions:
+                for category_dir in base_path.glob("*"):
+                    if category_dir.is_dir():
+                        file_path = category_dir / f"{item_id}{ext}"
+                        if file_path.exists():
+                            return file_path
+                direct_path = base_path / f"{item_id}{ext}"
+                if direct_path.exists():
+                    return direct_path
+        return None
     
     elif item_type == "knowledge":
         ext = ".md"
@@ -171,13 +188,19 @@ def validate_path_structure(
         }
     """
     issues = []
-    expected_ext = ".md" if item_type in ("directive", "knowledge") else ".py"
+    
+    # Get valid extensions for item type
+    if item_type == "tool":
+        valid_extensions = get_tool_extensions(project_path)
+    else:
+        valid_extensions = [".md"]
     
     # Check extension
-    if file_path.suffix != expected_ext:
+    if file_path.suffix not in valid_extensions:
+        ext_list = ", ".join(valid_extensions)
         issues.append(
             f"Invalid extension '{file_path.suffix}'. "
-            f"Expected '{expected_ext}' for {item_type}"
+            f"Expected one of: {ext_list} for {item_type}"
         )
     
     # Determine expected base

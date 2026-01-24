@@ -155,6 +155,96 @@ class IntegrityVerifier:
         """
         return self.verify_chain([tool])
     
+    def verify_single_file(
+        self,
+        item_type: str,
+        item_id: str,
+        version: str,
+        file_path: 'Path',
+        stored_hash: str,
+        project_path: Optional['Path'] = None
+    ) -> VerificationResult:
+        """
+        Verify integrity of a single file against stored hash.
+        
+        Recomputes integrity and compares to stored hash.
+        
+        Args:
+            item_type: Type of item ('tool', 'directive', 'knowledge')
+            item_id: Item identifier
+            version: Version string
+            file_path: Path to file
+            stored_hash: Expected integrity hash from signature
+            project_path: Optional project root path
+            
+        Returns:
+            VerificationResult with success/failure
+        """
+        from pathlib import Path
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
+        
+        start_time = time.time()
+        
+        # Check verified cache
+        if stored_hash in self._verified_cache:
+            return VerificationResult(
+                success=True,
+                verified_count=1,
+                cached_count=1,
+                duration_ms=int((time.time() - start_time) * 1000)
+            )
+        
+        # Check failed cache
+        if stored_hash in self._failed_cache:
+            return VerificationResult(
+                success=False,
+                error=f"Previously failed integrity for {item_id}",
+                failed_tool_id=item_id,
+                duration_ms=int((time.time() - start_time) * 1000)
+            )
+        
+        # Compute integrity
+        try:
+            file_content = file_path.read_text() if isinstance(file_path, Path) else Path(file_path).read_text()
+            
+            computed_hash = compute_unified_integrity(
+                item_type=item_type,
+                item_id=item_id,
+                version=version,
+                file_content=file_content,
+                file_path=file_path if isinstance(file_path, Path) else Path(file_path),
+                metadata=None
+            )
+        except Exception as e:
+            return VerificationResult(
+                success=False,
+                error=f"Failed to compute integrity for {item_id}: {e}",
+                failed_tool_id=item_id,
+                duration_ms=int((time.time() - start_time) * 1000)
+            )
+        
+        # Compare hashes
+        if computed_hash != stored_hash:
+            self._failed_cache.add(stored_hash)
+            return VerificationResult(
+                success=False,
+                error=(
+                    f"Integrity mismatch for {item_id}@{version}: "
+                    f"computed={short_hash(computed_hash)}, stored={short_hash(stored_hash)}"
+                ),
+                failed_tool_id=item_id,
+                duration_ms=int((time.time() - start_time) * 1000)
+            )
+        
+        # Cache successful verification
+        self._verified_cache[stored_hash] = time.time()
+        
+        return VerificationResult(
+            success=True,
+            verified_count=1,
+            duration_ms=int((time.time() - start_time) * 1000)
+        )
+    
     def is_verified(self, content_hash: str) -> bool:
         """
         Check if a hash has been previously verified.

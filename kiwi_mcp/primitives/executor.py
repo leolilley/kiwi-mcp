@@ -48,14 +48,19 @@ class ExecutionContext:
 class ChainResolver:
     """Resolves and caches executor chains with full integrity data."""
 
-    def __init__(self, registry):
+    def __init__(self, registry, project_path: Optional['Path'] = None):
         """
-        Initialize with tool registry.
+        Initialize with registry and optional project path for local resolution.
 
         Args:
-            registry: ToolRegistry instance for resolving tool chains
+            registry: ToolRegistry instance (kept for backward compatibility)
+            project_path: Optional path for local chain resolution
         """
         self.registry = registry
+        self.project_path = project_path
+        
+        # Lazy-loaded local resolver
+        self._local_resolver = None
         
         # Chain cache by tool_id
         self._chain_cache: Dict[str, List[Dict]] = {}
@@ -66,21 +71,60 @@ class ChainResolver:
         # Validation cache: (parent_hash, child_hash) -> validation result
         self._validation_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
+    def _get_local_resolver(self):
+        """Lazy-load local chain resolver."""
+        if self._local_resolver is None and self.project_path:
+            from pathlib import Path
+            from .local_chain_resolver import LocalChainResolver
+            path_obj = self.project_path if isinstance(self.project_path, Path) else Path(self.project_path)
+            self._local_resolver = LocalChainResolver(path_obj)
+        return self._local_resolver
+
     async def resolve(self, tool_id: str) -> List[Dict]:
-        """Resolve chain from database or cache."""
+        """
+        Resolve chain from local files only.
+        
+        Local-only resolution ensures:
+        - Tools are executed from the local filesystem
+        - Registry tools must be loaded first via 'load' action
+        - No network dependency for execution
+        
+        Raises an error if tool not found locally (instead of falling back to registry).
+        """
         if tool_id in self._chain_cache:
             return self._chain_cache[tool_id]
 
-        chain = await self.registry.resolve_chain(tool_id)
-        self._chain_cache[tool_id] = chain
-        return chain
+        # Try local resolution
+        local_resolver = self._get_local_resolver()
+        if local_resolver:
+            try:
+                chain = await local_resolver.resolve_chain(tool_id)
+                if chain:
+                    self._chain_cache[tool_id] = chain
+                    return chain
+            except Exception as e:
+                # Re-raise local resolution errors (don't fallback to registry)
+                logger.error(f"Failed to resolve chain for '{tool_id}': {e}")
+                raise
+        
+        # No local resolver configured - return empty chain
+        # This maintains backward compatibility when project_path is not provided
+        return []
 
     async def resolve_batch(self, tool_ids: List[str]) -> Dict[str, List[Dict]]:
-        """Batch resolve multiple chains (avoids N+1)."""
+        """Batch resolve multiple chains from local files."""
         uncached = [t for t in tool_ids if t not in self._chain_cache]
+        
         if uncached:
-            results = await self.registry.resolve_chains_batch(uncached)
-            self._chain_cache.update(results)
+            local_resolver = self._get_local_resolver()
+            if local_resolver:
+                results = await local_resolver.resolve_chains_batch(uncached)
+                self._chain_cache.update(results)
+            else:
+                # No local resolver - return empty chains for uncached
+                for tool_id in uncached:
+                    self._chain_cache[tool_id] = []
+        
         return {t: self._chain_cache.get(t, []) for t in tool_ids}
 
     def merge_configs(self, chain: List[Dict]) -> Dict:
@@ -89,8 +133,9 @@ class ChainResolver:
         # Process from primitive to leaf (so leaf overrides)
         for item in reversed(chain):
             manifest = item.get("manifest", {})
-            config = manifest.get("config", {})
-            merged = self._deep_merge(merged, config)
+            config = manifest.get("config")
+            if config:  # Only merge if config is not None
+                merged = self._deep_merge(merged, config)
         return merged
 
     def _deep_merge(self, base: Dict, override: Dict) -> Dict:
@@ -170,17 +215,25 @@ class PrimitiveExecutor:
     Only subprocess and http_client are hardcoded. Everything else is data.
     """
 
-    def __init__(self, registry, verify_integrity: bool = True, validate_chain: bool = True):
+    def __init__(
+        self, 
+        registry, 
+        project_path: Optional['Path'] = None,
+        verify_integrity: bool = True, 
+        validate_chain: bool = True
+    ):
         """
-        Initialize with tool registry.
+        Initialize with tool registry and optional project path.
 
         Args:
-            registry: ToolRegistry instance for resolving tool chains
+            registry: ToolRegistry instance (kept for backward compatibility)
+            project_path: Optional project path for local chain resolution
             verify_integrity: Whether to verify integrity at every step
             validate_chain: Whether to validate parent→child relationships
         """
         self.registry = registry
-        self.resolver = ChainResolver(registry)
+        self.project_path = project_path
+        self.resolver = ChainResolver(registry, project_path)
         self.subprocess_primitive = SubprocessPrimitive()
         self.http_client_primitive = HttpClientPrimitive()
         
@@ -363,10 +416,16 @@ class PrimitiveExecutor:
 
             # 7. Execute with appropriate primitive
             if primitive_type == "subprocess":
-                result = await self.subprocess_primitive.execute(config, params)
+                # Build execution config with file path and CLI args
+                exec_config = self._build_subprocess_config(config, params)
+                # Remove internal params before passing to subprocess
+                exec_params = {k: v for k, v in params.items() if not k.startswith("_")}
+                result = await self.subprocess_primitive.execute(exec_config, exec_params)
                 exec_result = self._convert_subprocess_result(result)
             elif primitive_type == "http_client":
-                result = await self.http_client_primitive.execute(config, params)
+                # Remove internal params for HTTP (like _file_path)
+                exec_params = {k: v for k, v in params.items() if not k.startswith("_")}
+                result = await self.http_client_primitive.execute(config or {}, exec_params)
                 exec_result = self._convert_http_result(result)
             else:
                 return ExecutionResult(
@@ -484,6 +543,48 @@ class PrimitiveExecutor:
             "warnings": warnings,
             "cached_count": cached_count,
         }
+
+    def _build_subprocess_config(
+        self, 
+        config: Dict[str, Any], 
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Build subprocess config with file path and CLI args.
+        
+        Injects the _file_path from params into config args, and converts
+        user params to CLI-style arguments.
+        
+        Args:
+            config: Merged config from chain (command, args, env, etc.)
+            params: Runtime params including _file_path and user inputs
+            
+        Returns:
+            Config dict ready for subprocess execution
+        """
+        exec_config = config.copy()
+        args = list(config.get("args", []))
+        
+        # Inject file path as first arg (for python/script execution)
+        file_path = params.get("_file_path")
+        if file_path:
+            args.insert(0, file_path)
+        
+        # Convert user params to CLI args (--key value)
+        for key, value in params.items():
+            if key.startswith("_"):
+                continue  # Skip internal params
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                if value:
+                    args.append(f"--{key}")
+            else:
+                args.append(f"--{key}")
+                args.append(str(value))
+        
+        exec_config["args"] = args
+        return exec_config
 
     def _convert_subprocess_result(self, result: SubprocessResult) -> ExecutionResult:
         """Convert SubprocessResult to ExecutionResult."""

@@ -110,9 +110,9 @@ class ChainValidator:
         Returns:
             Dict with valid, issues, warnings
         """
-        parent_manifest = parent.get("manifest", {})
-        validation_config = parent_manifest.get("validation", {})
-        child_schemas = validation_config.get("child_schemas", [])
+        parent_manifest = parent.get("manifest") or {}
+        validation_config = parent_manifest.get("validation") or {}
+        child_schemas = validation_config.get("child_schemas") or []
         
         # Primitives don't need to validate children (they're the bottom)
         if parent.get("tool_type") == "primitive":

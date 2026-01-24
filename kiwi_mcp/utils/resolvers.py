@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 import logging
 import os
+from kiwi_mcp.utils.extensions import get_tool_extensions
 
 logger = logging.getLogger(__name__)
 
@@ -63,15 +64,21 @@ class ToolResolver:
     
     def resolve(self, tool_name: str) -> Optional[Path]:
         """Find tool file in project > user order."""
-        if self.project_tools.exists():
-            for file_path in self.project_tools.rglob(f"{tool_name}.py"):
-                if file_path.is_file():
-                    return file_path
+        extensions = get_tool_extensions(self.project_path)
         
+        # Check project space
+        if self.project_tools.exists():
+            for ext in extensions:
+                for file_path in self.project_tools.rglob(f"{tool_name}{ext}"):
+                    if file_path.is_file():
+                        return file_path
+        
+        # Check user space
         if self.user_tools.exists():
-            for file_path in self.user_tools.rglob(f"{tool_name}.py"):
-                if file_path.is_file():
-                    return file_path
+            for ext in extensions:
+                for file_path in self.user_tools.rglob(f"{tool_name}{ext}"):
+                    if file_path.is_file():
+                        return file_path
         
         return None
 

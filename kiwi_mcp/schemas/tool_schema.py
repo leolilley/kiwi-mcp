@@ -2,41 +2,177 @@
 Schema-driven extraction and validation engine.
 
 Architecture:
-1. BOOTSTRAP (minimal hardcode) - just enough to load extractors
-2. EXTRACTION FUNCTIONS (hardcoded implementation) - referenced by rules
-3. EXTRACTOR TOOLS (data) - define WHAT to extract using WHICH function
-4. VALIDATION (hardcoded) - validates tools and extractors
+1. BOOTSTRAP - Loads extractor tools (reads EXTENSIONS, PARSER, EXTRACTION_RULES)
+2. PARSERS - Minimal preprocessors (text, yaml, python_ast)
+3. PRIMITIVES - Generic extraction functions (filename, regex, path, ast_var, ast_docstring)
+4. VALIDATION - Validates tools and extractors
 
-The bootstrap reads EXTENSIONS and EXTRACTION_RULES from extractor tools.
-Everything else is data-driven.
+Extractors define WHAT to extract and HOW via schema rules.
+The engine provides only generic primitives.
 """
 
 import ast
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import yaml
-import re
 
 
 # =============================================================================
-# BOOTSTRAP - Minimal hardcoded layer to load extractors
+# PARSERS - Minimal preprocessors for different file types
+# =============================================================================
+
+def _parse_text(content: str) -> Dict[str, Any]:
+    """Raw text - no preprocessing."""
+    return {"content": content}
+
+
+def _parse_yaml(content: str) -> Dict[str, Any]:
+    """Parse YAML content."""
+    try:
+        return {"data": yaml.safe_load(content) or {}, "content": content}
+    except Exception:
+        return {"data": {}, "content": content}
+
+
+def _parse_python_ast(content: str) -> Dict[str, Any]:
+    """Parse Python AST."""
+    try:
+        return {"ast": ast.parse(content), "content": content}
+    except SyntaxError:
+        return {"ast": None, "content": content}
+
+
+PARSERS = {
+    "text": _parse_text,
+    "yaml": _parse_yaml,
+    "python_ast": _parse_python_ast,
+}
+
+
+# =============================================================================
+# PRIMITIVES - Generic extraction functions
+# =============================================================================
+
+def _extract_filename(rule: Dict, parsed: Dict, file_path: Path) -> Optional[str]:
+    """Extract name from filename stem."""
+    return file_path.stem
+
+
+def _extract_regex(rule: Dict, parsed: Dict, file_path: Path) -> Optional[str]:
+    """Extract value using regex pattern."""
+    content = parsed.get("content", "")
+    pattern = rule.get("pattern")
+    if not pattern:
+        return None
+    
+    flags = re.MULTILINE if rule.get("multiline") else 0
+    match = re.search(pattern, content, flags)
+    if match:
+        group = rule.get("group", 1)
+        try:
+            result = match.group(group)
+            return result.strip() if result else None
+        except IndexError:
+            return match.group(0).strip() if match.group(0) else None
+    return None
+
+
+def _extract_path(rule: Dict, parsed: Dict, file_path: Path) -> Optional[Any]:
+    """Extract value from parsed dict by key path."""
+    data = parsed.get("data", {})
+    if not isinstance(data, dict):
+        return None
+    
+    key = rule.get("key", "")
+    keys = key.split(".") if "." in key else [key]
+    
+    current = data
+    for k in keys:
+        if isinstance(current, dict) and k in current:
+            current = current[k]
+        else:
+            # Try fallback
+            fallback = rule.get("fallback")
+            if fallback and isinstance(data, dict):
+                return data.get(fallback)
+            return None
+    return current
+
+
+def _extract_ast_var(rule: Dict, parsed: Dict, file_path: Path) -> Optional[Any]:
+    """Extract module-level variable from Python AST."""
+    tree = parsed.get("ast")
+    if not tree:
+        return None
+    
+    var_name = rule.get("name")
+    if not var_name:
+        return None
+    
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id == var_name:
+                try:
+                    return ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    if isinstance(node.value, ast.Constant):
+                        return node.value.value
+                    return None
+    return None
+
+
+def _extract_ast_docstring(rule: Dict, parsed: Dict, file_path: Path) -> Optional[str]:
+    """Extract module docstring from Python AST."""
+    tree = parsed.get("ast")
+    if not tree or not tree.body:
+        return None
+    
+    first = tree.body[0]
+    if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+        if isinstance(first.value.value, str):
+            docstring = first.value.value.strip()
+            # Extract first paragraph only
+            lines = docstring.split("\n")
+            desc_lines = []
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    break
+                desc_lines.append(line)
+            return " ".join(desc_lines) if desc_lines else docstring
+    return None
+
+
+PRIMITIVES = {
+    "filename": _extract_filename,
+    "regex": _extract_regex,
+    "path": _extract_path,
+    "ast_var": _extract_ast_var,
+    "ast_docstring": _extract_ast_docstring,
+}
+
+
+# =============================================================================
+# BOOTSTRAP - Loads extractor tools
 # =============================================================================
 
 class Bootstrap:
-    """Minimal bootstrap to load extractor tools. Just reads module variables."""
+    """Load extractor tools by reading their module variables."""
 
     @staticmethod
     def load_extractor(file_path: Path) -> Optional[Dict[str, Any]]:
         """
-        Load an extractor tool's EXTENSIONS and EXTRACTION_RULES.
-        
-        This is the ONLY hardcoded parsing - everything else is data-driven.
+        Load an extractor tool's EXTENSIONS, PARSER, SIGNATURE_FORMAT, and EXTRACTION_RULES.
         """
         try:
             content = file_path.read_text()
             tree = ast.parse(content)
             
             extensions = None
+            parser = "text"  # Default parser
+            signature_format = None
             rules = None
             
             for node in tree.body:
@@ -48,6 +184,16 @@ class Bootstrap:
                                 extensions = ast.literal_eval(node.value)
                             except (ValueError, TypeError):
                                 pass
+                        elif target.id == "PARSER":
+                            try:
+                                parser = ast.literal_eval(node.value)
+                            except (ValueError, TypeError):
+                                pass
+                        elif target.id == "SIGNATURE_FORMAT":
+                            try:
+                                signature_format = ast.literal_eval(node.value)
+                            except (ValueError, TypeError):
+                                pass
                         elif target.id == "EXTRACTION_RULES":
                             try:
                                 rules = ast.literal_eval(node.value)
@@ -55,7 +201,13 @@ class Bootstrap:
                                 pass
             
             if extensions and rules:
-                return {"extensions": extensions, "rules": rules, "path": file_path}
+                return {
+                    "extensions": extensions,
+                    "parser": parser,
+                    "signature_format": signature_format or {"prefix": "#", "after_shebang": True},
+                    "rules": rules,
+                    "path": file_path,
+                }
             return None
             
         except Exception:
@@ -63,113 +215,19 @@ class Bootstrap:
 
 
 # =============================================================================
-# EXTRACTION FUNCTIONS - Implementation layer referenced by rules
-# =============================================================================
-
-class ExtractionFunctions:
-    """
-    Extraction function implementations.
-    
-    Extractor rules reference these by 'type' name.
-    These are hardcoded because they're the implementation layer.
-    """
-
-    @staticmethod
-    def filename_stem(_rule: Dict, _parsed: Dict, file_path: Path) -> Optional[str]:
-        """Extract name from filename."""
-        return file_path.stem
-
-    @staticmethod
-    def module_var(rule: Dict, parsed: Dict, _file_path: Path) -> Optional[Any]:
-        """Extract module-level variable from Python AST."""
-        tree = parsed.get("ast")
-        if not tree:
-            return None
-        
-        var_name = rule["name"]
-        
-        for node in tree.body:
-            if isinstance(node, ast.Assign) and len(node.targets) == 1:
-                target = node.targets[0]
-                if isinstance(target, ast.Name) and target.id == var_name:
-                    try:
-                        return ast.literal_eval(node.value)
-                    except (ValueError, TypeError):
-                        if isinstance(node.value, ast.Constant):
-                            return node.value.value
-                        return None
-        return None
-
-    @staticmethod
-    def docstring(_rule: Dict, parsed: Dict, _file_path: Path) -> Optional[str]:
-        """Extract module docstring from Python AST."""
-        tree = parsed.get("ast")
-        if not tree or not tree.body:
-            return None
-        
-        first = tree.body[0]
-        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
-            if isinstance(first.value.value, str):
-                docstring = first.value.value.strip()
-                lines = docstring.split("\n")
-                desc_lines = []
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        break
-                    desc_lines.append(line)
-                return " ".join(desc_lines) if desc_lines else docstring
-        return None
-
-    @staticmethod
-    def yaml_key(rule: Dict, parsed: Dict, _file_path: Path) -> Optional[Any]:
-        """Extract value from YAML by key path."""
-        data = parsed.get("data", {})
-        path = rule["path"]
-        
-        keys = path.split(".")
-        current = data
-        for key in keys:
-            if isinstance(current, dict) and key in current:
-                current = current[key]
-            else:
-                fallback = rule.get("fallback")
-                if fallback and isinstance(data, dict):
-                    return data.get(fallback)
-                return None
-        return current
-
-
-# Map of type names to functions
-EXTRACTION_FUNCTION_MAP = {
-    "filename_stem": ExtractionFunctions.filename_stem,
-    "module_var": ExtractionFunctions.module_var,
-    "docstring": ExtractionFunctions.docstring,
-    "yaml_key": ExtractionFunctions.yaml_key,
-}
-
-
-# =============================================================================
-# EXTRACTOR VALIDATION - Validates extractor tools' rules
+# EXTRACTOR VALIDATION
 # =============================================================================
 
 class ExtractorValidator:
-    """Validates extractor tools have correct EXTENSIONS and EXTRACTION_RULES."""
+    """Validates extractor tools have correct structure."""
 
     @staticmethod
     def validate(extractor_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Validate an extractor's structure.
-        
-        Args:
-            extractor_data: Dict with 'extensions' and 'rules'
-            
-        Returns:
-            {"valid": bool, "issues": list}
-        """
+        """Validate an extractor's structure."""
         issues = []
         
         extensions = extractor_data.get("extensions")
+        parser = extractor_data.get("parser", "text")
         rules = extractor_data.get("rules")
         
         # Validate EXTENSIONS
@@ -183,6 +241,10 @@ class ExtractorValidator:
                     issues.append(f"Extension must be string, got {type(ext).__name__}")
                 elif not ext.startswith("."):
                     issues.append(f"Extension must start with '.', got '{ext}'")
+        
+        # Validate PARSER
+        if parser not in PARSERS:
+            issues.append(f"Unknown PARSER '{parser}'. Valid: {list(PARSERS.keys())}")
         
         # Validate EXTRACTION_RULES
         if not rules:
@@ -198,17 +260,19 @@ class ExtractorValidator:
                 rule_type = rule.get("type")
                 if not rule_type:
                     issues.append(f"Rule for '{field_name}' missing 'type'")
-                elif rule_type not in EXTRACTION_FUNCTION_MAP:
+                elif rule_type not in PRIMITIVES:
                     issues.append(
                         f"Rule '{field_name}' has unknown type '{rule_type}'. "
-                        f"Valid types: {list(EXTRACTION_FUNCTION_MAP.keys())}"
+                        f"Valid types: {list(PRIMITIVES.keys())}"
                     )
                 
                 # Type-specific validation
-                if rule_type == "module_var" and "name" not in rule:
-                    issues.append(f"Rule '{field_name}' (module_var) requires 'name'")
-                if rule_type == "yaml_key" and "path" not in rule:
-                    issues.append(f"Rule '{field_name}' (yaml_key) requires 'path'")
+                if rule_type == "regex" and "pattern" not in rule:
+                    issues.append(f"Rule '{field_name}' (regex) requires 'pattern'")
+                if rule_type == "path" and "key" not in rule:
+                    issues.append(f"Rule '{field_name}' (path) requires 'key'")
+                if rule_type == "ast_var" and "name" not in rule:
+                    issues.append(f"Rule '{field_name}' (ast_var) requires 'name'")
         
         return {"valid": len(issues) == 0, "issues": issues}
 
@@ -243,11 +307,11 @@ class SchemaExtractor:
     """
     Extraction engine that loads rules from extractor tools.
     
-    Uses Bootstrap to load extractors, then ExtractionFunctions for extraction.
+    Uses Bootstrap to load extractors, then PRIMITIVES for extraction.
     """
 
     def __init__(self):
-        self._extension_rules: Dict[str, Dict] = {}
+        self._extractors: Dict[str, Dict] = {}  # ext -> {parser, rules}
         self._extractors_loaded = False
 
     def _load_extractors(self, project_path: Optional[Path] = None):
@@ -275,8 +339,10 @@ class SchemaExtractor:
                         validation = ExtractorValidator.validate(extractor_data)
                         if validation["valid"]:
                             for ext in extractor_data["extensions"]:
-                                self._extension_rules[ext.lower()] = extractor_data["rules"]
-                        # Skip invalid extractors silently during load
+                                self._extractors[ext.lower()] = {
+                                    "parser": extractor_data["parser"],
+                                    "rules": extractor_data["rules"],
+                                }
         
         self._extractors_loaded = True
 
@@ -285,45 +351,36 @@ class SchemaExtractor:
         self._load_extractors(project_path)
         
         ext = file_path.suffix.lower()
-        rules = self._extension_rules.get(ext)
+        extractor = self._extractors.get(ext)
         
-        if not rules:
+        if not extractor:
             raise ValueError(
                 f"No extractor found for extension '{ext}'. "
-                f"Available: {list(self._extension_rules.keys())}"
+                f"Available: {list(self._extractors.keys())}"
             )
         
         content = file_path.read_text()
-        parsed = self._parse_content(ext, content)
         
+        # Use the extractor's parser
+        parser_name = extractor["parser"]
+        parser_func = PARSERS.get(parser_name, _parse_text)
+        parsed = parser_func(content)
+        
+        # Apply extraction rules
         result = {}
-        for field, rule in rules.items():
-            func = EXTRACTION_FUNCTION_MAP.get(rule["type"])
-            if func:
-                result[field] = func(rule, parsed, file_path)
+        for field, rule in extractor["rules"].items():
+            primitive = PRIMITIVES.get(rule["type"])
+            if primitive:
+                result[field] = primitive(rule, parsed, file_path)
             else:
                 result[field] = None
         
         return result
 
-    def _parse_content(self, ext: str, content: str) -> Dict[str, Any]:
-        """Parse content based on extension."""
-        if ext == ".py":
-            try:
-                return {"ast": ast.parse(content), "content": content}
-            except SyntaxError:
-                return {"ast": None, "content": content}
-        elif ext in (".yaml", ".yml"):
-            try:
-                return {"data": yaml.safe_load(content) or {}, "content": content}
-            except Exception:
-                return {"data": {}, "content": content}
-        return {"content": content}
-
     def get_supported_extensions(self) -> List[str]:
         """Get list of supported file extensions."""
         self._load_extractors()
-        return list(self._extension_rules.keys())
+        return list(self._extractors.keys())
 
 
 # =============================================================================
@@ -355,7 +412,6 @@ class SchemaValidator:
                 condition_met = False
                 for cond_field, cond_value in required_unless.items():
                     actual_value = data.get(cond_field)
-                    # Support both single value and list of values
                     if isinstance(cond_value, list):
                         if actual_value in cond_value:
                             condition_met = True
