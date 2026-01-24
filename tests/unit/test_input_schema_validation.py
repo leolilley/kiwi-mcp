@@ -220,8 +220,8 @@ class TestKnowledgeFrontmatterSchemaValidation:
         assert "entry_type" in schema["properties"]
         assert set(schema["required"]) == {"zettel_id", "title"}
 
-    def test_build_base_frontmatter_schema_entry_type_enum(self):
-        """Test that entry_type has valid enum values."""
+    def test_build_base_frontmatter_schema_entry_type_string(self):
+        """Test that entry_type is a flexible string field (no enum constraint)."""
         from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
         
         handler = Mock(spec=KnowledgeHandler)
@@ -230,9 +230,9 @@ class TestKnowledgeFrontmatterSchemaValidation:
         schema = handler._build_base_frontmatter_schema(handler)
         
         entry_type_schema = schema["properties"]["entry_type"]
-        assert "enum" in entry_type_schema
-        assert "pattern" in entry_type_schema["enum"]
-        assert "learning" in entry_type_schema["enum"]
+        assert entry_type_schema["type"] == "string"
+        # No enum constraint - entry_type is flexible
+        assert "enum" not in entry_type_schema
 
     def test_validate_frontmatter_with_schema_valid(self):
         """Test validation with valid frontmatter."""

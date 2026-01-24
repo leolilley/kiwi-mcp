@@ -145,9 +145,12 @@ def extract_category_path(
     if location == "project":
         if not project_path:
             return ""
-        expected_base = project_path / ".ai" / f"{item_type}s"
+        # Map item type to folder name
+        folder_name = "tools" if item_type == "tool" else "directives" if item_type == "directive" else "knowledge"
+        expected_base = project_path / ".ai" / folder_name
     else:
-        expected_base = get_user_space() / f"{item_type}s"
+        folder_name = "tools" if item_type == "tool" else "directives" if item_type == "directive" else "knowledge"
+        expected_base = get_user_space() / folder_name
     
     # Get relative path from base
     try:
@@ -214,9 +217,12 @@ def validate_path_structure(
                 "expected_base": "",
                 "actual_path": str(file_path)
             }
-        expected_base = project_path / ".ai" / f"{item_type}s"
+        # Map item type to folder name
+        folder_name = "tools" if item_type == "tool" else "directives" if item_type == "directive" else "knowledge"
+        expected_base = project_path / ".ai" / folder_name
     else:
-        expected_base = get_user_space() / f"{item_type}s"
+        folder_name = "tools" if item_type == "tool" else "directives" if item_type == "directive" else "knowledge"
+        expected_base = get_user_space() / folder_name
     
     # Check if path is under expected base
     try:

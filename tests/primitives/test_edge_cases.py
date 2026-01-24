@@ -8,7 +8,7 @@ import os
 import tempfile
 import pytest
 from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 
 from kiwi_mcp.primitives import (
     SubprocessPrimitive,
@@ -378,38 +378,95 @@ class TestPrimitiveExecutorEdgeCases:
     """Edge cases for PrimitiveExecutor orchestration."""
 
     @pytest.fixture
-    def mock_registry(self):
-        registry = MagicMock()
-        registry.resolve_chain = AsyncMock()
-        return registry
+    def project_path(self, tmp_path):
+        """Create test project with tools."""
+        project = tmp_path / "test_project"
+        project.mkdir()
+        tools_dir = project / ".ai" / "tools"
+        tools_dir.mkdir(parents=True)
+        
+        # Create subprocess primitive
+        primitives_dir = tools_dir / "primitives"
+        primitives_dir.mkdir()
+        subprocess_file = primitives_dir / "subprocess.py"
+        subprocess_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:0000000000000000000000000000000000000000000000000000000000000000
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "primitives"
+""")
+        
+        # Create python_runtime
+        runtimes_dir = tools_dir / "runtimes"
+        runtimes_dir.mkdir()
+        python_runtime_file = runtimes_dir / "python_runtime.py"
+        python_runtime_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:1111111111111111111111111111111111111111111111111111111111111111
+__version__ = "1.0.0"
+__tool_type__ = "runtime"
+__executor_id__ = "subprocess"
+__category__ = "runtimes"
+__config__ = {"command": "python3", "timeout": 30, "env": {"VAR1": "base_value", "VAR2": "base_value2"}}
+""")
+        
+        # Create no_primitive_tool (python tool with no executor_id - should fail)
+        utility_dir = tools_dir / "utility"
+        utility_dir.mkdir()
+        no_primitive_file = utility_dir / "no_primitive_tool.py"
+        no_primitive_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:2222222222222222222222222222222222222222222222222222222222222222
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = None
+__category__ = "utility"
+__config__ = {"command": "echo", "args": ["test"]}
+""")
+        
+        # Create override_tool (python -> python_runtime -> subprocess)
+        override_tool_file = utility_dir / "override_tool.py"
+        override_tool_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:3333333333333333333333333333333333333333333333333333333333333333
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = "python_runtime"
+__category__ = "utility"
+__config__ = {"args": ["test"], "timeout": 60, "env": {"VAR1": "override_value", "VAR3": "new_value"}}
+""")
+        
+        # Create exception_tool (subprocess primitive)
+        exception_tool_file = utility_dir / "exception_tool.py"
+        exception_tool_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:4444444444444444444444444444444444444444444444444444444444444444
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "utility"
+__config__ = {"command": "echo", "args": ["test"]}
+""")
+        
+        # Create override_tool_bash (bash -> subprocess)
+        override_tool_bash_file = utility_dir / "override_tool_bash.py"
+        override_tool_bash_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:5555555555555555555555555555555555555555555555555555555555555555
+__version__ = "1.0.0"
+__tool_type__ = "bash"
+__executor_id__ = "subprocess"
+__category__ = "utility"
+__config__ = {"args": ["override"], "timeout": 60}
+""")
+        
+        return project
 
     @pytest.fixture
-    def executor(self, mock_registry):
-        return PrimitiveExecutor(mock_registry)
+    def executor(self, project_path):
+        return PrimitiveExecutor(project_path=project_path)
 
     @pytest.mark.asyncio
-    async def test_empty_tool_chain(self, executor, mock_registry):
+    async def test_empty_tool_chain(self, executor):
         """Test handling of empty tool chain."""
-        mock_registry.resolve_chain.return_value = []
-
         result = await executor.execute("empty_tool", {})
 
         assert not result.success
-        assert "not found or has no executor chain" in result.error
+        assert "not found" in result.error.lower()
 
     @pytest.mark.asyncio
-    async def test_tool_chain_with_no_primitive(self, executor, mock_registry):
+    async def test_tool_chain_with_no_primitive(self, executor):
         """Test handling of tool chain with no primitive specified."""
-        mock_registry.resolve_chain.return_value = [
-            {
-                "depth": 0,
-                "tool_id": "no_primitive_tool",
-                "tool_type": "python",
-                "executor_id": None,
-                "manifest": {"config": {"command": "echo", "args": ["test"]}},
-            }
-        ]
-
         result = await executor.execute("no_primitive_tool", {})
 
         # Should fail with clear error message
@@ -420,47 +477,8 @@ class TestPrimitiveExecutorEdgeCases:
         )
 
     @pytest.mark.asyncio
-    async def test_config_merging_with_conflicting_values(self, executor, mock_registry):
+    async def test_config_merging_with_conflicting_values(self, executor):
         """Test config merging when there are conflicting values."""
-        mock_registry.resolve_chain.return_value = [
-            {
-                "depth": 0,
-                "tool_id": "override_tool",
-                "tool_type": "python",
-                "executor_id": "python_runtime",
-                "manifest": {
-                    "config": {
-                        "args": ["test"],
-                        "timeout": 60,  # Should override base timeout
-                        "env": {
-                            "VAR1": "override_value",
-                            "VAR3": "new_value",
-                        },  # Should merge/override env
-                    }
-                },
-            },
-            {
-                "depth": 1,
-                "tool_id": "python_runtime",
-                "tool_type": "runtime",
-                "executor_id": "subprocess",
-                "manifest": {
-                    "config": {
-                        "command": "python3",
-                        "timeout": 30,
-                        "env": {"VAR1": "base_value", "VAR2": "base_value2"},
-                    }
-                },
-            },
-            {
-                "depth": 2,
-                "tool_id": "subprocess",
-                "tool_type": "primitive",
-                "executor_id": None,
-                "manifest": {"config": {}},
-            },
-        ]
-
         # Mock subprocess primitive to avoid actual execution
         with patch.object(executor.subprocess_primitive, "execute") as mock_execute:
             from kiwi_mcp.primitives.subprocess import SubprocessResult
@@ -490,29 +508,18 @@ class TestPrimitiveExecutorEdgeCases:
         assert "test" in result.data["stdout"]
 
     @pytest.mark.asyncio
-    async def test_registry_resolve_chain_exception(self, executor, mock_registry):
-        """Test handling when registry.resolve_chain raises an exception."""
-        mock_registry.resolve_chain.side_effect = Exception("Registry error")
-
+    async def test_registry_resolve_chain_exception(self, executor):
+        """Test handling when chain resolution raises an exception."""
+        # Tool doesn't exist, so resolution will fail
         result = await executor.execute("problematic_tool", {})
 
         # Should handle the exception gracefully
         assert not result.success
-        assert "Execution failed: Registry error" in result.error
+        assert "not found" in result.error.lower()
 
     @pytest.mark.asyncio
-    async def test_primitive_execution_exception(self, executor, mock_registry):
+    async def test_primitive_execution_exception(self, executor):
         """Test handling when primitive execution raises an exception."""
-        mock_registry.resolve_chain.return_value = [
-            {
-                "depth": 0,
-                "tool_id": "subprocess",
-                "tool_type": "primitive",
-                "executor_id": None,
-                "manifest": {"config": {"command": "echo", "args": ["test"]}},
-            }
-        ]
-
         # Mock subprocess primitive to raise an exception
         with patch.object(
             executor.subprocess_primitive, "execute", side_effect=Exception("Primitive error")
@@ -523,31 +530,9 @@ class TestPrimitiveExecutorEdgeCases:
             assert "Execution failed: Primitive error" in result.error
 
     @pytest.mark.asyncio
-    async def test_config_merging_with_non_dict_values(self, executor, mock_registry):
+    async def test_config_merging_with_non_dict_values(self, executor):
         """Test config merging when config contains non-dict values."""
-        mock_registry.resolve_chain.return_value = [
-            {
-                "depth": 0,
-                "tool_id": "override_tool",
-                "tool_type": "bash",
-                "executor_id": "subprocess",
-                "manifest": {
-                    "config": {
-                        "args": ["override"],  # Should replace, not merge
-                        "timeout": 60,
-                    }
-                },
-            },
-            {
-                "depth": 1,
-                "tool_id": "subprocess",
-                "tool_type": "primitive",
-                "executor_id": None,
-                "manifest": {"config": {"command": "echo", "args": ["base"], "timeout": 30}},
-            },
-        ]
-
-        result = await executor.execute("override_tool", {})
+        result = await executor.execute("override_tool_bash", {})
 
         # Should succeed with the override args
         assert result.success is True

@@ -38,7 +38,6 @@ class ToolHandler:
 
         # Initialize primitive executor with project path for local chain resolution
         self.primitive_executor = PrimitiveExecutor(
-            self.registry, 
             project_path=self.project_path
         )
         
@@ -331,7 +330,6 @@ class ToolHandler:
         tool_name: str,
         parameters: Optional[Dict[str, Any]] = None,
         dry_run: bool = False,
-        **kwargs,
     ) -> Dict[str, Any]:
         """
         Execute a tool or perform tool operation.
@@ -363,13 +361,12 @@ class ToolHandler:
             elif action == "create":
                 return await self._create_tool(
                     tool_name,
-                    params.get("content"),
                     params.get("location", "project"),
                     params.get("category"),
                 )
 
             elif action == "update":
-                return await self._update_tool(tool_name, params.get("updates", {}))
+                return await self._update_tool(tool_name)
 
             else:
                 return {"error": f"Unknown action: {action}"}
@@ -644,7 +641,7 @@ class ToolHandler:
         return {"status": "deleted", "tool_id": tool_name, "deleted_from": deleted}
 
     async def _create_tool(
-        self, tool_name: str, content: Optional[str], location: str, category: Optional[str]
+        self, tool_name: str, location: str, category: Optional[str]
     ) -> Dict[str, Any]:
         """
         Validate and register an existing tool file.
@@ -654,7 +651,6 @@ class ToolHandler:
         
         Args:
             tool_name: Name of the tool (snake_case)
-            content: Not used (kept for backward compatibility, file must exist)
             location: "project" or "user"
             category: Optional category subdirectory (for search hint)
         """
@@ -760,13 +756,14 @@ class ToolHandler:
             "signature": signature_info,
         }
 
-    async def _update_tool(self, tool_name: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    async def _update_tool(self, tool_name: str) -> Dict[str, Any]:
         """
-        Update existing tool with new content and re-sign.
+        Re-validate and re-sign existing tool file.
+        
+        Reads from file path only, validates, and updates signature.
         
         Args:
-            tool_name: Name of the tool to update
-            updates: Dict with optional keys: content, version, description
+            tool_name: Name of the tool to re-validate
         """
         # Find existing file
         file_path = self.resolver.resolve(tool_name)
@@ -776,7 +773,7 @@ class ToolHandler:
                 "suggestion": "Use 'create' action for new tools",
             }
         
-        # Get current content
+        # Get current content from file
         current_content = file_path.read_text()
         
         # Check if signature exists - update fails if signature missing
@@ -788,11 +785,8 @@ class ToolHandler:
                 "path": str(file_path),
             }
         
-        # Get updates
-        new_content = updates.get("content")
-        if not new_content:
-            # If no new content, just re-sign existing (for re-validation)
-            new_content = MetadataManager.get_strategy("tool", file_path=file_path, project_path=self.project_path).remove_signature(current_content)
+        # Remove signature for re-validation (file content only, no parameter content)
+        new_content = MetadataManager.get_strategy("tool", file_path=file_path, project_path=self.project_path).remove_signature(current_content)
         
         try:
             file_path.write_text(new_content)

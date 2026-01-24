@@ -1,39 +1,161 @@
 """
-Stress tests and complex scenarios for ChainResolver using real Supabase data.
+Stress tests and complex scenarios for ChainResolver using filesystem-based tools.
 """
 
 import pytest
 import asyncio
 import time
-from unittest.mock import AsyncMock, Mock, patch
-from kiwi_mcp.primitives.executor import ChainResolver, PrimitiveExecutor, ExecutionResult
+from unittest.mock import patch
+from kiwi_mcp.primitives.executor import ChainResolver, PrimitiveExecutor
 
 
 class TestChainResolverStress:
     """Stress tests for ChainResolver with real-world scenarios."""
 
     @pytest.fixture
-    def mock_registry(self):
-        """Mock ToolRegistry with real Supabase data patterns."""
-        registry = Mock()
-        registry.resolve_chain = AsyncMock()
-        registry.resolve_chains_batch = AsyncMock()
-        return registry
+    def project_path(self, tmp_path):
+        """Create test project with tools."""
+        project = tmp_path / "test_project"
+        project.mkdir()
+        tools_dir = project / ".ai" / "tools"
+        tools_dir.mkdir(parents=True)
+        
+        # Create subprocess primitive
+        primitives_dir = tools_dir / "primitives"
+        primitives_dir.mkdir()
+        subprocess_file = primitives_dir / "subprocess.py"
+        subprocess_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:0000000000000000000000000000000000000000000000000000000000000000
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "primitives"
+""")
+        
+        # Create python_runtime
+        runtimes_dir = tools_dir / "runtimes"
+        runtimes_dir.mkdir()
+        python_runtime_file = runtimes_dir / "python_runtime.py"
+        python_runtime_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:1111111111111111111111111111111111111111111111111111111111111111
+__version__ = "1.0.0"
+__tool_type__ = "runtime"
+__executor_id__ = "subprocess"
+__category__ = "runtimes"
+__config__ = {"venv": {"path": ".venv", "enabled": True, "auto_create": True}, "command": "python3", "install_deps": True}
+""")
+        
+        # Create node_runtime
+        node_runtime_file = runtimes_dir / "node_runtime.py"
+        node_runtime_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:2222222222222222222222222222222222222222222222222222222222222222
+__version__ = "1.0.0"
+__tool_type__ = "runtime"
+__executor_id__ = "subprocess"
+__category__ = "runtimes"
+__config__ = {"command": "node", "install_deps": True, "package_manager": "npm"}
+""")
+        
+        # Create data_processor tool
+        utility_dir = tools_dir / "utility"
+        utility_dir.mkdir()
+        data_processor_file = utility_dir / "data_processor.py"
+        data_processor_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:3333333333333333333333333333333333333333333333333333333333333333
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = "python_runtime"
+__category__ = "utility"
+__config__ = {"env": {"PYTHONPATH": "/app/lib", "DATA_CACHE_SIZE": "1000"}, "timeout": 1800, "requires": ["pandas", "numpy", "scipy"], "entrypoint": "process_data.py", "memory_limit": "2GB"}
+""")
+        
+        # Create web_scraper tool
+        web_scraper_file = utility_dir / "web_scraper.py"
+        web_scraper_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:4444444444444444444444444444444444444444444444444444444444444444
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = "python_runtime"
+__category__ = "utility"
+__config__ = {"env": {"USER_AGENT": "WebScraper/1.0", "MAX_RETRIES": "3"}, "timeout": 600, "requires": ["requests", "beautifulsoup4", "selenium"], "entrypoint": "scraper.py", "rate_limit": 10}
+""")
+        
+        # Create api_client tool (Node.js)
+        api_client_file = utility_dir / "api_client.py"
+        api_client_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:5555555555555555555555555555555555555555555555555555555555555555
+__version__ = "1.0.0"
+__tool_type__ = "node"
+__executor_id__ = "node_runtime"
+__category__ = "utility"
+__config__ = {"env": {"NODE_ENV": "production", "API_TIMEOUT": "30000"}, "timeout": 300, "requires": ["axios", "lodash", "moment"], "entrypoint": "api_client.js"}
+""")
+        
+        # Create mcp_supabase tool
+        mcp_dir = tools_dir / "mcp"
+        mcp_dir.mkdir()
+        mcp_supabase_file = mcp_dir / "mcp_supabase.py"
+        mcp_supabase_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:6666666666666666666666666666666666666666666666666666666666666666
+__version__ = "1.0.0"
+__tool_type__ = "mcp_server"
+__executor_id__ = "subprocess"
+__category__ = "mcp"
+__config__ = {"env": {"SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}"}, "args": ["-y", "@supabase/mcp-server-supabase@latest"], "command": "npx", "transport": "stdio"}
+""")
+        
+        # Create data_processor variants for concurrent tests
+        for i in range(100):
+            variant_file = utility_dir / f"data_processor_{i}.py"
+            variant_file.write_text(f"""# kiwi-mcp:validated:2026-01-01T00:00:00Z:{str(i % 10) * 64}
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = "python_runtime"
+__category__ = "utility"
+__config__ = {{"entrypoint": "process_data_{i}.py", "timeout": 1800}}
+""")
+        
+        # Create large_script tool
+        large_script_file = utility_dir / "large_script.py"
+        # Create config with large data
+        large_data = '["item_' + '", "item_'.join(str(i) for i in range(10000)) + '"]'
+        nested_dict = '{' + ', '.join(f'"key_{i}": "value_{i}"' for i in range(1000)) + '}'
+        large_script_file.write_text(f"""# kiwi-mcp:validated:2026-01-01T00:00:00Z:7777777777777777777777777777777777777777777777777777777777777777
+__version__ = "1.0.0"
+__tool_type__ = "bash"
+__executor_id__ = "subprocess"
+__category__ = "utility"
+__config__ = {{"large_data": {large_data}, "nested": {nested_dict}}}
+""")
+        
+        # Create script_a and script_b for circular dependency test
+        script_a_file = utility_dir / "script_a.py"
+        script_a_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:8888888888888888888888888888888888888888888888888888888888888888
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = "script_b"
+__category__ = "utility"
+__config__ = {"from": "script_a"}
+""")
+        
+        script_b_file = utility_dir / "script_b.py"
+        script_b_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:9999999999999999999999999999999999999999999999999999999999999999
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = "script_a"
+__category__ = "utility"
+__config__ = {"from": "script_b"}
+""")
+        
+        return project
 
     @pytest.fixture
-    def resolver(self, mock_registry):
-        """ChainResolver instance with mock registry."""
-        return ChainResolver(mock_registry)
+    def resolver(self, project_path):
+        """ChainResolver instance with test project."""
+        return ChainResolver(project_path)
 
     @pytest.fixture
-    def executor(self, mock_registry):
+    def executor(self, project_path):
         """PrimitiveExecutor for integration tests."""
-        return PrimitiveExecutor(mock_registry)
+        return PrimitiveExecutor(project_path=project_path)
 
-    # Real chain data from Supabase
+    # Chain data fixtures for config merging tests (no filesystem needed)
     @pytest.fixture
     def real_data_processor_chain(self):
-        """Real data_processor chain from Supabase."""
+        """Real data_processor chain data for config merging tests."""
         return [
             {
                 "depth": 0,
@@ -61,11 +183,6 @@ class TestChainResolverStress:
                         "command": "python3",
                         "install_deps": True,
                     },
-                    "tool_id": "python_runtime",
-                    "version": "1.0.0",
-                    "executor": "subprocess",
-                    "tool_type": "runtime",
-                    "description": "Python execution runtime",
                 },
             },
             {
@@ -73,30 +190,13 @@ class TestChainResolverStress:
                 "tool_id": "subprocess",
                 "tool_type": "primitive",
                 "executor_id": None,
-                "manifest": {
-                    "tool_id": "subprocess",
-                    "version": "1.0.0",
-                    "tool_type": "primitive",
-                    "description": "Subprocess execution primitive",
-                    "config_schema": {
-                        "type": "object",
-                        "required": ["command"],
-                        "properties": {
-                            "cwd": {"type": "string"},
-                            "env": {"type": "object", "additionalProperties": {"type": "string"}},
-                            "args": {"type": "array", "items": {"type": "string"}},
-                            "command": {"type": "string", "description": "Command to execute"},
-                            "timeout": {"type": "integer", "default": 300},
-                            "capture_output": {"type": "boolean", "default": True},
-                        },
-                    },
-                },
+                "manifest": {"config": {}},
             },
         ]
 
     @pytest.fixture
     def real_web_scraper_chain(self):
-        """Real web_scraper chain from Supabase."""
+        """Real web_scraper chain data for config merging tests."""
         return [
             {
                 "depth": 0,
@@ -124,11 +224,6 @@ class TestChainResolverStress:
                         "command": "python3",
                         "install_deps": True,
                     },
-                    "tool_id": "python_runtime",
-                    "version": "1.0.0",
-                    "executor": "subprocess",
-                    "tool_type": "runtime",
-                    "description": "Python execution runtime",
                 },
             },
             {
@@ -136,30 +231,13 @@ class TestChainResolverStress:
                 "tool_id": "subprocess",
                 "tool_type": "primitive",
                 "executor_id": None,
-                "manifest": {
-                    "tool_id": "subprocess",
-                    "version": "1.0.0",
-                    "tool_type": "primitive",
-                    "description": "Subprocess execution primitive",
-                    "config_schema": {
-                        "type": "object",
-                        "required": ["command"],
-                        "properties": {
-                            "cwd": {"type": "string"},
-                            "env": {"type": "object", "additionalProperties": {"type": "string"}},
-                            "args": {"type": "array", "items": {"type": "string"}},
-                            "command": {"type": "string", "description": "Command to execute"},
-                            "timeout": {"type": "integer", "default": 300},
-                            "capture_output": {"type": "boolean", "default": True},
-                        },
-                    },
-                },
+                "manifest": {"config": {}},
             },
         ]
 
     @pytest.fixture
     def real_api_client_chain(self):
-        """Real api_client chain from Supabase (Node.js)."""
+        """Real api_client chain data for config merging tests."""
         return [
             {
                 "depth": 0,
@@ -182,11 +260,6 @@ class TestChainResolverStress:
                 "executor_id": "subprocess",
                 "manifest": {
                     "config": {"command": "node", "install_deps": True, "package_manager": "npm"},
-                    "tool_id": "node_runtime",
-                    "version": "1.0.0",
-                    "executor": "subprocess",
-                    "tool_type": "runtime",
-                    "description": "Node.js execution runtime",
                 },
             },
             {
@@ -194,30 +267,13 @@ class TestChainResolverStress:
                 "tool_id": "subprocess",
                 "tool_type": "primitive",
                 "executor_id": None,
-                "manifest": {
-                    "tool_id": "subprocess",
-                    "version": "1.0.0",
-                    "tool_type": "primitive",
-                    "description": "Subprocess execution primitive",
-                    "config_schema": {
-                        "type": "object",
-                        "required": ["command"],
-                        "properties": {
-                            "cwd": {"type": "string"},
-                            "env": {"type": "object", "additionalProperties": {"type": "string"}},
-                            "args": {"type": "array", "items": {"type": "string"}},
-                            "command": {"type": "string", "description": "Command to execute"},
-                            "timeout": {"type": "integer", "default": 300},
-                            "capture_output": {"type": "boolean", "default": True},
-                        },
-                    },
-                },
+                "manifest": {"config": {}},
             },
         ]
 
     @pytest.fixture
     def real_mcp_supabase_chain(self):
-        """Real mcp_supabase chain from Supabase."""
+        """Real mcp_supabase chain data for config merging tests."""
         return [
             {
                 "depth": 0,
@@ -231,10 +287,6 @@ class TestChainResolverStress:
                         "command": "npx",
                         "transport": "stdio",
                     },
-                    "tool_id": "mcp_supabase",
-                    "version": "1.0.0",
-                    "executor": "subprocess",
-                    "tool_type": "mcp_server",
                 },
             },
             {
@@ -242,34 +294,13 @@ class TestChainResolverStress:
                 "tool_id": "subprocess",
                 "tool_type": "primitive",
                 "executor_id": None,
-                "manifest": {
-                    "tool_id": "subprocess",
-                    "version": "1.0.0",
-                    "tool_type": "primitive",
-                    "description": "Subprocess execution primitive",
-                    "config_schema": {
-                        "type": "object",
-                        "required": ["command"],
-                        "properties": {
-                            "cwd": {"type": "string"},
-                            "env": {"type": "object", "additionalProperties": {"type": "string"}},
-                            "args": {"type": "array", "items": {"type": "string"}},
-                            "command": {"type": "string", "description": "Command to execute"},
-                            "timeout": {"type": "integer", "default": 300},
-                            "capture_output": {"type": "boolean", "default": True},
-                        },
-                    },
-                },
+                "manifest": {"config": {}},
             },
         ]
 
     @pytest.mark.asyncio
-    async def test_real_data_processor_chain_resolution(
-        self, resolver, mock_registry, real_data_processor_chain
-    ):
-        """Test resolving real data_processor chain."""
-        mock_registry.resolve_chain.return_value = real_data_processor_chain
-
+    async def test_real_data_processor_chain_resolution(self, resolver):
+        """Test resolving real data_processor chain from filesystem."""
         result = await resolver.resolve("data_processor")
 
         assert len(result) == 3
@@ -329,23 +360,8 @@ class TestChainResolverStress:
         assert "venv" not in node_merged
 
     @pytest.mark.asyncio
-    async def test_batch_resolution_with_real_chains(
-        self,
-        resolver,
-        mock_registry,
-        real_data_processor_chain,
-        real_web_scraper_chain,
-        real_api_client_chain,
-    ):
-        """Test batch resolution with multiple real chains."""
-        # Simulate batch response from Supabase
-        batch_results = {
-            "data_processor": real_data_processor_chain,
-            "web_scraper": real_web_scraper_chain,
-            "api_client": real_api_client_chain,
-        }
-        mock_registry.resolve_chains_batch.return_value = batch_results
-
+    async def test_batch_resolution_with_real_chains(self, resolver):
+        """Test batch resolution with multiple real chains from filesystem."""
         tool_ids = ["data_processor", "web_scraper", "api_client"]
         result = await resolver.resolve_batch(tool_ids)
 
@@ -376,12 +392,8 @@ class TestChainResolverStress:
         assert merged["env"]["SUPABASE_ACCESS_TOKEN"] == "${SUPABASE_ACCESS_TOKEN}"
 
     @pytest.mark.asyncio
-    async def test_concurrent_chain_resolution_stress(
-        self, resolver, mock_registry, real_data_processor_chain
-    ):
+    async def test_concurrent_chain_resolution_stress(self, resolver):
         """Stress test concurrent chain resolutions."""
-        mock_registry.resolve_chain.return_value = real_data_processor_chain
-
         # Simulate 100 concurrent requests
         tasks = []
         for i in range(100):
@@ -401,22 +413,14 @@ class TestChainResolverStress:
         assert end_time - start_time < 1.0  # Less than 1 second
 
     @pytest.mark.asyncio
-    async def test_cache_efficiency_with_repeated_requests(
-        self, resolver, mock_registry, real_data_processor_chain
-    ):
+    async def test_cache_efficiency_with_repeated_requests(self, resolver):
         """Test cache efficiency with repeated requests."""
-        mock_registry.resolve_chain.return_value = real_data_processor_chain
-
-        # First request should hit registry
+        # First request should read from filesystem
         result1 = await resolver.resolve("data_processor")
-        assert mock_registry.resolve_chain.call_count == 1
 
         # Subsequent requests should use cache
         result2 = await resolver.resolve("data_processor")
         result3 = await resolver.resolve("data_processor")
-
-        # Registry should still only be called once
-        assert mock_registry.resolve_chain.call_count == 1
 
         # Results should be identical
         assert result1 == result2 == result3
@@ -505,13 +509,9 @@ class TestChainResolverStress:
         assert merged["logging"]["handlers"] == ["console", "file"]  # Child only
 
     @pytest.mark.asyncio
-    async def test_executor_integration_with_real_chains(
-        self, executor, mock_registry, real_data_processor_chain
-    ):
+    async def test_executor_integration_with_real_chains(self, executor):
         """Test full executor integration with real chain data."""
         from kiwi_mcp.primitives.subprocess import SubprocessResult
-
-        mock_registry.resolve_chain.return_value = real_data_processor_chain
 
         # Mock subprocess execution
         with patch.object(executor.subprocess_primitive, "execute") as mock_execute:
@@ -540,12 +540,8 @@ class TestChainResolverStress:
             assert merged_config["venv"]["enabled"] is True
 
     @pytest.mark.asyncio
-    async def test_error_propagation_in_complex_chains(
-        self, executor, mock_registry, real_data_processor_chain
-    ):
+    async def test_error_propagation_in_complex_chains(self, executor):
         """Test error propagation through complex chains."""
-        mock_registry.resolve_chain.return_value = real_data_processor_chain
-
         # Mock subprocess to fail
         with patch.object(executor.subprocess_primitive, "execute") as mock_execute:
             from kiwi_mcp.primitives.subprocess import SubprocessResult
@@ -566,38 +562,8 @@ class TestChainResolverStress:
             assert result.metadata["return_code"] == 1
 
     @pytest.mark.asyncio
-    async def test_memory_usage_with_large_chains(self, resolver, mock_registry):
+    async def test_memory_usage_with_large_chains(self, resolver):
         """Test memory usage with large chain configurations."""
-        # Create a chain with very large manifest data
-        large_manifest = {
-            "config": {
-                "large_data": ["item_" + str(i) for i in range(10000)],  # 10k items
-                "nested": {
-                    f"key_{i}": f"value_{i}"
-                    for i in range(1000)  # 1k nested items
-                },
-            }
-        }
-
-        large_chain = [
-            {
-                "depth": 0,
-                "tool_id": "large_script",
-                "tool_type": "bash",
-                "executor_id": "subprocess",
-                "manifest": large_manifest,
-            },
-            {
-                "depth": 1,
-                "tool_id": "subprocess",
-                "tool_type": "primitive",
-                "executor_id": None,
-                "manifest": {"config": {}},
-            },
-        ]
-
-        mock_registry.resolve_chain.return_value = large_chain
-
         # Should handle large configs without issues
         result = await resolver.resolve("large_script")
         merged = resolver.merge_configs(result)
@@ -607,31 +573,8 @@ class TestChainResolverStress:
         assert merged["nested"]["key_500"] == "value_500"
 
     @pytest.mark.asyncio
-    async def test_circular_dependency_detection(self, resolver, mock_registry):
+    async def test_circular_dependency_detection(self, resolver):
         """Test detection of circular dependencies in chains."""
-        # This shouldn't happen with proper DB constraints, but test anyway
-        circular_chain = [
-            {
-                "depth": 0,
-                "tool_id": "script_a",
-                "tool_type": "python",
-                "executor_id": "script_b",
-                "manifest": {"config": {"from": "script_a"}},
-            },
-            {
-                "depth": 1,
-                "tool_id": "script_b",
-                "tool_type": "python",
-                "executor_id": "script_a",  # Circular!
-                "manifest": {"config": {"from": "script_b"}},
-            },
-        ]
-
-        mock_registry.resolve_chain.return_value = circular_chain
-
-        # Should still work (DB function handles this)
-        result = await resolver.resolve("script_a")
-        merged = resolver.merge_configs(result)
-
-        # Config merging should still work
-        assert merged["from"] == "script_a"  # Child wins
+        # This should be detected by the resolver
+        with pytest.raises(Exception):  # Should raise an error for circular dependency
+            await resolver.resolve("script_a")

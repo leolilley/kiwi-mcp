@@ -1,105 +1,131 @@
 """
-Tests for ChainResolver in PrimitiveExecutor.
+Tests for ChainResolver - local filesystem chain resolution.
 """
 
 import pytest
-from unittest.mock import AsyncMock, Mock
-from kiwi_mcp.primitives.executor import ChainResolver
+from pathlib import Path
+from kiwi_mcp.primitives.executor import ChainResolver, ToolNotFoundError
 
 
 class TestChainResolver:
-    """Test ChainResolver functionality."""
+    """Test ChainResolver functionality with local filesystem."""
 
     @pytest.fixture
-    def mock_registry(self):
-        """Mock ToolRegistry."""
-        registry = Mock()
-        registry.resolve_chain = AsyncMock()
-        registry.resolve_chains_batch = AsyncMock()
-        return registry
+    def project_path(self, tmp_path):
+        """Create a test project structure."""
+        project = tmp_path / "test_project"
+        project.mkdir()
+        
+        # Create .ai/tools structure
+        tools_dir = project / ".ai" / "tools"
+        tools_dir.mkdir(parents=True)
+        
+        # Create subprocess primitive
+        primitives_dir = tools_dir / "primitives"
+        primitives_dir.mkdir()
+        subprocess_file = primitives_dir / "subprocess.py"
+        subprocess_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:0000000000000000000000000000000000000000000000000000000000000000
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "primitives"
+""")
+        
+        # Create python_runtime
+        runtimes_dir = tools_dir / "runtimes"
+        runtimes_dir.mkdir()
+        runtime_file = runtimes_dir / "python_runtime.py"
+        runtime_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:1111111111111111111111111111111111111111111111111111111111111111
+__version__ = "1.0.0"
+__tool_type__ = "runtime"
+__executor_id__ = "subprocess"
+__category__ = "runtimes"
+""")
+        
+        # Create test tool
+        utility_dir = tools_dir / "utility"
+        utility_dir.mkdir()
+        tool_file = utility_dir / "test_tool.py"
+        tool_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:2222222222222222222222222222222222222222222222222222222222222222
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = "python_runtime"
+__category__ = "utility"
+
+def main():
+    return "test"
+""")
+        
+        return project
 
     @pytest.fixture
-    def resolver(self, mock_registry):
-        """ChainResolver instance with mock registry."""
-        return ChainResolver(mock_registry)
+    def resolver(self, project_path):
+        """ChainResolver instance with test project."""
+        return ChainResolver(project_path)
 
     @pytest.mark.asyncio
-    async def test_resolve_single_chain(self, resolver, mock_registry):
-        """Test resolving a single chain."""
-        # Setup
-        tool_id = "enrich_emails"
-        expected_chain = [
-            {
-                "tool_id": "enrich_emails",
-                "manifest": {"config": {"entrypoint": "main.py", "requires": ["httpx"]}},
-            },
-            {
-                "tool_id": "python_runtime",
-                "manifest": {"config": {"command": "python3", "venv": {"enabled": True}}},
-            },
-            {
-                "tool_id": "subprocess",
-                "manifest": {"config": {"timeout": 300, "capture_output": True}},
-            },
-        ]
-        mock_registry.resolve_chain.return_value = expected_chain
-
-        # Execute
-        result = await resolver.resolve(tool_id)
-
-        # Assert
-        assert result == expected_chain
-        mock_registry.resolve_chain.assert_called_once_with(tool_id)
-
-        # Verify caching
-        result2 = await resolver.resolve(tool_id)
-        assert result2 == expected_chain
-        # Should still only be called once due to caching
-        assert mock_registry.resolve_chain.call_count == 1
+    async def test_resolve_single_chain(self, resolver):
+        """Test resolving a single chain from local files."""
+        chain = await resolver.resolve("test_tool")
+        
+        assert len(chain) == 3
+        assert chain[0]["tool_id"] == "test_tool"
+        assert chain[0]["tool_type"] == "python"
+        assert chain[0]["executor_id"] == "python_runtime"
+        
+        assert chain[1]["tool_id"] == "python_runtime"
+        assert chain[1]["tool_type"] == "runtime"
+        assert chain[1]["executor_id"] == "subprocess"
+        
+        assert chain[2]["tool_id"] == "subprocess"
+        assert chain[2]["tool_type"] == "primitive"
+        assert chain[2]["executor_id"] is None
 
     @pytest.mark.asyncio
-    async def test_resolve_batch(self, resolver, mock_registry):
+    async def test_resolve_chain_caching(self, resolver):
+        """Test that resolved chains are cached."""
+        # First call
+        chain1 = await resolver.resolve("test_tool")
+        
+        # Second call should use cache
+        chain2 = await resolver.resolve("test_tool")
+        
+        assert chain1 == chain2
+        assert "test_tool" in resolver._chain_cache
+
+    @pytest.mark.asyncio
+    async def test_resolve_nonexistent_tool(self, resolver):
+        """Test that nonexistent tools raise ToolNotFoundError."""
+        with pytest.raises(ToolNotFoundError) as exc_info:
+            await resolver.resolve("nonexistent_tool")
+        
+        assert "not found locally" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_resolve_batch(self, resolver):
         """Test batch resolving multiple chains."""
-        # Setup
-        tool_ids = ["enrich_emails", "scrape_maps"]
-        batch_results = {
-            "enrich_emails": [{"tool_id": "enrich_emails"}, {"tool_id": "subprocess"}],
-            "scrape_maps": [{"tool_id": "scrape_maps"}, {"tool_id": "subprocess"}],
-        }
-        mock_registry.resolve_chains_batch.return_value = batch_results
-
-        # Execute
-        result = await resolver.resolve_batch(tool_ids)
-
-        # Assert
-        assert result == batch_results
-        mock_registry.resolve_chains_batch.assert_called_once_with(tool_ids)
+        results = await resolver.resolve_batch(["test_tool"])
+        
+        assert "test_tool" in results
+        assert len(results["test_tool"]) == 3
 
     @pytest.mark.asyncio
-    async def test_resolve_batch_with_cache(self, resolver, mock_registry):
+    async def test_resolve_batch_with_cache(self, resolver):
         """Test batch resolve with some items already cached."""
-        # Setup - cache one item first
-        cached_chain = [{"tool_id": "enrich_emails"}]
-        resolver._chain_cache["enrich_emails"] = cached_chain
-
-        tool_ids = ["enrich_emails", "scrape_maps"]
-        batch_results = {"scrape_maps": [{"tool_id": "scrape_maps"}, {"tool_id": "subprocess"}]}
-        mock_registry.resolve_chains_batch.return_value = batch_results
-
-        # Execute
-        result = await resolver.resolve_batch(tool_ids)
-
-        # Assert
-        expected = {"enrich_emails": cached_chain, "scrape_maps": batch_results["scrape_maps"]}
-        assert result == expected
-        # Should only request uncached items
-        mock_registry.resolve_chains_batch.assert_called_once_with(["scrape_maps"])
+        # Cache one item first
+        chain = await resolver.resolve("test_tool")
+        resolver._chain_cache["test_tool"] = chain
+        
+        # Batch resolve should use cache
+        results = await resolver.resolve_batch(["test_tool"])
+        
+        assert results["test_tool"] == chain
 
     def test_merge_configs_child_overrides(self, resolver):
         """Test config merging where child overrides parent."""
         chain = [
             {
-                "tool_id": "enrich_emails",
+                "tool_id": "test_tool",
                 "manifest": {
                     "config": {"entrypoint": "main.py", "requires": ["httpx"], "timeout": 120}
                 },
@@ -130,7 +156,7 @@ class TestChainResolver:
         expected = {
             "entrypoint": "main.py",
             "requires": ["httpx"],
-            "timeout": 120,  # From leaf (enrich_emails)
+            "timeout": 120,  # From leaf (test_tool)
             "command": "python3",
             "venv": {"enabled": True, "path": "/tmp/venv"},
             "capture_output": True,
@@ -166,22 +192,6 @@ class TestChainResolver:
         }
         assert result == expected
 
-    @pytest.mark.asyncio
-    async def test_cache_hit(self, resolver, mock_registry):
-        """Test that cache prevents duplicate registry calls."""
-        # Setup cache
-        tool_id = "test_tool"
-        cached_chain = [{"tool_id": "test_tool"}]
-        resolver._chain_cache[tool_id] = cached_chain
-
-        # Execute
-        result = await resolver.resolve(tool_id)
-
-        # Assert
-        assert result == cached_chain
-        # Registry should not be called
-        mock_registry.resolve_chain.assert_not_called()
-
     def test_merge_configs_empty_chain(self, resolver):
         """Test merging with empty chain."""
         result = resolver.merge_configs([])
@@ -197,3 +207,28 @@ class TestChainResolver:
 
         result = resolver.merge_configs(chain)
         assert result == {"key": "value"}
+
+    @pytest.mark.asyncio
+    async def test_resolve_requires_project_path(self):
+        """Test that project_path is required."""
+        # None raises TypeError when trying to create Path(None)
+        with pytest.raises((ValueError, TypeError)):
+            ChainResolver(None)
+
+    @pytest.mark.asyncio
+    async def test_chain_includes_content_hash(self, resolver):
+        """Test that resolved chains include content_hash from signatures."""
+        chain = await resolver.resolve("test_tool")
+        
+        for link in chain:
+            assert "content_hash" in link
+            assert len(link["content_hash"]) == 64  # SHA256 hex
+
+    @pytest.mark.asyncio
+    async def test_chain_includes_file_path(self, resolver):
+        """Test that resolved chains include file_path."""
+        chain = await resolver.resolve("test_tool")
+        
+        for link in chain:
+            assert "file_path" in link
+            assert link["source"] == "local"

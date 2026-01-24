@@ -8,7 +8,7 @@ import os
 import tempfile
 import pytest
 from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 
 from kiwi_mcp.primitives import (
     SubprocessPrimitive,
@@ -354,31 +354,78 @@ class TestPrimitiveExecutorIntegration:
     """Integration tests for PrimitiveExecutor orchestration."""
 
     @pytest.fixture
-    def mock_registry(self):
-        """Create a mock tool registry."""
-        registry = MagicMock()
-        registry.resolve_chain = AsyncMock()
-        return registry
+    def project_path(self, tmp_path):
+        """Create test project with tools."""
+        project = tmp_path / "test_project"
+        project.mkdir()
+        tools_dir = project / ".ai" / "tools"
+        tools_dir.mkdir(parents=True)
+        
+        # Create subprocess primitive
+        primitives_dir = tools_dir / "primitives"
+        primitives_dir.mkdir()
+        subprocess_file = primitives_dir / "subprocess.py"
+        subprocess_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:0000000000000000000000000000000000000000000000000000000000000000
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "primitives"
+""")
+        
+        # Create test_tool (subprocess primitive)
+        utility_dir = tools_dir / "utility"
+        utility_dir.mkdir()
+        test_tool_file = utility_dir / "test_tool.py"
+        test_tool_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:1111111111111111111111111111111111111111111111111111111111111111
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "utility"
+__config__ = {"command": "echo", "args": ["Hello from executor"]}
+""")
+        
+        # Create test_http_tool (http_client primitive)
+        test_http_tool_file = utility_dir / "test_http_tool.py"
+        test_http_tool_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:2222222222222222222222222222222222222222222222222222222222222222
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "utility"
+__config__ = {"method": "GET", "url": "https://api.example.com/test"}
+""")
+        
+        # Create extended_tool (python -> subprocess chain)
+        extended_tool_file = utility_dir / "extended_tool.py"
+        extended_tool_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:3333333333333333333333333333333333333333333333333333333333333333
+__version__ = "1.0.0"
+__tool_type__ = "python"
+__executor_id__ = "subprocess"
+__category__ = "utility"
+__config__ = {"args": ["-c", "print('test')"], "timeout": 60, "env": {"EXTENDED_VAR": "extended_value"}}
+""")
+        
+        # Create unknown_tool (unknown primitive type)
+        unknown_tool_file = utility_dir / "unknown_tool.py"
+        unknown_tool_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:4444444444444444444444444444444444444444444444444444444444444444
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "utility"
+__config__ = {}
+""")
+        # Note: We'll need to manually set tool_id to "unknown_primitive_type" in the test
+        # or create a tool file with that name
+        
+        return project
 
     @pytest.fixture
-    def executor(self, mock_registry):
-        """Create PrimitiveExecutor with mock registry."""
-        return PrimitiveExecutor(mock_registry)
+    def executor(self, project_path):
+        """Create PrimitiveExecutor with project path."""
+        return PrimitiveExecutor(project_path=project_path)
 
     @pytest.mark.asyncio
-    async def test_subprocess_tool_execution_via_executor(self, executor, mock_registry):
+    async def test_subprocess_tool_execution_via_executor(self, executor):
         """Test executing a subprocess tool via the executor."""
-        # Mock registry to return subprocess chain
-        mock_registry.resolve_chain.return_value = [
-            {
-                "depth": 0,
-                "tool_id": "subprocess",
-                "tool_type": "primitive",
-                "executor_id": None,
-                "manifest": {"config": {"command": "echo", "args": ["Hello from executor"]}},
-            }
-        ]
-
         result = await executor.execute("test_tool", {})
 
         assert result.success is True
@@ -387,19 +434,8 @@ class TestPrimitiveExecutorIntegration:
         assert result.metadata["return_code"] == 0
 
     @pytest.mark.asyncio
-    async def test_http_tool_execution_via_executor(self, executor, mock_registry):
+    async def test_http_tool_execution_via_executor(self, executor):
         """Test executing an HTTP tool via the executor."""
-        # Mock registry to return HTTP chain
-        mock_registry.resolve_chain.return_value = [
-            {
-                "depth": 0,
-                "tool_id": "http_client",
-                "tool_type": "primitive",
-                "executor_id": None,
-                "manifest": {"config": {"method": "GET", "url": "https://api.example.com/test"}},
-            }
-        ]
-
         # Mock the HTTP primitive
         mock_http_result = HttpResult(
             success=True,
@@ -418,74 +454,39 @@ class TestPrimitiveExecutorIntegration:
             assert result.metadata["status_code"] == 200
 
     @pytest.mark.asyncio
-    async def test_config_merging_in_chain(self, executor, mock_registry):
+    async def test_config_merging_in_chain(self, executor):
         """Test configuration merging across tool chain."""
-        # Mock registry to return chain with multiple tools
-        mock_registry.resolve_chain.return_value = [
-            {
-                "depth": 0,
-                "tool_id": "extended_tool",
-                "tool_type": "python",
-                "executor_id": "subprocess",
-                "manifest": {
-                    "config": {
-                        "args": ["-c", "print('test')"],
-                        "timeout": 60,  # Should override base timeout
-                        "env": {"EXTENDED_VAR": "extended_value"},  # Should merge with base env
-                    }
-                },
-            },
-            {
-                "depth": 1,
-                "tool_id": "subprocess",
-                "tool_type": "primitive",
-                "executor_id": None,
-                "manifest": {
-                    "config": {
-                        "command": "python3",
-                        "timeout": 30,
-                        "env": {"BASE_VAR": "base_value"},
-                    }
-                },
-            },
-        ]
-
         result = await executor.execute("extended_tool", {})
 
         assert result.success is True
         assert "test" in result.data["stdout"]
 
-        # Verify config merging happened (we can't directly inspect merged config,
-        # but we can verify the command executed successfully with merged settings)
-        mock_registry.resolve_chain.assert_called_once_with("extended_tool")
-
     @pytest.mark.asyncio
-    async def test_error_handling_for_unknown_primitive(self, executor, mock_registry):
+    async def test_error_handling_for_unknown_primitive(self, executor, project_path):
         """Test error handling for unknown primitive type."""
-        mock_registry.resolve_chain.return_value = [
-            {
-                "depth": 0,
-                "tool_id": "unknown_primitive_type",
-                "tool_type": "primitive",
-                "executor_id": None,
-                "manifest": {"config": {}},
-            }
-        ]
+        # Create a tool file with unknown primitive type
+        tools_dir = project_path / ".ai" / "tools" / "utility"
+        unknown_primitive_file = tools_dir / "unknown_primitive_type.py"
+        unknown_primitive_file.write_text("""# kiwi-mcp:validated:2026-01-01T00:00:00Z:5555555555555555555555555555555555555555555555555555555555555555
+__version__ = "1.0.0"
+__tool_type__ = "primitive"
+__executor_id__ = None
+__category__ = "utility"
+__config__ = {}
+""")
 
-        result = await executor.execute("unknown_tool", {})
+        result = await executor.execute("unknown_primitive_type", {})
 
         assert result.success is False
         assert "Unknown primitive type: unknown_primitive_type" in result.error
 
     @pytest.mark.asyncio
-    async def test_error_handling_for_missing_tool(self, executor, mock_registry):
+    async def test_error_handling_for_missing_tool(self, executor):
         """Test error handling when tool is not found."""
-        mock_registry.resolve_chain.return_value = []
-
         result = await executor.execute("nonexistent_tool", {})
 
         assert result.success is False
-        assert "not found or has no executor chain" in result.error
+        assert "not found" in result.error.lower()
 
 
 class TestRealWorldScenarios:

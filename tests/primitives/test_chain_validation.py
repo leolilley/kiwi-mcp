@@ -30,7 +30,7 @@ class TestIntegrity:
     def test_compute_tool_integrity_deterministic(self):
         """Same inputs should always produce same hash."""
         manifest = {"tool_id": "test", "version": "1.0.0"}
-        files = [{"path": "main.py", "sha256": "abc123", "is_executable": True}]
+        files = [{"path": "main.py", "sha256": "abc123"}]
         
         hash1 = compute_tool_integrity("test", "1.0.0", manifest, files)
         hash2 = compute_tool_integrity("test", "1.0.0", manifest, files)
@@ -42,12 +42,12 @@ class TestIntegrity:
         """File order shouldn't affect hash (they're sorted internally)."""
         manifest = {"tool_id": "test", "version": "1.0.0"}
         files1 = [
-            {"path": "a.py", "sha256": "aaa", "is_executable": True},
-            {"path": "b.py", "sha256": "bbb", "is_executable": False},
+            {"path": "a.py", "sha256": "aaa"},
+            {"path": "b.py", "sha256": "bbb"},
         ]
         files2 = [
-            {"path": "b.py", "sha256": "bbb", "is_executable": False},
-            {"path": "a.py", "sha256": "aaa", "is_executable": True},
+            {"path": "b.py", "sha256": "bbb"},
+            {"path": "a.py", "sha256": "aaa"},
         ]
         
         hash1 = compute_tool_integrity("test", "1.0.0", manifest, files1)
@@ -84,8 +84,8 @@ class TestIntegrity:
     def test_compute_tool_integrity_changes_with_files(self):
         """Different files should produce different hashes."""
         manifest = {"tool_id": "test"}
-        files1 = [{"path": "main.py", "sha256": "hash1", "is_executable": True}]
-        files2 = [{"path": "main.py", "sha256": "hash2", "is_executable": True}]
+        files1 = [{"path": "main.py", "sha256": "hash1"}]
+        files2 = [{"path": "main.py", "sha256": "hash2"}]
         
         hash1 = compute_tool_integrity("test", "1.0.0", manifest, files1)
         hash2 = compute_tool_integrity("test", "1.0.0", manifest, files2)

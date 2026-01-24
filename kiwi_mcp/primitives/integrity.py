@@ -36,7 +36,7 @@ def compute_tool_integrity(
         tool_id: Tool identifier
         version: Semver version string
         manifest: Tool manifest dict
-        files: List of file dicts with {path, sha256, is_executable}
+        files: List of file dicts with {path, sha256}
         
     Returns:
         SHA256 hex digest (64 characters)
@@ -48,8 +48,7 @@ def compute_tool_integrity(
         sorted_files = [
             {
                 "path": f.get("path", ""),
-                "sha256": f.get("sha256", ""),
-                "is_executable": f.get("is_executable", False)
+                "sha256": f.get("sha256", "")
             }
             for f in sorted_files
         ]

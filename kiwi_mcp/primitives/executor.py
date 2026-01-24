@@ -15,6 +15,7 @@ Everything else is data-driven configuration.
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
 from .subprocess import SubprocessPrimitive, SubprocessResult
@@ -45,22 +46,39 @@ class ExecutionContext:
     validation_cached: int = 0
 
 
-class ChainResolver:
-    """Resolves and caches executor chains with full integrity data."""
+class ToolNotFoundError(Exception):
+    """Raised when a tool cannot be found locally."""
+    pass
 
-    def __init__(self, registry, project_path: Optional['Path'] = None):
+
+class ChainResolver:
+    """Resolves and caches executor chains from local filesystem only.
+    
+    Walks the chain of executor dependencies by:
+    1. Resolving tool name to file path
+    2. Extracting metadata from the file
+    3. Following executor_id to next tool
+    4. Stopping at primitives (executor_id is None)
+    
+    Returns chain structure with full integrity data.
+    """
+
+    def __init__(self, project_path: Path):
         """
-        Initialize with registry and optional project path for local resolution.
+        Initialize with project path for chain resolution.
 
         Args:
-            registry: ToolRegistry instance (kept for backward compatibility)
-            project_path: Optional path for local chain resolution
+            project_path: Path to project root containing .ai/ folder
         """
-        self.registry = registry
-        self.project_path = project_path
+        from pathlib import Path
+        from kiwi_mcp.utils.resolvers import ToolResolver
         
-        # Lazy-loaded local resolver
-        self._local_resolver = None
+        self.project_path = project_path if isinstance(project_path, Path) else Path(project_path)
+        
+        if not self.project_path:
+            raise ValueError("project_path is required for chain resolution")
+        
+        self.resolver = ToolResolver(self.project_path)
         
         # Chain cache by tool_id
         self._chain_cache: Dict[str, List[Dict]] = {}
@@ -70,15 +88,8 @@ class ChainResolver:
         
         # Validation cache: (parent_hash, child_hash) -> validation result
         self._validation_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
-
-    def _get_local_resolver(self):
-        """Lazy-load local chain resolver."""
-        if self._local_resolver is None and self.project_path:
-            from pathlib import Path
-            from .local_chain_resolver import LocalChainResolver
-            path_obj = self.project_path if isinstance(self.project_path, Path) else Path(self.project_path)
-            self._local_resolver = LocalChainResolver(path_obj)
-        return self._local_resolver
+        
+        logger.debug(f"ChainResolver initialized with project_path={self.project_path}")
 
     async def resolve(self, tool_id: str) -> List[Dict]:
         """
@@ -89,40 +100,145 @@ class ChainResolver:
         - Registry tools must be loaded first via 'load' action
         - No network dependency for execution
         
-        Raises an error if tool not found locally (instead of falling back to registry).
+        Raises ToolNotFoundError if tool not found locally.
         """
         if tool_id in self._chain_cache:
             return self._chain_cache[tool_id]
 
-        # Try local resolution
-        local_resolver = self._get_local_resolver()
-        if local_resolver:
-            try:
-                chain = await local_resolver.resolve_chain(tool_id)
-                if chain:
-                    self._chain_cache[tool_id] = chain
-                    return chain
-            except Exception as e:
-                # Re-raise local resolution errors (don't fallback to registry)
-                logger.error(f"Failed to resolve chain for '{tool_id}': {e}")
-                raise
+        chain = await self._resolve_chain(tool_id)
+        if chain:
+            self._chain_cache[tool_id] = chain
+            return chain
         
-        # No local resolver configured - return empty chain
-        # This maintains backward compatibility when project_path is not provided
         return []
+
+    async def _resolve_chain(self, tool_id: str) -> List[Dict[str, Any]]:
+        """
+        Resolve full executor chain by walking local files.
+
+        Args:
+            tool_id: Starting tool ID (e.g., "hello_node")
+
+        Returns:
+            Chain from leaf to primitive
+
+        Raises:
+            ToolNotFoundError: If tool is not found locally
+        """
+        from kiwi_mcp.schemas.tool_schema import extract_tool_metadata
+        from kiwi_mcp.utils.metadata_manager import MetadataManager
+        
+        chain = []
+        visited = set()
+        current_id = tool_id
+
+        while current_id:
+            # Prevent infinite loops
+            if current_id in visited:
+                logger.error(f"Circular dependency detected: {current_id}")
+                raise ToolNotFoundError(
+                    f"Circular dependency in chain for '{tool_id}': {current_id} already visited"
+                )
+            visited.add(current_id)
+
+            # Resolve file path
+            file_path = self.resolver.resolve(current_id)
+            if not file_path:
+                # Tool not found locally
+                if not chain:
+                    # Starting tool not found
+                    raise ToolNotFoundError(
+                        f"Tool '{tool_id}' not found locally. "
+                        f"Use 'load' action to copy from registry first."
+                    )
+                else:
+                    # Dependency not found
+                    raise ToolNotFoundError(
+                        f"Dependency '{current_id}' not found locally for tool '{tool_id}'. "
+                        f"Missing executor in chain: {[t['tool_id'] for t in chain]} → {current_id}"
+                    )
+
+            logger.debug(f"Resolved {current_id} to {file_path}")
+
+            # Extract metadata
+            try:
+                metadata = extract_tool_metadata(file_path, self.project_path)
+            except Exception as e:
+                logger.error(f"Failed to extract metadata for {current_id}: {e}")
+                raise ToolNotFoundError(
+                    f"Failed to extract metadata from '{file_path}': {e}"
+                )
+
+            # Build chain link
+            chain_link = {
+                "tool_id": current_id,
+                "tool_type": metadata.get("tool_type"),
+                "executor_id": metadata.get("executor_id"),
+                "version": metadata.get("version", "0.0.0"),
+                "manifest": metadata,  # Use full metadata for integrity computation
+                "file_path": str(file_path),
+                "source": "local",
+            }
+            
+            # Extract integrity hash from signature - fail if missing
+            file_content = file_path.read_text()
+            
+            content_hash = MetadataManager.get_signature_hash(
+                "tool", file_content, file_path=file_path, project_path=self.project_path
+            )
+            
+            if not content_hash:
+                raise ToolNotFoundError(
+                    f"Tool '{current_id}' has no signature. "
+                    f"Run execute(action='create', item_id='{current_id}', ...) to validate."
+                )
+            
+            # Build file hashes for integrity verification
+            # Remove signature before computing file hash
+            from kiwi_mcp.utils.metadata_manager import ToolMetadataStrategy
+            strategy = ToolMetadataStrategy(file_path=file_path, project_path=self.project_path)
+            content_without_sig = strategy.remove_signature(file_content)
+            
+            import hashlib
+            file_hash = hashlib.sha256(content_without_sig.encode()).hexdigest()
+            
+            # Store both the content hash and file hashes for verification
+            chain_link["content_hash"] = content_hash
+            chain_link["files"] = [{
+                "path": file_path.name,
+                "sha256": file_hash
+            }]
+            logger.debug(f"Using signature hash for {current_id}: {content_hash[:12]}...")
+
+            chain.append(chain_link)
+            logger.debug(
+                f"Added to chain: {current_id} ({metadata.get('tool_type')}) → {metadata.get('executor_id')}"
+            )
+
+            # Move to next executor
+            current_id = metadata.get("executor_id")
+
+            # Stop at primitives (executor_id is None)
+            if current_id is None:
+                logger.debug(f"Reached primitive, chain complete: {len(chain)} steps")
+                break
+
+        return chain
 
     async def resolve_batch(self, tool_ids: List[str]) -> Dict[str, List[Dict]]:
         """Batch resolve multiple chains from local files."""
         uncached = [t for t in tool_ids if t not in self._chain_cache]
         
         if uncached:
-            local_resolver = self._get_local_resolver()
-            if local_resolver:
-                results = await local_resolver.resolve_chains_batch(uncached)
-                self._chain_cache.update(results)
-            else:
-                # No local resolver - return empty chains for uncached
-                for tool_id in uncached:
+            results = {}
+            for tool_id in uncached:
+                try:
+                    chain = await self._resolve_chain(tool_id)
+                    results[tool_id] = chain
+                    self._chain_cache[tool_id] = chain
+                except ToolNotFoundError as e:
+                    logger.warning(f"Tool '{tool_id}' not found: {e}")
+                    results[tool_id] = []
                     self._chain_cache[tool_id] = []
         
         return {t: self._chain_cache.get(t, []) for t in tool_ids}
@@ -217,23 +333,20 @@ class PrimitiveExecutor:
 
     def __init__(
         self, 
-        registry, 
-        project_path: Optional['Path'] = None,
+        project_path: Path,
         verify_integrity: bool = True, 
         validate_chain: bool = True
     ):
         """
-        Initialize with tool registry and optional project path.
+        Initialize with project path.
 
         Args:
-            registry: ToolRegistry instance (kept for backward compatibility)
-            project_path: Optional project path for local chain resolution
+            project_path: Project path for local chain resolution
             verify_integrity: Whether to verify integrity at every step
             validate_chain: Whether to validate parent→child relationships
         """
-        self.registry = registry
         self.project_path = project_path
-        self.resolver = ChainResolver(registry, project_path)
+        self.resolver = ChainResolver(project_path)
         self.subprocess_primitive = SubprocessPrimitive()
         self.http_client_primitive = HttpClientPrimitive()
         

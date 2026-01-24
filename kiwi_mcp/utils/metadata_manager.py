@@ -59,12 +59,15 @@ def compute_unified_integrity(
     from kiwi_mcp.utils.parsers import parse_knowledge_entry
     
     if item_type == "tool":
+        # Strip signature before computing hash
+        strategy = ToolMetadataStrategy(file_path=file_path, project_path=file_path.parent)
+        content_without_sig = strategy.remove_signature(file_content)
+        
         manifest = extract_tool_metadata(file_path, file_path.parent)
-        file_hash = hashlib.sha256(file_content.encode()).hexdigest()
+        file_hash = hashlib.sha256(content_without_sig.encode()).hexdigest()
         file_entry = {
             "path": file_path.name,
-            "sha256": file_hash,
-            "is_executable": file_path.suffix in ('.py', '.sh', '.js')
+            "sha256": file_hash
         }
         return compute_tool_integrity(item_id, version, manifest, [file_entry])
     
@@ -73,7 +76,7 @@ def compute_unified_integrity(
         return compute_directive_integrity(item_id, version, xml_content, metadata)
     
     elif item_type == "knowledge":
-        parsed = parse_knowledge_entry(file_content)
+        parsed = parse_knowledge_entry(file_path)
         return compute_knowledge_integrity(
             item_id, version, parsed.get("content", ""), parsed.get("frontmatter")
         )

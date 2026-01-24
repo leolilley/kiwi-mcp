@@ -175,7 +175,7 @@ class ToolRegistry(BaseRegistry):
             # Get files for this version
             files_result = (
                 self.client.table("tool_version_files")
-                .select("path, media_type, content_text, sha256, size_bytes, is_executable")
+                .select("path, media_type, content_text, sha256, size_bytes")
                 .eq("tool_version_id", version_uuid)
                 .execute()
             )
@@ -336,7 +336,6 @@ class ToolRegistry(BaseRegistry):
                     file_entries.append({
                         "path": path,
                         "sha256": file_hash,
-                        "is_executable": path.endswith((".py", ".sh")),
                         "content": content,
                         "size_bytes": len(content),
                     })
@@ -371,7 +370,6 @@ class ToolRegistry(BaseRegistry):
                     "content_text": file_entry["content"],
                     "sha256": file_entry["sha256"],
                     "size_bytes": file_entry["size_bytes"],
-                    "is_executable": file_entry["is_executable"],
                 }
                 self.client.table("tool_version_files").insert(file_data).execute()
 

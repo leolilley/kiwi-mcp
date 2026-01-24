@@ -168,8 +168,8 @@ class KnowledgeHandler:
                 },
                 "entry_type": {
                     "type": "string",
-                    "enum": ["pattern", "learning", "reference", "concept", "decision", "insight", "procedure"],
-                    "description": "Type of knowledge entry"
+                    "minLength": 1,
+                    "description": "Type of knowledge entry (e.g., pattern, learning, reference, concept, decision, insight, procedure, api_fact, experiment, template, workflow, etc.)"
                 },
                 "category": {
                     "type": "string",
@@ -186,7 +186,7 @@ class KnowledgeHandler:
                     "description": "Semantic version"
                 },
             },
-            "required": ["zettel_id", "title"],
+            "required": ["zettel_id", "title", "entry_type"],
         }
     
     def _validate_frontmatter_with_schema(
@@ -674,7 +674,7 @@ class KnowledgeHandler:
 
         # Extract integrity hash from signature
         file_content = file_path.read_text()
-        stored_hash = MetadataManager.get_signature_hash("knowledge", file_content)
+        stored_hash = MetadataManager.get_signature_hash("knowledge", file_content, file_path=file_path, project_path=self.project_path)
 
         if not stored_hash:
             return {
@@ -689,11 +689,7 @@ class KnowledgeHandler:
                 ),
             }
 
-        # Verify integrity using IntegrityVerifier
-        from kiwi_mcp.primitives.integrity_verifier import IntegrityVerifier
-        verifier = IntegrityVerifier()
-        
-        # Parse entry to get metadata
+        # Parse entry to get version
         try:
             entry_data = parse_knowledge_entry(file_path)
         except Exception as e:
@@ -703,20 +699,22 @@ class KnowledgeHandler:
                 "path": str(file_path),
             }
         
-        verification = verifier.verify_single_file(
+        # Verify integrity - recompute hash and compare
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
+        computed_hash = compute_unified_integrity(
             item_type="knowledge",
             item_id=zettel_id,
             version=entry_data.get("version", "0.0.0"),
+            file_content=file_content,
             file_path=file_path,
-            stored_hash=stored_hash,
-            project_path=self.project_path
+            metadata=None  # Let compute_unified_integrity extract what it needs
         )
         
-        if not verification.success:
+        if computed_hash != stored_hash:
             return {
                 "status": "error",
                 "error": "Knowledge entry content has been modified since last validation",
-                "details": verification.error,
+                "details": f"Integrity mismatch for {zettel_id}@{entry_data.get('version')}: computed={short_hash(computed_hash)}, stored={short_hash(stored_hash)}",
                 "path": str(file_path),
                 "solution": "Run execute(action='update', ...) to re-validate the entry",
             }
@@ -848,7 +846,7 @@ class KnowledgeHandler:
         content = file_path.read_text()
 
         # Check if signature already exists - create fails if signature exists
-        existing_signature = MetadataManager.get_signature_info("knowledge", content)
+        existing_signature = MetadataManager.get_signature_info("knowledge", content, file_path=file_path, project_path=self.project_path)
         if existing_signature:
             return {
                 "error": f"Knowledge entry '{zettel_id}' already validated",
@@ -949,7 +947,7 @@ content_hash: {content_hash}
         current_content = file_path.read_text()
         
         # Check if signature exists - update fails if signature missing
-        existing_signature = MetadataManager.get_signature_info("knowledge", current_content)
+        existing_signature = MetadataManager.get_signature_info("knowledge", current_content, file_path=file_path, project_path=self.project_path)
         if not existing_signature:
             return {
                 "error": f"Knowledge entry '{zettel_id}' not validated",
@@ -963,12 +961,13 @@ content_hash: {content_hash}
         except Exception as e:
             return {"error": f"Failed to parse existing entry: {str(e)}", "path": str(file_path)}
 
-        # Update fields
-        title = params.get("title", entry_data.get("title"))
-        content = params.get("content", entry_data.get("content"))
-        entry_type = params.get("entry_type", entry_data.get("entry_type"))
-        category = params.get("category", entry_data.get("category"))
-        tags = params.get("tags", entry_data.get("tags", []))
+        # Re-validate existing content (file path only, no parameter content)
+        # Use existing fields from file
+        title = entry_data.get("title")
+        content = entry_data.get("content")
+        entry_type = entry_data.get("entry_type")
+        category = entry_data.get("category")
+        tags = entry_data.get("tags", [])
         
         # Validate updated entry
         updated_entry_data = {
@@ -1134,7 +1133,7 @@ content_hash: {content_hash}
 
         # Extract integrity hash from signature
         file_content = file_path.read_text()
-        stored_hash = MetadataManager.get_signature_hash("knowledge", file_content)
+        stored_hash = MetadataManager.get_signature_hash("knowledge", file_content, file_path=file_path, project_path=self.project_path)
 
         if not stored_hash:
             return {

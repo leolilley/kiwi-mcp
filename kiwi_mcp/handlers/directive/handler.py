@@ -17,7 +17,7 @@ from kiwi_mcp.utils.logger import get_logger
 from kiwi_mcp.utils.resolvers import DirectiveResolver, get_user_space
 from kiwi_mcp.utils.parsers import parse_directive_file
 from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
-from kiwi_mcp.utils.metadata_manager import MetadataManager
+from kiwi_mcp.utils.metadata_manager import MetadataManager, compute_unified_integrity
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 from kiwi_mcp.utils.xml_error_helper import format_error_with_context
 from kiwi_mcp.mcp import MCPClientPool, SchemaCache
@@ -686,7 +686,7 @@ class DirectiveHandler:
 
             # Extract integrity hash from signature
             file_content = file_path.read_text()
-            stored_hash = MetadataManager.get_signature_hash("directive", file_content)
+            stored_hash = MetadataManager.get_signature_hash("directive", file_content, file_path=file_path, project_path=self.project_path)
 
             if not stored_hash:
                 has_pending = "kiwi-mcp:pending-validation" in file_content
@@ -704,30 +704,21 @@ class DirectiveHandler:
                     ),
                 }
 
-            # Verify integrity using IntegrityVerifier
-            from kiwi_mcp.primitives.integrity_verifier import IntegrityVerifier
-            verifier = IntegrityVerifier()
-            
-            # Build metadata for directive integrity computation
-            metadata = {
-                "category": directive_data.get("category"),
-                "description": directive_data.get("description"),
-                "model_tier": directive_data.get("model", {}).get("tier") if isinstance(directive_data.get("model"), dict) else None,
-            }
-            
-            verification = verifier.verify_single_file(
+            # Verify integrity - recompute hash and compare
+            computed_hash = compute_unified_integrity(
                 item_type="directive",
                 item_id=directive_name,
                 version=directive_data.get("version", "0.0.0"),
+                file_content=file_content,
                 file_path=file_path,
-                stored_hash=stored_hash,
-                project_path=self.project_path
+                metadata=None  # Let compute_unified_integrity extract what it needs
             )
             
-            if not verification.success:
+            if computed_hash != stored_hash:
+                from kiwi_mcp.primitives.integrity import short_hash
                 return {
                     "error": "Directive content has been modified since last validation",
-                    "details": verification.error,
+                    "details": f"Integrity mismatch for {directive_name}@{directive_data.get('version')}: computed={short_hash(computed_hash)}, stored={short_hash(stored_hash)}",
                     "path": str(file_path),
                     "solution": "Run execute(action='update', ...) to re-validate the directive",
                 }
@@ -1357,20 +1348,14 @@ class DirectiveHandler:
         # Compute unified integrity hash
         from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
         
-        # Build metadata dict for integrity computation
-        metadata = {
-            "category": directive_data.get("category"),
-            "description": directive_data.get("description"),
-            "model_tier": directive_data.get("model", {}).get("tier") if isinstance(directive_data.get("model"), dict) else None,
-        }
-        
+        # Compute unified integrity hash
         content_hash = compute_unified_integrity(
             item_type="directive",
             item_id=directive_name,
             version=directive_data.get("version", "0.0.0"),
             file_content=content,
             file_path=file_path,
-            metadata=metadata
+            metadata=None  # Let compute_unified_integrity extract what it needs consistently
         )
         
         # Generate and add signature for validated content with unified integrity hash
@@ -1562,20 +1547,14 @@ class DirectiveHandler:
         # Compute unified integrity hash
         from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
         
-        # Build metadata dict for integrity computation
-        metadata = {
-            "category": directive_data.get("category"),
-            "description": directive_data.get("description"),
-            "model_tier": directive_data.get("model", {}).get("tier") if isinstance(directive_data.get("model"), dict) else None,
-        }
-        
+        # Compute unified integrity hash
         content_hash = compute_unified_integrity(
             item_type="directive",
             item_id=directive_name,
             version=directive_data.get("version", "0.0.0"),
             file_content=content,
             file_path=file_path,
-            metadata=metadata
+            metadata=None  # Let compute_unified_integrity extract what it needs consistently
         )
         
         # Generate and add signature for validated content with unified integrity hash
