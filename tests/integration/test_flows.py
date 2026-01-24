@@ -21,9 +21,14 @@ class TestDirectiveRegistryFlow:
     @pytest.mark.asyncio
     async def test_directive_search(self, directive_registry, mock_directives_search_result):
         """Test searching directives."""
-        # Setup mock with proper structure
+        # Setup mock with proper structure - account for .or_() chaining
         execute_mock = create_mock_response(mock_directives_search_result["data"])
-        directive_registry.client.table.return_value.select.return_value.limit.return_value.execute.return_value = execute_mock
+        # Mock the chain: table().select().or_().limit().execute()
+        table_mock = directive_registry.client.table.return_value
+        select_mock = table_mock.select.return_value
+        or_mock = select_mock.or_.return_value
+        limit_mock = or_mock.limit.return_value
+        limit_mock.execute.return_value = execute_mock
         
         # Search for single term that exists
         results = await directive_registry.search("bootstrap")
@@ -37,8 +42,13 @@ class TestDirectiveRegistryFlow:
         """Test searching directives with category filter."""
         execute_mock = create_mock_response([mock_directives_search_result["data"][0]])
         
-        chain = directive_registry.client.table.return_value.select.return_value
-        chain.eq.return_value.limit.return_value.execute.return_value = execute_mock
+        # Mock the chain: table().select().eq().or_().limit().execute()
+        table_mock = directive_registry.client.table.return_value
+        select_mock = table_mock.select.return_value
+        eq_mock = select_mock.eq.return_value
+        or_mock = eq_mock.or_.return_value
+        limit_mock = or_mock.limit.return_value
+        limit_mock.execute.return_value = execute_mock
         
         results = await directive_registry.search("bootstrap", category="setup")
         
@@ -49,8 +59,12 @@ class TestDirectiveRegistryFlow:
     async def test_directive_search_with_tech_stack(self, directive_registry, mock_directives_search_result):
         """Test searching directives with tech stack filter."""
         execute_mock = create_mock_response(mock_directives_search_result["data"])
-        
-        directive_registry.client.table.return_value.select.return_value.limit.return_value.execute.return_value = execute_mock
+        # Mock the chain: table().select().or_().limit().execute()
+        table_mock = directive_registry.client.table.return_value
+        select_mock = table_mock.select.return_value
+        or_mock = select_mock.or_.return_value
+        limit_mock = or_mock.limit.return_value
+        limit_mock.execute.return_value = execute_mock
         
         results = await directive_registry.search("bootstrap", tech_stack=["Python"])
         
@@ -105,56 +119,67 @@ class TestDirectiveRegistryFlow:
         assert "category" in results[0]
 
 
-class TestScriptRegistryFlow:
-    """Test complete script workflow."""
+class TestToolRegistryFlow:
+    """Test complete tool workflow."""
     
     @pytest.mark.asyncio
-    async def test_script_search(self, script_registry, mock_scripts_search_result):
-        """Test searching scripts."""
-        execute_mock = create_mock_response(mock_scripts_search_result["data"])
-        script_registry.client.table.return_value.select.return_value.limit.return_value.execute.return_value = execute_mock
+    async def test_tool_search(self, tool_registry, mock_tools_search_result):
+        """Test searching tools."""
+        # Tool registry uses RPC call, not table queries
+        rpc_mock = MagicMock()
+        rpc_result = create_mock_response([
+            {
+                "id": "1",
+                "tool_id": "google_maps_scraper",
+                "name": "google_maps_scraper",
+                "tool_type": "script",
+                "category": "scraping",
+                "description": "Scrape business locations from Google Maps",
+                "executor_id": "python_runtime",
+                "latest_version": "2.1.0",
+                "rank": 0.95,
+            }
+        ])
+        rpc_mock.execute.return_value = rpc_result
+        tool_registry.client.rpc.return_value = rpc_mock
         
-        results = await script_registry.search("scrape google maps")
+        results = await tool_registry.search("scrape google maps")
         
         assert len(results) > 0
         assert any("google" in r.get("name", "").lower() for r in results)
     
     @pytest.mark.asyncio
-    async def test_script_search_multi_term(self, script_registry):
-        """Test multi-term script search filters by multiple terms."""
-        # Test data with all required terms ("scrape" and "data" both present)
-        test_data = [
+    async def test_tool_search_multi_term(self, tool_registry):
+        """Test multi-term tool search filters by multiple terms."""
+        # Tool registry uses RPC call, not table queries
+        rpc_mock = MagicMock()
+        rpc_result = create_mock_response([
             {
                 "id": "1",
+                "tool_id": "web_scraper",
                 "name": "web_scraper",
+                "tool_type": "script",
                 "category": "scraping",
                 "description": "Scrape and extract data from websites",
-                "is_official": False,
-                "download_count": 300,
-                "quality_score": 90.0,
-                "tech_stack": ["Python"],
-                "tags": ["scraping", "data"],
-                "success_rate": 0.92,
-                "estimated_cost_usd": 0.02,
+                "executor_id": "python_runtime",
                 "latest_version": "2.0.0",
-                "created_at": "2024-01-05T00:00:00Z",
-                "updated_at": "2024-01-10T00:00:00Z",
+                "rank": 0.90,
             }
-        ]
-        execute_mock = create_mock_response(test_data)
-        script_registry.client.table.return_value.select.return_value.limit.return_value.execute.return_value = execute_mock
+        ])
+        rpc_mock.execute.return_value = rpc_result
+        tool_registry.client.rpc.return_value = rpc_mock
         
         # Both "scrape" and "data" should match
-        results = await script_registry.search("scrape data")
+        results = await tool_registry.search("scrape data")
         
         assert len(results) > 0
         combined = f"{results[0].get('name', '')} {results[0].get('description', '')}".lower()
         assert "scrape" in combined and "data" in combined
     
     @pytest.mark.asyncio
-    async def test_script_get(self, script_registry):
-        """Test getting a single script."""
-        script_data = {
+    async def test_tool_get(self, tool_registry):
+        """Test getting a single tool."""
+        tool_data = {
             "id": "1",
             "name": "google_maps_scraper",
             "category": "scraping",
@@ -166,32 +191,63 @@ class TestScriptRegistryFlow:
             "tags": ["scraping"],
         }
         version_data = {
+            "id": "version-uuid-1",  # Need id for tool_version_id lookup
             "version": "2.1.0",
-            "content": "#!/usr/bin/env python3\n# Script content",
+            "content": "#!/usr/bin/env python3\n# Tool content",
             "changelog": "Bug fixes",
             "is_latest": True,
         }
         
-        script_mock = create_mock_response(script_data)
+        # Mock the tool query (first call to table("tools"))
+        tool_mock = create_mock_response(tool_data)
+        # Mock the version query (second call to table("tool_versions"))
         version_mock = create_mock_response([version_data])
+        # Mock the files query (third call to table("tool_version_files"))
+        files_mock = create_mock_response([])
         
-        table_mock = script_registry.client.table.return_value
-        table_mock.select.return_value.eq.return_value.single.return_value.execute.return_value = script_mock
-        table_mock.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = version_mock
+        # Create separate query builders for each table with proper chaining
+        # Tools table: table("tools").select(...).eq(...).single().execute()
+        tools_table = MagicMock()
+        tools_result = create_mock_response(tool_data)
+        tools_table.select.return_value.eq.return_value.single.return_value.execute.return_value = tools_result
         
-        result = await script_registry.get("google_maps_scraper")
+        # Versions table: table("tool_versions").select(...).eq(...).order(...).eq(...).limit(...).execute()
+        versions_table = MagicMock()
+        versions_result = create_mock_response([version_data])
+        versions_table.select.return_value.eq.return_value.order.return_value.eq.return_value.limit.return_value.execute.return_value = versions_result
+        
+        # Files table: table("tool_version_files").select(...).eq(...).execute()
+        files_table = MagicMock()
+        files_result = create_mock_response([])
+        files_table.select.return_value.eq.return_value.execute.return_value = files_result
+        
+        # Make table() return different mocks for different calls
+        call_count = [0]
+        def table_side_effect(table_name):
+            call_count[0] += 1
+            if call_count[0] == 1:  # First call: tools
+                return tools_table
+            elif call_count[0] == 2:  # Second call: tool_versions
+                return versions_table
+            elif call_count[0] == 3:  # Third call: tool_version_files
+                return files_table
+            return MagicMock()
+        
+        tool_registry.client.table.side_effect = table_side_effect
+        
+        result = await tool_registry.get("google_maps_scraper")
         
         assert result is not None
-        assert result["name"] == "google_maps_scraper"
-        assert result["version"] == "2.1.0"
+        assert result.get("name") == "google_maps_scraper" or result.get("tool_id") == "google_maps_scraper"
+        assert result.get("version") == "2.1.0"
     
     @pytest.mark.asyncio
-    async def test_script_list(self, script_registry, mock_scripts_search_result):
-        """Test listing scripts."""
-        execute_mock = create_mock_response(mock_scripts_search_result["data"])
-        script_registry.client.table.return_value.select.return_value.limit.return_value.execute.return_value = execute_mock
+    async def test_tool_list(self, tool_registry, mock_tools_search_result):
+        """Test listing tools."""
+        execute_mock = create_mock_response(mock_tools_search_result["data"])
+        tool_registry.client.table.return_value.select.return_value.limit.return_value.execute.return_value = execute_mock
         
-        results = await script_registry.list()
+        results = await tool_registry.list()
         
         assert len(results) > 0
         assert "name" in results[0]
@@ -239,8 +295,10 @@ class TestKnowledgeRegistryFlow:
             "version": "1.0.0",
         }
         
-        entry_mock = create_mock_response(entry_data)
-        knowledge_registry.client.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = entry_mock
+        # Mock rpc() call (primary method)
+        entry_mock = create_mock_response([entry_data])
+        rpc_mock = knowledge_registry.client.rpc.return_value
+        rpc_mock.execute.return_value = entry_mock
         
         result = await knowledge_registry.get("001-email-deliverability")
         
@@ -323,37 +381,37 @@ class TestCrossRegistryIntegration:
     """Test interactions across all three registries."""
     
     @pytest.mark.asyncio
-    async def test_all_registries_configured(self, directive_registry, script_registry, knowledge_registry):
+    async def test_all_registries_configured(self, directive_registry, tool_registry, knowledge_registry):
         """Test that all registries are configured."""
         # All should be configured with the test environment
         assert directive_registry.is_configured
-        assert script_registry.is_configured
+        assert tool_registry.is_configured
         assert knowledge_registry.is_configured
     
     @pytest.mark.asyncio
-    async def test_query_parsing_consistent(self, directive_registry, script_registry, knowledge_registry):
+    async def test_query_parsing_consistent(self, directive_registry, tool_registry, knowledge_registry):
         """Test that all registries parse queries consistently."""
         test_query = "multiple word query"
         
         terms_directive = directive_registry._parse_search_query(test_query)
-        terms_script = script_registry._parse_search_query(test_query)
+        terms_tool = tool_registry._parse_search_query(test_query)
         terms_knowledge = knowledge_registry._parse_search_query(test_query)
         
-        assert terms_directive == terms_script == terms_knowledge
+        assert terms_directive == terms_tool == terms_knowledge
         assert len(terms_directive) == 3  # "multiple", "word", "query"
     
     @pytest.mark.asyncio
-    async def test_relevance_scoring_consistent(self, directive_registry, script_registry, knowledge_registry):
+    async def test_relevance_scoring_consistent(self, directive_registry, tool_registry, knowledge_registry):
         """Test that relevance scoring is consistent across registries."""
         query_terms = ["email", "validation"]
         text1 = "Email Validation Service"
         text2 = "Validate email addresses"
         
         score_d = directive_registry._calculate_relevance_score(query_terms, text1, text2)
-        score_s = script_registry._calculate_relevance_score(query_terms, text1, text2)
+        score_t = tool_registry._calculate_relevance_score(query_terms, text1, text2)
         score_k = knowledge_registry._calculate_relevance_score(query_terms, text1, text2)
         
-        assert score_d == score_s == score_k
+        assert score_d == score_t == score_k
 
 
 class TestErrorHandling:

@@ -102,7 +102,7 @@ python -m kiwi_mcp.server
 {
   "tool": "load",
   "arguments": {
-    "item_type": "script",
+    "item_type": "tool",
     "item_id": "google_maps_scraper",
     "destination": "project",
     "project_path": "/home/user/myproject"
@@ -180,7 +180,7 @@ Find items by natural language query across local and registry sources.
 
 **Parameters:**
 
-- `item_type` (required): `"directive"`, `"script"`, or `"knowledge"`
+- `item_type` (required): `"directive"`, `"tool"`, or `"knowledge"`
 - `query` (required): Natural language search query
 - `project_path` (required): Absolute path to project root
 - `source` (optional): `"local"`, `"registry"`, or `"all"` (default: `"local"`)
@@ -201,7 +201,7 @@ search(
 
 # Search local scripts
 search(
-    item_type="script",
+    item_type="tool",
     query="scrape Google Maps",
     limit=5,
     project_path="/home/user/myproject"
@@ -216,7 +216,7 @@ Download items from registry to local storage.
 
 **Parameters:**
 
-- `item_type` (required): `"directive"`, `"script"`, or `"knowledge"`
+- `item_type` (required): `"directive"`, `"tool"`, or `"knowledge"`
 - `item_id` (required): Item identifier
 - `project_path` (required): Absolute path to project root
 - `destination` (optional): `"project"` or `"user"` (default: `"project"`)
@@ -252,7 +252,7 @@ Run operations on items: run, publish, delete, create, update.
 
 **Parameters:**
 
-- `item_type` (required): `"directive"`, `"script"`, or `"knowledge"`
+- `item_type` (required): `"directive"`, `"tool"`, or `"knowledge"`
 - `action` (required): `"run"`, `"publish"`, `"delete"`, `"create"`, `"update"`
 - `item_id` (required): Item identifier
 - `project_path` (required): Absolute path to project root
@@ -292,7 +292,7 @@ execute(
 
 # Publish script to registry
 execute(
-    item_type="script",
+    item_type="tool",
     action="publish",
     item_id="my_scraper",
     parameters={"version": "1.0.0"},

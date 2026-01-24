@@ -30,7 +30,7 @@ class HelpTool(BaseTool):
                             "load",
                             "execute",
                             "directives",
-                            "scripts",
+                            "tools",
                             "knowledge",
                         ],
                         "description": "Help topic",
@@ -45,7 +45,7 @@ class HelpTool(BaseTool):
 
         help_topics = {
             "overview": """
-Kiwi MCP - Unified MCP for directives, scripts, and knowledge
+Kiwi MCP - Unified MCP for directives, tools, and knowledge
 
 This MCP provides 4 tools:
 - search: Find items across all types
@@ -55,7 +55,7 @@ This MCP provides 4 tools:
 
 Types supported:
 - directive: Workflow definitions and automation steps
-- script: Executable Python scripts
+- tool: Executable tools (Python, Bash, API, etc.)
 - knowledge: Knowledge base entries
 
 For more help, try: help(topic="search")
@@ -64,7 +64,7 @@ For more help, try: help(topic="search")
 search - Find items across local or registry
 
 Parameters:
-- item_type: "directive" | "script" | "knowledge" (required)
+- item_type: "directive" | "tool" | "knowledge" (required)
 - query: Search query as natural language or keywords (required)
 - source: "local" | "registry" | "all" (default: "local")
 - limit: Max results (default: 10)
@@ -76,7 +76,7 @@ search(item_type="directive", query="lead generation", source="registry")
 load - Download items from registry to local storage
 
 Parameters:
-- item_type: "directive" | "script" | "knowledge" (required)
+- item_type: "directive" | "tool" | "knowledge" (required)
 - item_id: Item ID to load (required)
 - destination: "project" | "user" (default: "project")
 - version: Specific version (optional)
@@ -89,7 +89,7 @@ load(item_type="directive", item_id="my_directive", destination="project")
 execute - Run, publish, delete, create, update, or link items
 
 Parameters:
-- item_type: "directive" | "script" | "knowledge" (required)
+- item_type: "directive" | "tool" | "knowledge" (required)
 - action: "run" | "publish" | "delete" | "create" | "update" | "link" (required)
 - item_id: Item ID (required)
 - parameters: Action-specific parameters (object)

@@ -1,7 +1,7 @@
 """
 TypeHandlerRegistry - Routes operations to type-specific handlers.
 
-Maps item_type (directive, script, knowledge) to appropriate handler
+Maps item_type (directive, tool, knowledge) to appropriate handler
 and dispatches search, load, and execute operations.
 """
 
@@ -14,10 +14,6 @@ try:
 except ImportError as e:
     DirectiveHandler = None
 
-try:
-    from kiwi_mcp.handlers.script.handler import ScriptHandler
-except ImportError as e:
-    ScriptHandler = None
 
 try:
     from kiwi_mcp.handlers.tool.handler import ToolHandler
@@ -47,7 +43,7 @@ class TypeHandlerRegistry:
         self.directive_handler = (
             DirectiveHandler(project_path=project_path) if DirectiveHandler else None
         )
-        self.script_handler = ScriptHandler(project_path=project_path) if ScriptHandler else None
+
         self.tool_handler = ToolHandler(project_path=project_path) if ToolHandler else None
         self.knowledge_handler = (
             KnowledgeHandler(project_path=project_path) if KnowledgeHandler else None
@@ -58,13 +54,8 @@ class TypeHandlerRegistry:
         if self.directive_handler:
             self.handlers["directive"] = self.directive_handler
 
-        # Choose between script handler and tool handler
-        # Tool handler takes precedence for both "tool" and "script" types
         if self.tool_handler:
             self.handlers["tool"] = self.tool_handler
-            self.handlers["script"] = self.tool_handler  # Backward compatibility alias
-        elif self.script_handler:
-            self.handlers["script"] = self.script_handler
 
         if self.knowledge_handler:
             self.handlers["knowledge"] = self.knowledge_handler
@@ -72,7 +63,7 @@ class TypeHandlerRegistry:
         loaded_count = len(self.handlers)
         self.logger.info(
             f"TypeHandlerRegistry initialized with {loaded_count}/3 handlers "
-            f"(directive, script, knowledge) project_path={project_path}"
+            f"(directive, tool, knowledge) project_path={project_path}"
         )
 
     async def search(self, item_type: str, query: str, **kwargs) -> Dict[str, Any]:
@@ -80,7 +71,7 @@ class TypeHandlerRegistry:
         Search for items of a specific type.
 
         Args:
-            item_type: "directive", "script", or "knowledge"
+            item_type: "directive", "tool", or "knowledge"
             query: Search query
             **kwargs: Additional search parameters (source, limit, filters, etc.)
 
@@ -111,8 +102,8 @@ class TypeHandlerRegistry:
         Load/get a specific item.
 
         Args:
-            item_type: "directive", "script", or "knowledge"
-            item_id: Item identifier (directive_name, script_name, zettel_id)
+            item_type: "directive", "tool", or "knowledge"
+            item_id: Item identifier (directive_name, tool_name, zettel_id)
             **kwargs: Additional load parameters (destination, version, etc.)
 
         Returns:
@@ -132,12 +123,8 @@ class TypeHandlerRegistry:
             result = None
             if item_type == "directive":
                 result = await handler.load(directive_name=item_id, **kwargs)
-            elif item_type in ["script", "tool"]:
-                # Handle both script and tool types with appropriate parameter names
-                if hasattr(handler, "load") and "tool_name" in handler.load.__code__.co_varnames:
-                    result = await handler.load(tool_name=item_id, **kwargs)
-                else:
-                    result = await handler.load(script_name=item_id, **kwargs)
+            elif item_type == "tool":
+                result = await handler.load(tool_name=item_id, **kwargs)
             elif item_type == "knowledge":
                 result = await handler.load(zettel_id=item_id, **kwargs)
 
@@ -166,7 +153,7 @@ class TypeHandlerRegistry:
         Execute an operation on an item.
 
         Args:
-            item_type: "directive", "script", or "knowledge"
+            item_type: "directive", "tool", or "knowledge"
             action: "run", "publish", "delete", "create", "update", "link", etc.
             item_id: Item identifier
             parameters: Action-specific parameters
@@ -191,19 +178,10 @@ class TypeHandlerRegistry:
                 result = await handler.execute(
                     action=action, directive_name=item_id, parameters=parameters, **kwargs
                 )
-            elif item_type in ["script", "tool"]:
-                # Handle both script and tool types with appropriate parameter names
-                if (
-                    hasattr(handler, "execute")
-                    and "tool_name" in handler.execute.__code__.co_varnames
-                ):
-                    result = await handler.execute(
-                        action=action, tool_name=item_id, parameters=parameters, **kwargs
-                    )
-                else:
-                    result = await handler.execute(
-                        action=action, script_name=item_id, parameters=parameters, **kwargs
-                    )
+            elif item_type == "tool":
+                result = await handler.execute(
+                    action=action, tool_name=item_id, parameters=parameters, **kwargs
+                )
             elif item_type == "knowledge":
                 result = await handler.execute(
                     action=action, zettel_id=item_id, parameters=parameters, **kwargs
@@ -256,8 +234,8 @@ class TypeHandlerRegistry:
                     ],
                     "run_behavior": "Returns parsed XML content for agent to follow",
                 },
-                "script": {
-                    "class": "ScriptHandler",
+                "tool": {
+                    "class": "ToolHandler",
                     "operations": [
                         "search",
                         "load",

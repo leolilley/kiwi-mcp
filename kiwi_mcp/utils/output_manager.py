@@ -1,9 +1,9 @@
 """
 Output Manager for Kiwi MCP
 
-Manages script execution outputs:
-- Hybrid storage: project space (.ai/outputs/scripts/) or user space (~/.ai/outputs/scripts/)
-- Auto-cleanup: keeps last N outputs per script
+Manages tool execution outputs:
+- Hybrid storage: project space (.ai/outputs/tools/) or user space (~/.ai/outputs/tools/)
+- Auto-cleanup: keeps last N outputs per tool
 - Size-aware: only saves outputs above threshold
 - Response truncation: caps large responses for MCP messages
 """
@@ -22,47 +22,46 @@ logger = get_logger("output_manager")
 # Configuration
 MIN_SAVE_SIZE_BYTES = 10 * 1024  # 10KB - don't save tiny results
 MAX_RESPONSE_SIZE_BYTES = 1_000_000  # 1MB - truncate MCP responses above this
-MAX_OUTPUTS_PER_SCRIPT = 10  # Keep last N outputs per script
+MAX_OUTPUTS_PER_TOOL = 10  # Keep last N outputs per tool
 MAX_ARRAY_ITEMS = 500  # Max items in arrays before truncation
 MAX_STRING_LENGTH = 5_000  # Max string length before truncation
 
 
 class OutputManager:
-    """Manages script output storage and cleanup."""
+    """Manages tool output storage and cleanup."""
 
     def __init__(self, project_path: Optional[Path] = None):
         """
         Initialize output manager.
 
         Args:
-            project_path: If provided, prefer project outputs at .ai/outputs/scripts/
-                         Otherwise, use user outputs at ~/.ai/outputs/scripts/
+            project_path: If provided, prefer project outputs at .ai/outputs/tools/
+                         Otherwise, use user outputs at ~/.ai/outputs/tools/
         """
         self.project_path = Path(project_path) if project_path else None
         self.user_space = get_user_space()
 
-        # Determine output directories
         if self.project_path:
-            self.project_outputs = self.project_path / ".ai" / "outputs" / "scripts"
+            self.project_outputs = self.project_path / ".ai" / "outputs" / "tools"
             self.primary_outputs = self.project_outputs
         else:
             self.project_outputs = None
-            self.primary_outputs = self.user_space / "outputs" / "scripts"
+            self.primary_outputs = self.user_space / "outputs" / "tools"
 
-        self.user_outputs = self.user_space / "outputs" / "scripts"
+        self.user_outputs = self.user_space / "outputs" / "tools"
 
     def save_output(
         self,
-        script_name: str,
+        tool_name: str,
         data: Any,
         execution_id: Optional[str] = None,
         force_save: bool = False
     ) -> Optional[Dict[str, Any]]:
         """
-        Save script output to file if it meets size threshold.
+        Save tool output to file if it meets size threshold.
 
         Args:
-            script_name: Name of the script
+            tool_name: Name of the tool
             data: Output data to save
             execution_id: Optional execution ID for filename
             force_save: Save regardless of size
@@ -80,11 +79,11 @@ class OutputManager:
 
         # Check size threshold
         if not force_save and size_bytes < MIN_SAVE_SIZE_BYTES:
-            logger.info(f"Skipping save for {script_name}: {size_bytes} bytes < {MIN_SAVE_SIZE_BYTES} threshold")
+            logger.info(f"Skipping save for {tool_name}: {size_bytes} bytes < {MIN_SAVE_SIZE_BYTES} threshold")
             return None
 
         # Determine output directory
-        output_dir = self.primary_outputs / script_name
+        output_dir = self.primary_outputs / tool_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate filename
@@ -102,29 +101,29 @@ class OutputManager:
             logger.info(f"Saved output to {output_path} ({size_bytes:,} bytes)")
 
             # Run cleanup after save
-            self._cleanup_old_outputs(script_name)
+            self._cleanup_old_outputs(tool_name)
 
             return {
                 "path": str(output_path),
                 "size_bytes": size_bytes,
                 "timestamp": timestamp,
-                "script_name": script_name
+                "tool_name": tool_name
             }
         except Exception as e:
             logger.error(f"Failed to save output: {e}")
             return None
 
-    def _cleanup_old_outputs(self, script_name: str) -> int:
+    def _cleanup_old_outputs(self, tool_name: str) -> int:
         """
         Remove old outputs, keeping only the last N.
 
         Args:
-            script_name: Name of the script
+            tool_name: Name of the tool
 
         Returns:
             Number of files removed
         """
-        output_dir = self.primary_outputs / script_name
+        output_dir = self.primary_outputs / tool_name
         if not output_dir.exists():
             return 0
 
@@ -137,7 +136,7 @@ class OutputManager:
 
         # Remove files beyond the limit
         removed = 0
-        for old_file in result_files[MAX_OUTPUTS_PER_SCRIPT:]:
+        for old_file in result_files[MAX_OUTPUTS_PER_TOOL:]:
             try:
                 old_file.unlink()
                 removed += 1
@@ -147,12 +146,12 @@ class OutputManager:
 
         return removed
 
-    def list_outputs(self, script_name: str) -> List[Dict[str, Any]]:
+    def list_outputs(self, tool_name: str) -> List[Dict[str, Any]]:
         """
-        List all outputs for a script.
+        List all outputs for a tool.
 
         Args:
-            script_name: Name of the script
+            tool_name: Name of the tool
 
         Returns:
             List of output info dicts, newest first
@@ -161,10 +160,10 @@ class OutputManager:
 
         # Check project outputs
         if self.project_outputs:
-            outputs.extend(self._list_dir_outputs(self.project_outputs / script_name, "project"))
+            outputs.extend(self._list_dir_outputs(self.project_outputs / tool_name, "project"))
 
         # Check user outputs
-        outputs.extend(self._list_dir_outputs(self.user_outputs / script_name, "user"))
+        outputs.extend(self._list_dir_outputs(self.user_outputs / tool_name, "user"))
 
         # Sort by timestamp (newest first)
         outputs.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
@@ -192,17 +191,17 @@ class OutputManager:
 
         return outputs
 
-    def get_latest_output(self, script_name: str) -> Optional[Dict[str, Any]]:
+    def get_latest_output(self, tool_name: str) -> Optional[Dict[str, Any]]:
         """
-        Get the most recent output for a script.
+        Get the most recent output for a tool.
 
         Args:
-            script_name: Name of the script
+            tool_name: Name of the tool
 
         Returns:
             Output info dict with 'data' key containing parsed content
         """
-        outputs = self.list_outputs(script_name)
+        outputs = self.list_outputs(tool_name)
         if not outputs:
             return None
 
@@ -215,22 +214,22 @@ class OutputManager:
             logger.warning(f"Failed to read output: {e}")
             return latest
 
-    def cleanup_all(self, script_name: Optional[str] = None) -> Dict[str, int]:
+    def cleanup_all(self, tool_name: Optional[str] = None) -> Dict[str, int]:
         """
-        Clean up outputs, keeping only last N per script.
+        Clean up outputs, keeping only last N per tool.
 
         Args:
-            script_name: If provided, only clean this script. Otherwise clean all.
+            tool_name: If provided, only clean this tool. Otherwise clean all.
 
         Returns:
-            Dict mapping script names to number of files removed
+            Dict mapping tool names to number of files removed
         """
         results = {}
-
-        if script_name:
-            removed = self._cleanup_old_outputs(script_name)
+        
+        if tool_name:
+            removed = self._cleanup_old_outputs(tool_name)
             if removed > 0:
-                results[script_name] = removed
+                results[tool_name] = removed
         else:
             # Clean all scripts
             for output_dir in [self.project_outputs, self.user_outputs]:
@@ -252,7 +251,7 @@ class OutputManager:
         )
 
         removed = 0
-        for old_file in result_files[MAX_OUTPUTS_PER_SCRIPT:]:
+        for old_file in result_files[MAX_OUTPUTS_PER_TOOL:]:
             try:
                 old_file.unlink()
                 removed += 1

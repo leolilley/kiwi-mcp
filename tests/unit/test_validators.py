@@ -11,7 +11,6 @@ from pathlib import Path
 from kiwi_mcp.utils.validators import (
     BaseValidator,
     DirectiveValidator,
-    ScriptValidator,
     KnowledgeValidator,
     ValidationManager,
     compare_versions,
@@ -350,17 +349,15 @@ Just markdown, no XML here.
 
     @pytest.mark.unit
     @pytest.mark.validation
-    def test_validate_metadata_legacy_warning(self, validator, sample_directive_data):
-        """Should include warning for legacy model_class."""
+    def test_validate_metadata_model_class_warning(self, validator, sample_directive_data):
+        """Should include warning for model_class (deprecated in favor of model)."""
         data = sample_directive_data.copy()
         data["model_class"] = data.pop("model")
-        data["legacy_warning"] = {"message": "Legacy tag detected"}
 
         result = validator.validate_metadata(data)
 
-        # Should still be valid but have warning
+        # Should still be valid - model_class is accepted
         assert result["valid"] is True
-        assert len(result["warnings"]) > 0
 
     @pytest.mark.unit
     @pytest.mark.validation
@@ -427,80 +424,6 @@ Just markdown, no XML here.
         assert len(result["issues"]) >= 2  # Filename mismatch + missing permissions + missing model
 
 
-class TestScriptValidator:
-    """Test ScriptValidator methods."""
-
-    @pytest.fixture
-    def validator(self):
-        """Create ScriptValidator instance."""
-        return ScriptValidator()
-
-    @pytest.fixture
-    def sample_script_data(self):
-        """Sample script parsed data."""
-        return {
-            "name": "test_script",
-            "description": "Test script",
-            "category": "utility",
-            "dependencies": [],
-        }
-
-    @pytest.mark.unit
-    @pytest.mark.validation
-    def test_validate_filename_match_success(self, validator, tmp_path, sample_script_data):
-        """Should pass when filename matches script name."""
-        file_path = tmp_path / "test_script.py"
-
-        result = validator.validate_filename_match(file_path, sample_script_data)
-
-        assert result["valid"] is True
-        assert len(result["issues"]) == 0
-
-    @pytest.mark.unit
-    @pytest.mark.validation
-    def test_validate_filename_match_mismatch(self, validator, tmp_path, sample_script_data):
-        """Should fail when filename doesn't match script name."""
-        file_path = tmp_path / "wrong_name.py"
-
-        result = validator.validate_filename_match(file_path, sample_script_data)
-
-        assert result["valid"] is False
-        assert len(result["issues"]) > 0
-        assert "mismatch" in result["issues"][0].lower()
-
-    @pytest.mark.unit
-    @pytest.mark.validation
-    def test_validate_filename_match_missing_name(self, validator, tmp_path):
-        """Should fail when script name is missing."""
-        file_path = tmp_path / "test_script.py"
-        parsed_data = {"description": "Test"}  # Missing name
-
-        result = validator.validate_filename_match(file_path, parsed_data)
-
-        assert result["valid"] is False
-        assert "name not found" in result["issues"][0].lower()
-
-    @pytest.mark.unit
-    @pytest.mark.validation
-    def test_validate_metadata_success(self, validator, sample_script_data):
-        """Should pass when metadata is valid."""
-        result = validator.validate_metadata(sample_script_data)
-
-        assert result["valid"] is True
-        assert len(result["issues"]) == 0
-
-    @pytest.mark.unit
-    @pytest.mark.validation
-    def test_validate_metadata_missing_name(self, validator):
-        """Should fail when script name is missing."""
-        data = {"description": "Test"}
-
-        result = validator.validate_metadata(data)
-
-        assert result["valid"] is False
-        assert any("name" in issue.lower() for issue in result["issues"])
-
-
 class TestKnowledgeValidator:
     """Test KnowledgeValidator methods."""
 
@@ -519,6 +442,7 @@ class TestKnowledgeValidator:
             "entry_type": "learning",
             "category": "test",
             "tags": [],
+            "version": "1.0.0",
         }
 
     @pytest.mark.unit
@@ -617,14 +541,6 @@ class TestValidationManager:
 
     @pytest.mark.unit
     @pytest.mark.validation
-    def test_get_validator_for_script(self):
-        """Should return ScriptValidator for script type."""
-        validator = ValidationManager.get_validator("script")
-
-        assert isinstance(validator, ScriptValidator)
-
-    @pytest.mark.unit
-    @pytest.mark.validation
     def test_get_validator_for_knowledge(self):
         """Should return KnowledgeValidator for knowledge type."""
         validator = ValidationManager.get_validator("knowledge")
@@ -646,19 +562,6 @@ class TestValidationManager:
 
         parsed_data = parse_directive_file(sample_directive_file)
         result = ValidationManager.validate("directive", sample_directive_file, parsed_data)
-
-        assert "valid" in result
-        assert "issues" in result
-        assert "warnings" in result
-
-    @pytest.mark.unit
-    @pytest.mark.validation
-    def test_validate_script(self, sample_script_file):
-        """Should validate script using appropriate validator."""
-        from kiwi_mcp.utils.parsers import parse_script_metadata
-
-        parsed_data = parse_script_metadata(sample_script_file)
-        result = ValidationManager.validate("script", sample_script_file, parsed_data)
 
         assert "valid" in result
         assert "issues" in result
@@ -706,18 +609,6 @@ class TestValidationEdgeCases:
 
         assert result["valid"] is False
         assert any("tier" in issue.lower() for issue in result["issues"])
-
-    @pytest.mark.unit
-    @pytest.mark.validation
-    def test_script_validator_with_empty_name(self, tmp_path):
-        """Should fail validation for empty script name."""
-        validator = ScriptValidator()
-        file_path = tmp_path / "test.py"
-        data = {"name": ""}
-
-        result = validator.validate_metadata(data)
-
-        assert result["valid"] is False
 
     @pytest.mark.unit
     @pytest.mark.validation

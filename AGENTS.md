@@ -65,7 +65,7 @@ One unified MCP server with 4 tools for 3 item types.
 | Type        | Description                                     |
 | ----------- | ----------------------------------------------- |
 | `directive` | Workflow instructions (HOW to accomplish tasks) |
-| `script`    | Executable Python scripts (DO the actual work)  |
+| `tool`      | Executable tools (Python scripts, APIs, etc.)   |
 | `knowledge` | Domain information, patterns, learnings         |
 
 ### Actions (via execute)
@@ -92,7 +92,7 @@ See `docs/LOAD_VS_RUN.md` for details.
 ### search
 
 ```
-item_type: "directive" | "script" | "knowledge"
+item_type: "directive" | "tool" | "knowledge"
 query: "search terms"
 source: "local" | "registry" | "all" (default: "local")
 project_path: "/absolute/path/to/project"
@@ -101,7 +101,7 @@ project_path: "/absolute/path/to/project"
 ### load
 
 ```
-item_type: "directive" | "script" | "knowledge"
+item_type: "directive" | "tool" | "knowledge"
 item_id: "item_name"
 source: "project" | "user" | "registry"
 destination: "project" | "user" (optional - omit for read-only)
@@ -111,7 +111,7 @@ project_path: "/absolute/path/to/project"
 ### execute
 
 ```
-item_type: "directive" | "script" | "knowledge"
+item_type: "directive" | "tool" | "knowledge"
 action: "run" | "create" | "update" | "delete" | "publish"
 item_id: "item_name"
 parameters: { ... action-specific params ... }
@@ -164,17 +164,17 @@ execute(
 ### Searching and Loading
 
 ```python
-# Search for scripts
+# Search for tools
 search(
-    item_type="script",
+    item_type="tool",
     query="email enrichment",
     source="local",
     project_path="/home/user/project"
 )
 
-# Load script details (read-only inspection)
+# Load tool details (read-only inspection)
 load(
-    item_type="script",
+    item_type="tool",
     item_id="enrich_emails",
     source="project",
     project_path="/home/user/project"

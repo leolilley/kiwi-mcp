@@ -27,7 +27,7 @@ class SearchTool(BaseTool):
                 "properties": {
                     "item_type": {
                         "type": "string",
-                        "enum": ["directive", "script", "knowledge"],
+                        "enum": ["directive", "tool", "knowledge"],
                         "description": "Type of item to search for",
                     },
                     "query": {
@@ -64,7 +64,7 @@ class SearchTool(BaseTool):
             return False
 
     def _setup_vector_search(self, project_path: str):
-        """Setup vector search components."""
+        """Setup vector search from RAG environment config."""
         if self._vector_manager is not None:
             return
 
@@ -74,34 +74,34 @@ class SearchTool(BaseTool):
                 RegistryVectorStore,
                 ThreeTierVectorManager,
                 HybridSearch,
-                EmbeddingModel,
             )
+            from kiwi_mcp.storage.vector.api_embeddings import EmbeddingService
+            from kiwi_mcp.storage.vector.embedding_registry import load_vector_config
 
-            # Setup paths
-            project_vector_path = Path(project_path) / ".ai" / "vector" / "project"
-            user_vector_path = Path.home() / ".ai" / "vector" / "user"
+            # Load RAG config (validated at server startup)
+            config = load_vector_config()
+            embedding_service = EmbeddingService(config)
 
-            # Create embedding model
-            embedding_model = EmbeddingModel()
-
-            # Setup stores
+            # Setup three-tier storage
             project_store = LocalVectorStore(
-                storage_path=project_vector_path,
+                storage_path=Path(project_path) / ".ai" / "vector" / "project",
                 collection_name="project_items",
-                embedding_model=embedding_model,
+                embedding_service=embedding_service,
             )
 
             user_store = LocalVectorStore(
-                storage_path=user_vector_path,
+                storage_path=Path.home() / ".ai" / "vector" / "user",
                 collection_name="user_items",
-                embedding_model=embedding_model,
+                embedding_service=embedding_service,
             )
 
-            registry_store = RegistryVectorStore(embedding_model=embedding_model)
+            registry_store = RegistryVectorStore(embedding_service=embedding_service)
 
             # Setup manager and hybrid search
             self._vector_manager = ThreeTierVectorManager(
-                project_store=project_store, user_store=user_store, registry_store=registry_store
+                project_store=project_store,
+                user_store=user_store,
+                registry_store=registry_store
             )
 
             self._hybrid_search = HybridSearch(self._vector_manager)
@@ -167,6 +167,11 @@ class SearchTool(BaseTool):
                 query=query, source=source, item_type=item_type, limit=limit
             )
 
+            # If vector search returns empty, fall back to keyword search
+            if not results:
+                self.logger.info("Vector search returned empty, falling back to keyword search")
+                return await self._keyword_search(item_type, query, source, limit, project_path)
+
             # Convert to standard format
             items = []
             for result in results:
@@ -201,12 +206,12 @@ class SearchTool(BaseTool):
         """Perform traditional keyword-based search."""
         # Create handler dynamically with project_path
         from kiwi_mcp.handlers.directive.handler import DirectiveHandler
-        from kiwi_mcp.handlers.script.handler import ScriptHandler
+        from kiwi_mcp.handlers.tool.handler import ToolHandler
         from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
 
         handlers = {
             "directive": DirectiveHandler,
-            "script": ScriptHandler,
+            "tool": ToolHandler,
             "knowledge": KnowledgeHandler,
         }
 

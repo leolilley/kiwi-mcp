@@ -15,7 +15,7 @@ from kiwi_mcp.utils.metadata_manager import (
     generate_timestamp,
     MetadataStrategy,
     DirectiveMetadataStrategy,
-    ScriptMetadataStrategy,
+    ToolMetadataStrategy,
     KnowledgeMetadataStrategy,
     MetadataManager,
 )
@@ -228,36 +228,36 @@ class TestDirectiveMetadataStrategy:
         assert result == sample_directive_markdown
 
 
-class TestScriptMetadataStrategy:
-    """Test ScriptMetadataStrategy methods."""
+class TestToolMetadataStrategy:
+    """Test ToolMetadataStrategy methods."""
 
     @pytest.fixture
     def strategy(self):
-        """Create ScriptMetadataStrategy instance."""
-        return ScriptMetadataStrategy()
+        """Create ToolMetadataStrategy instance."""
+        return ToolMetadataStrategy()
 
     @pytest.fixture
-    def sample_script_with_shebang(self, sample_script_content):
-        """Script content with shebang."""
-        return f"#!/usr/bin/env python3\n{sample_script_content}"
+    def sample_tool_with_shebang(self, sample_tool_content):
+        """Tool content with shebang."""
+        return f"#!/usr/bin/env python3\n{sample_tool_content}"
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_extract_content_for_hash_removes_signature(self, strategy, sample_script_content):
+    def test_extract_content_for_hash_removes_signature(self, strategy, sample_tool_content):
         """Should extract content without signature for hashing."""
         signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
-        content_with_sig = signature + sample_script_content
+        content_with_sig = signature + sample_tool_content
 
         result = strategy.extract_content_for_hash(content_with_sig)
 
         assert signature not in result
-        assert sample_script_content.strip() in result
+        assert sample_tool_content.strip() in result
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_extract_content_for_hash_removes_shebang(self, strategy, sample_script_with_shebang):
+    def test_extract_content_for_hash_removes_shebang(self, strategy, sample_tool_with_shebang):
         """Should remove shebang for consistent hashing."""
-        result = strategy.extract_content_for_hash(sample_script_with_shebang)
+        result = strategy.extract_content_for_hash(sample_tool_with_shebang)
 
         assert not result.startswith("#!/")
         assert "python3" not in result
@@ -278,10 +278,10 @@ class TestScriptMetadataStrategy:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_extract_signature_after_shebang(self, strategy, sample_script_with_shebang):
+    def test_extract_signature_after_shebang(self, strategy, sample_tool_with_shebang):
         """Should extract signature after shebang."""
         signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
-        content = f"#!/usr/bin/env python3\n{signature}{sample_script_with_shebang.split(chr(10), 1)[1]}"
+        content = f"#!/usr/bin/env python3\n{signature}{sample_tool_with_shebang.split(chr(10), 1)[1]}"
 
         result = strategy.extract_signature(content)
 
@@ -291,10 +291,10 @@ class TestScriptMetadataStrategy:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_extract_signature_without_shebang(self, strategy, sample_script_content):
+    def test_extract_signature_without_shebang(self, strategy, sample_tool_content):
         """Should extract signature when no shebang."""
         signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
-        content = signature + sample_script_content
+        content = signature + sample_tool_content
 
         result = strategy.extract_signature(content)
 
@@ -303,11 +303,11 @@ class TestScriptMetadataStrategy:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_insert_signature_after_shebang(self, strategy, sample_script_with_shebang):
+    def test_insert_signature_after_shebang(self, strategy, sample_tool_with_shebang):
         """Should insert signature after shebang if present."""
         signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
 
-        result = strategy.insert_signature(sample_script_with_shebang, signature)
+        result = strategy.insert_signature(sample_tool_with_shebang, signature)
 
         lines = result.split("\n")
         assert lines[0].startswith("#!/")
@@ -315,20 +315,20 @@ class TestScriptMetadataStrategy:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_insert_signature_at_start_without_shebang(self, strategy, sample_script_content):
+    def test_insert_signature_at_start_without_shebang(self, strategy, sample_tool_content):
         """Should insert signature at start when no shebang."""
         signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
 
-        result = strategy.insert_signature(sample_script_content, signature)
+        result = strategy.insert_signature(sample_tool_content, signature)
 
         assert result.startswith(signature)
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_remove_signature_preserves_shebang(self, strategy, sample_script_with_shebang):
+    def test_remove_signature_preserves_shebang(self, strategy, sample_tool_with_shebang):
         """Should preserve shebang when removing signature."""
         signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
-        content = f"#!/usr/bin/env python3\n{signature}{sample_script_with_shebang.split(chr(10), 1)[1]}"
+        content = f"#!/usr/bin/env python3\n{signature}{sample_tool_with_shebang.split(chr(10), 1)[1]}"
 
         result = strategy.remove_signature(content)
 
@@ -470,11 +470,11 @@ class TestMetadataManager:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_get_strategy_for_script(self):
-        """Should return ScriptMetadataStrategy for script type."""
-        strategy = MetadataManager.get_strategy("script")
+    def test_get_strategy_for_tool(self):
+        """Should return ToolMetadataStrategy for tool type."""
+        strategy = MetadataManager.get_strategy("tool")
 
-        assert isinstance(strategy, ScriptMetadataStrategy)
+        assert isinstance(strategy, ToolMetadataStrategy)
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -503,12 +503,13 @@ class TestMetadataManager:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_parse_file_script(self, sample_script_file):
-        """Should parse script file using appropriate parser."""
-        result = MetadataManager.parse_file("script", sample_script_file)
+    def test_parse_file_tool(self, sample_tool_file):
+        """Should parse tool file using appropriate parser."""
+        result = MetadataManager.parse_file("tool", sample_tool_file)
 
         assert isinstance(result, dict)
-        assert result["name"] == "test_script"
+        # File is test_tool.py, so name should be test_tool (migrated from scripts to tools)
+        assert result["name"] == "test_tool"
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -531,10 +532,10 @@ class TestMetadataManager:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_compute_hash_script(self, sample_script_file):
-        """Should compute hash for script content."""
-        file_content = sample_script_file.read_text()
-        hash_result = MetadataManager.compute_hash("script", file_content)
+    def test_compute_hash_tool(self, sample_tool_file):
+        """Should compute hash for tool content."""
+        file_content = sample_tool_file.read_text()
+        hash_result = MetadataManager.compute_hash("tool", file_content)
 
         assert isinstance(hash_result, str)
         assert len(hash_result) == 12
@@ -568,10 +569,10 @@ class TestMetadataManager:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_create_signature_script(self, sample_script_file):
-        """Should create signature for script."""
-        file_content = sample_script_file.read_text()
-        signature = MetadataManager.create_signature("script", file_content)
+    def test_create_signature_tool(self, sample_tool_file):
+        """Should create signature for tool."""
+        file_content = sample_tool_file.read_text()
+        signature = MetadataManager.create_signature("tool", file_content)
 
         assert signature.startswith("# kiwi-mcp:validated")
         # Signature format: # kiwi-mcp:validated:TIMESTAMP:HASH
@@ -635,10 +636,10 @@ class TestMetadataManager:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_sign_content_script(self, sample_script_file):
-        """Should add signature to script content."""
-        file_content = sample_script_file.read_text()
-        signed = MetadataManager.sign_content("script", file_content)
+    def test_sign_content_tool(self, sample_tool_file):
+        """Should add signature to tool content."""
+        file_content = sample_tool_file.read_text()
+        signed = MetadataManager.sign_content("tool", file_content)
 
         assert "# kiwi-mcp:validated" in signed
         assert file_content.strip() in signed
@@ -687,9 +688,9 @@ class TestMetadataManagerEdgeCases:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_compute_hash_empty_content_script(self):
-        """Should handle empty script content."""
-        hash_result = MetadataManager.compute_hash("script", "")
+    def test_compute_hash_empty_content_tool(self):
+        """Should handle empty tool content."""
+        hash_result = MetadataManager.compute_hash("tool", "")
 
         assert isinstance(hash_result, str)
         assert len(hash_result) == 12

@@ -1,5 +1,13 @@
 # Hybrid RAG Design: API Embeddings + Local Storage
 
+> **Status: IMPLEMENTED** ✅
+> 
+> This design has been implemented. Key changes:
+> - `SimpleVectorStore`: SQLite-based local storage with NumPy cosine similarity
+> - `EmbeddingService`: API-based embeddings (OpenAI, Cohere, etc.)
+> - Removed: `chromadb`, `sentence-transformers`, `pgvector` dependencies
+> - Registry uses Supabase pgvector with `search_embeddings` RPC function
+
 ## Architecture Overview
 
 ```
@@ -178,13 +186,30 @@ storage:
 
 ```
 kiwi_mcp/storage/vector/
-├── api_embeddings.py      # NEW: API-based embedding service
-├── simple_store.py        # NEW: Lightweight local storage  
-├── embedding_registry.py  # NEW: Provider configurations
-├── embeddings.py          # KEEP: Local inference (optional)
-├── local.py              # KEEP: ChromaDB storage (optional)
-├── hybrid.py             # UPDATE: Support both approaches
-└── manager.py            # UPDATE: Auto-detect capabilities
+├── api_embeddings.py      # API-based embedding service (EmbeddingService)
+├── simple_store.py        # SQLite-based local storage (SimpleVectorStore)
+├── embedding_registry.py  # Configuration loading (VectorConfig)
+├── local.py              # Wrapper for backward compatibility (LocalVectorStore)
+├── registry.py           # Supabase pgvector storage (RegistryVectorStore)
+├── hybrid.py             # Hybrid search with keyword boosting
+├── manager.py            # Three-tier search coordination
+├── pipeline.py           # Validation-gated embedding
+└── base.py               # Base classes and interfaces
+```
+
+## Environment Variables
+
+Required for vector search to work:
+
+```bash
+# Embedding service (any OpenAI-compatible API)
+EMBEDDING_URL="https://api.openai.com/v1/embeddings"
+EMBEDDING_API_KEY="sk-..."
+EMBEDDING_MODEL="text-embedding-3-small"
+
+# Vector storage (can be local path or Supabase for registry)
+VECTOR_DB_URL="sqlite:///.ai/vector"  # For local
+# Or for registry: use SUPABASE_URL and SUPABASE_KEY
 ```
 
 This gives users the **best of both worlds**: lightweight dependencies with high-quality embeddings, while keeping data local and search fast.

@@ -46,43 +46,74 @@ def resolve_template(template: str) -> str:
 def load_vector_config(
     user_config_path: Optional[str] = None, project_config_path: Optional[str] = None
 ) -> VectorConfig:
-    """Load and resolve vector configuration with user/project hierarchy."""
+    """Load vector config from environment (config file optional fallback)."""
+    
+    # Try environment variables first (primary method)
+    embedding_url = os.getenv("EMBEDDING_URL")
+    vector_db_url = os.getenv("VECTOR_DB_URL")
+    
+    # Fallback to config file if env vars missing
+    if not embedding_url or not vector_db_url:
+        # Default paths
+        if user_config_path is None:
+            user_config_path = str(Path.home() / ".ai" / "config" / "vector.yaml")
+        if project_config_path is None:
+            project_config_path = ".ai/config/vector.yaml"
 
-    # Default paths
-    if user_config_path is None:
-        user_config_path = str(Path.home() / ".ai" / "config" / "vector.yaml")
-    if project_config_path is None:
-        project_config_path = ".ai/config/vector.yaml"
+        # Load user config (optional fallback)
+        user_config = {}
+        if Path(user_config_path).exists():
+            with open(user_config_path) as f:
+                user_config = yaml.safe_load(f) or {}
 
-    # Load user config (mandatory)
-    user_config = {}
-    if Path(user_config_path).exists():
-        with open(user_config_path) as f:
-            user_config = yaml.safe_load(f) or {}
+        # Load project config (optional)
+        project_config = {}
+        if Path(project_config_path).exists():
+            with open(project_config_path) as f:
+                project_config = yaml.safe_load(f) or {}
 
-    # Load project config (optional)
-    project_config = {}
-    if Path(project_config_path).exists():
-        with open(project_config_path) as f:
-            project_config = yaml.safe_load(f) or {}
+        # Merge configurations (project overrides user)
+        merged = _merge_configs(user_config, project_config)
 
-    # Merge configurations (project overrides user)
-    merged = _merge_configs(user_config, project_config)
+        # Resolve environment variables
+        resolved = _resolve_config_env_vars(merged)
 
-    # Resolve environment variables
-    resolved = _resolve_config_env_vars(merged)
+        # Get from config file if not in env
+        if not embedding_url:
+            embedding_url = resolved.get("embedding", {}).get("url", "")
+        if not vector_db_url:
+            vector_db_url = resolved.get("storage", {}).get("url", "")
+        
+        # Get other settings from config file
+        embedding_key = resolved.get("embedding", {}).get("key", "")
+        embedding_model = resolved.get("embedding", {}).get("model", "default")
+        storage_type = resolved.get("storage", {}).get("type", "simple")
+        storage_key = resolved.get("storage", {}).get("key", "")
+        request_format = resolved.get("embedding", {}).get("request_format", "openai")
+        auth_header = resolved.get("embedding", {}).get("auth_header", "Authorization")
+        auth_format = resolved.get("embedding", {}).get("auth_format", "Bearer {key}")
+    else:
+        # Use env vars directly
+        embedding_key = os.getenv("EMBEDDING_API_KEY", "")
+        embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+        storage_type = os.getenv("VECTOR_DB_TYPE", "simple")
+        storage_key = os.getenv("VECTOR_DB_KEY", "")
+        request_format = os.getenv("EMBEDDING_FORMAT", "openai")
+        auth_header = os.getenv("EMBEDDING_AUTH_HEADER", "Authorization")
+        auth_format = os.getenv("EMBEDDING_AUTH_FORMAT", "Bearer {key}")
+        
+        # Set config paths to None if using env vars only
+        user_config_path = None
+        project_config_path = None
 
     # Validate mandatory fields
-    embedding_url = resolved.get("embedding", {}).get("url", "")
-    storage_url = resolved.get("storage", {}).get("url", "")
-
     if not embedding_url:
         raise ValueError(
             "Embedding URL is mandatory. Set EMBEDDING_URL environment variable "
             "or configure embedding.url in ~/.ai/config/vector.yaml"
         )
 
-    if not storage_url:
+    if not vector_db_url:
         raise ValueError(
             "Vector storage URL is mandatory. Set VECTOR_DB_URL environment variable "
             "or configure storage.url in ~/.ai/config/vector.yaml"
@@ -90,14 +121,14 @@ def load_vector_config(
 
     return VectorConfig(
         embedding_url=embedding_url,
-        embedding_key=resolved.get("embedding", {}).get("key", ""),
-        embedding_model=resolved.get("embedding", {}).get("model", "default"),
-        storage_type=resolved.get("storage", {}).get("type", "simple"),
-        storage_url=storage_url,
-        storage_key=resolved.get("storage", {}).get("key", ""),
-        request_format=resolved.get("embedding", {}).get("request_format", "openai"),
-        auth_header=resolved.get("embedding", {}).get("auth_header", "Authorization"),
-        auth_format=resolved.get("embedding", {}).get("auth_format", "Bearer {key}"),
+        embedding_key=embedding_key,
+        embedding_model=embedding_model,
+        storage_type=storage_type,
+        storage_url=vector_db_url,
+        storage_key=storage_key,
+        request_format=request_format,
+        auth_header=auth_header,
+        auth_format=auth_format,
         user_config_path=user_config_path,
         project_config_path=project_config_path,
     )

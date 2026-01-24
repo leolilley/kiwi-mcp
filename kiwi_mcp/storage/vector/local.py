@@ -1,54 +1,40 @@
+"""Local vector store - SQLite-based with API embeddings.
+
+Wrapper around SimpleVectorStore for consistent interface.
+"""
+
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from .base import VectorStore, SearchResult
-from .embeddings import EmbeddingModel
+from .simple_store import SimpleVectorStore
 
 
 class LocalVectorStore(VectorStore):
+    """Local vector storage using SQLite and API embeddings.
+    
+    Wrapper around SimpleVectorStore for consistent interface.
+    """
+
     def __init__(
         self,
         storage_path: Path,
         collection_name: str = "kiwi_items",
-        embedding_model: Optional[EmbeddingModel] = None,
+        embedding_service: Optional[Any] = None,
     ):
-        self.storage_path = storage_path
+        self.storage_path = Path(storage_path)
         self.collection_name = collection_name
         storage_path.mkdir(parents=True, exist_ok=True)
 
-        self._client = None
-        self._collection = None
-        self.embedder = embedding_model or EmbeddingModel()
-
-    def _get_client(self):
-        """Lazy load ChromaDB client."""
-        if self._client is None:
-            try:
-                import chromadb
-                from chromadb.config import Settings
-
-                self._client = chromadb.Client(
-                    Settings(
-                        chroma_db_impl="duckdb+parquet",
-                        persist_directory=str(self.storage_path),
-                        anonymized_telemetry=False,
-                    )
-                )
-            except ImportError:
-                raise ImportError(
-                    "chromadb is required for local vector storage. "
-                    "Install with: pip install chromadb"
-                )
-        return self._client
-
-    def _get_collection(self):
-        """Get or create the collection."""
-        if self._collection is None:
-            client = self._get_client()
-            self._collection = client.get_or_create_collection(
-                name=self.collection_name, metadata={"hnsw:space": "cosine"}
-            )
-        return self._collection
+        # Use SimpleVectorStore internally
+        self._store = SimpleVectorStore(
+            storage_path=storage_path,
+            collection_name=collection_name,
+            embedding_service=embedding_service,
+        )
+        
+        # Keep reference to embedder
+        self.embedder = embedding_service
 
     async def embed_and_store(
         self,
@@ -58,16 +44,14 @@ class LocalVectorStore(VectorStore):
         metadata: dict,
         signature: Optional[str] = None,
     ) -> bool:
-        embedding = self.embedder.embed(content)
-        collection = self._get_collection()
-
-        collection.upsert(
-            ids=[item_id],
-            embeddings=[embedding],
-            documents=[content],
-            metadatas=[{"item_type": item_type, "signature": signature, **metadata}],
+        """Store embedding for content."""
+        return await self._store.embed_and_store(
+            item_id=item_id,
+            item_type=item_type,
+            content=content,
+            metadata=metadata,
+            signature=signature,
         )
-        return True
 
     async def search(
         self,
@@ -76,58 +60,26 @@ class LocalVectorStore(VectorStore):
         item_type: Optional[str] = None,
         filters: Optional[dict] = None,
     ) -> list[SearchResult]:
-        query_embedding = self.embedder.embed(query)
-        collection = self._get_collection()
-
-        where = {}
-        if item_type:
-            where["item_type"] = item_type
-        if filters:
-            where.update(filters)
-
-        results = collection.query(
-            query_embeddings=[query_embedding], n_results=limit, where=where if where else None
+        """Search for similar items."""
+        return await self._store.search(
+            query=query,
+            limit=limit,
+            item_type=item_type,
+            filters=filters,
         )
-
-        search_results = []
-        if results["ids"] and results["ids"][0]:
-            for i in range(len(results["ids"][0])):
-                search_results.append(
-                    SearchResult(
-                        item_id=results["ids"][0][i],
-                        item_type=results["metadatas"][0][i].get("item_type", ""),
-                        score=1 - results["distances"][0][i],  # Convert distance to similarity
-                        content_preview=results["documents"][0][i][:200]
-                        if results["documents"][0]
-                        else "",
-                        metadata=results["metadatas"][0][i],
-                        source="local",
-                    )
-                )
-
-        return search_results
 
     async def delete(self, item_id: str) -> bool:
-        try:
-            collection = self._get_collection()
-            collection.delete(ids=[item_id])
-            return True
-        except Exception:
-            return False
+        """Delete embedding."""
+        return await self._store.delete(item_id)
 
     async def update(self, item_id: str, content: str, metadata: dict) -> bool:
-        # Update by re-embedding and storing
-        return await self.embed_and_store(
-            item_id=item_id,
-            item_type=metadata.get("item_type", ""),
-            content=content,
-            metadata=metadata,
-        )
+        """Update embedding."""
+        return await self._store.update(item_id, content, metadata)
 
     async def exists(self, item_id: str) -> bool:
-        try:
-            collection = self._get_collection()
-            results = collection.get(ids=[item_id])
-            return len(results["ids"]) > 0
-        except Exception:
-            return False
+        """Check if embedding exists."""
+        return await self._store.exists(item_id)
+
+    def get_stats(self) -> dict:
+        """Get store statistics."""
+        return self._store.get_stats()

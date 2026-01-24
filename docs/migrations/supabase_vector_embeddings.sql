@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE item_embeddings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     item_id TEXT UNIQUE NOT NULL,
-    item_type TEXT NOT NULL CHECK (item_type IN ('directive', 'script', 'knowledge')),
+    item_type TEXT NOT NULL CHECK (item_type IN ('directive', 'tool', 'knowledge')),
     embedding vector(384),
     content TEXT NOT NULL,
     metadata JSONB DEFAULT '{}',

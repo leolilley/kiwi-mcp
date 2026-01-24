@@ -1,7 +1,7 @@
 """Path resolution utilities for kiwi-mcp."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 import os
 
 
@@ -48,7 +48,7 @@ def resolve_item_path(
     
     Args:
         item_id: Item identifier (name)
-        item_type: Type of item (directive, script, knowledge)
+        item_type: Type of item (directive, tool, knowledge)
         source: Source location (local, project, user)
         project_path: Optional project path
     
@@ -65,12 +65,12 @@ def resolve_item_path(
         if source in ("local", "user"):
             search_paths.append(get_user_space() / "directives")
     
-    elif item_type == "script":
+    elif item_type == "tool":
         ext = ".py"
         if source in ("local", "project") and project_path:
-            search_paths.append(Path(project_path) / ".ai" / "scripts")
+            search_paths.append(Path(project_path) / ".ai" / "tools")
         if source in ("local", "user"):
-            search_paths.append(get_user_space() / "scripts")
+            search_paths.append(get_user_space() / "tools")
     
     elif item_type == "knowledge":
         ext = ".md"
@@ -100,3 +100,115 @@ def resolve_item_path(
             return direct_path
     
     return None
+
+
+def extract_category_path(
+    file_path: Path, 
+    item_type: str, 
+    location: str, 
+    project_path: Optional[Path] = None
+) -> str:
+    """
+    Extract category path from file location as slash-separated string.
+    
+    Args:
+        file_path: Full path to the file
+        item_type: "directive", "tool", or "knowledge"
+        location: "project" or "user"
+        project_path: Project root (for project location)
+    
+    Returns:
+        Category path as string: "core/api/endpoints" or "" if in base directory
+    
+    Example:
+        .ai/directives/core/api/endpoints/my_directive.md
+        -> "core/api/endpoints"
+    """
+    # Determine expected base
+    if location == "project":
+        if not project_path:
+            return ""
+        expected_base = project_path / ".ai" / f"{item_type}s"
+    else:
+        expected_base = get_user_space() / f"{item_type}s"
+    
+    # Get relative path from base
+    try:
+        relative = file_path.relative_to(expected_base)
+        # Remove filename, get directory parts
+        parts = list(relative.parent.parts)
+        # Join with slashes to create category path string
+        return "/".join(parts) if parts else ""
+    except ValueError:
+        # Path not under base - return empty
+        return ""
+
+
+def validate_path_structure(
+    file_path: Path, 
+    item_type: str, 
+    location: str,
+    project_path: Optional[Path] = None
+) -> Dict[str, Any]:
+    """
+    Validate file path matches expected structure.
+    
+    Expected: .ai/{type}/{category}/{subcategory}/.../{name}.{ext}
+    
+    Args:
+        file_path: Path to validate
+        item_type: "directive", "tool", or "knowledge"
+        location: "project" or "user"
+        project_path: Project root (for project location)
+    
+    Returns:
+        {
+            "valid": bool,
+            "issues": List[str],
+            "category_path": str,  # Extracted category path (slash-separated)
+            "expected_base": str,  # Expected base directory
+            "actual_path": str
+        }
+    """
+    issues = []
+    expected_ext = ".md" if item_type in ("directive", "knowledge") else ".py"
+    
+    # Check extension
+    if file_path.suffix != expected_ext:
+        issues.append(
+            f"Invalid extension '{file_path.suffix}'. "
+            f"Expected '{expected_ext}' for {item_type}"
+        )
+    
+    # Determine expected base
+    if location == "project":
+        if not project_path:
+            issues.append("project_path required for project location")
+            return {
+                "valid": False, 
+                "issues": issues,
+                "category_path": "",
+                "expected_base": "",
+                "actual_path": str(file_path)
+            }
+        expected_base = project_path / ".ai" / f"{item_type}s"
+    else:
+        expected_base = get_user_space() / f"{item_type}s"
+    
+    # Check if path is under expected base
+    try:
+        relative = file_path.relative_to(expected_base)
+        category_path = extract_category_path(file_path, item_type, location, project_path)
+    except ValueError:
+        issues.append(
+            f"File path '{file_path}' is not under expected base '{expected_base}'"
+        )
+        category_path = ""
+    
+    return {
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "category_path": category_path,
+        "expected_base": str(expected_base),
+        "actual_path": str(file_path)
+    }

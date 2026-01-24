@@ -4,8 +4,9 @@ Base Registry Client
 Shared Supabase client and utilities for all registry types.
 """
 
+import logging
 import os
-from typing import Optional
+from typing import Any, Dict, Optional
 from supabase import create_client, Client
 
 
@@ -100,3 +101,65 @@ class BaseRegistry:
             score = max(score, 20.0 * (secondary_matches / len(query_terms)))  # Some terms in secondary
         
         return score
+
+    async def _create_embedding(
+        self,
+        item_id: str,
+        item_type: str,
+        content: str,
+        metadata: Dict[str, Any]
+    ) -> bool:
+        """Create or update embedding in item_embeddings table.
+        
+        Args:
+            item_id: Unique identifier for the item
+            item_type: Type of item (directive, tool, knowledge)
+            content: Text content to embed
+            metadata: Additional metadata to store
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.client:
+            return False
+            
+        try:
+            from kiwi_mcp.storage.vector import EmbeddingService, load_vector_config
+            
+            config = load_vector_config()
+            embedding_service = EmbeddingService(config)
+            embedding = await embedding_service.embed(content)
+            
+            # Upsert embedding
+            self.client.table("item_embeddings").upsert({
+                "item_id": item_id,
+                "item_type": item_type,
+                "embedding": embedding,
+                "content": content[:2000],  # Truncate for storage
+                "metadata": metadata,
+            }).execute()
+            
+            await embedding_service.close()
+            return True
+        except Exception as e:
+            logging.getLogger("registry").warning(f"Failed to create embedding for {item_id}: {e}")
+            return False
+
+    async def _delete_embedding(self, item_id: str) -> bool:
+        """Delete embedding from item_embeddings table.
+        
+        Args:
+            item_id: Unique identifier for the item
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.client:
+            return False
+            
+        try:
+            self.client.table("item_embeddings").delete().eq("item_id", item_id).execute()
+            return True
+        except Exception as e:
+            logging.getLogger("registry").warning(f"Failed to delete embedding for {item_id}: {e}")
+            return False

@@ -1,7 +1,7 @@
 """
 Knowledge Registry API Client
 
-Handles all interactions with Supabase knowledge_entries table.
+Handles all interactions with Supabase knowledge and knowledge_versions tables.
 Ported from knowledge-kiwi.
 """
 
@@ -104,24 +104,56 @@ class KnowledgeRegistry(BaseRegistry):
             return None
         
         try:
-            result = self.client.table("knowledge_entries").select("*").eq("zettel_id", zettel_id).single().execute()
+            # Join knowledge with knowledge_versions to get content and version
+            result = self.client.rpc(
+                "get_knowledge_with_content",
+                {"p_zettel_id": zettel_id}
+            ).execute()
             
-            if result.data:
+            if result.data and len(result.data) > 0:
+                row = result.data[0]
                 return {
-                    "zettel_id": result.data["zettel_id"],
-                    "title": result.data["title"],
-                    "content": result.data["content"],
-                    "entry_type": result.data["entry_type"],
-                    "category": result.data.get("category"),
-                    "tags": result.data.get("tags", []),
-                    "source_type": result.data.get("source_type"),
-                    "source_url": result.data.get("source_url"),
-                    "version": result.data.get("version", "1.0.0"),
-                    "created_at": result.data.get("created_at"),
-                    "updated_at": result.data.get("updated_at")
+                    "zettel_id": row["zettel_id"],
+                    "title": row["title"],
+                    "content": row["content"],
+                    "entry_type": row["entry_type"],
+                    "category": row.get("category"),
+                    "tags": row.get("tags", []),
+                    "source_type": row.get("source_type"),
+                    "source_url": row.get("source_url"),
+                    "version": row.get("version", "1.0.0"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at")
                 }
             return None
         except Exception as e:
+            # Fallback to direct query if RPC function doesn't exist yet
+            try:
+                result = self.client.table("knowledge").select(
+                    "id, zettel_id, title, entry_type, category, tags, source_type, source_url, created_at, updated_at"
+                ).eq("zettel_id", zettel_id).single().execute()
+                
+                if result.data:
+                    # Get latest version content
+                    version_result = self.client.table("knowledge_versions").select(
+                        "version, content"
+                    ).eq("knowledge_id", result.data["id"]).eq("is_latest", True).single().execute()
+                    
+                    return {
+                        "zettel_id": result.data["zettel_id"],
+                        "title": result.data["title"],
+                        "content": version_result.data["content"] if version_result.data else "",
+                        "entry_type": result.data["entry_type"],
+                        "category": result.data.get("category"),
+                        "tags": result.data.get("tags", []),
+                        "source_type": result.data.get("source_type"),
+                        "source_url": result.data.get("source_url"),
+                        "version": version_result.data["version"] if version_result.data else "1.0.0",
+                        "created_at": result.data.get("created_at"),
+                        "updated_at": result.data.get("updated_at")
+                    }
+            except:
+                pass
             print(f"Error getting entry from registry: {e}")
             return None
     
@@ -148,8 +180,9 @@ class KnowledgeRegistry(BaseRegistry):
             return []
         
         try:
-            query = self.client.table("knowledge_entries").select(
-                "zettel_id, title, entry_type, category, tags, version, created_at, updated_at"
+            # Get from knowledge table (no longer need version since it's in knowledge_versions)
+            query = self.client.table("knowledge").select(
+                "zettel_id, title, entry_type, category, tags, created_at, updated_at"
             )
             
             if category:
@@ -178,7 +211,7 @@ class KnowledgeRegistry(BaseRegistry):
         """
         Publish entry to registry.
         
-        If entry exists, updates it. Otherwise creates new entry.
+        If entry exists, updates metadata and creates new version. Otherwise creates new entry with first version.
         
         Args:
             zettel_id: Entry identifier
@@ -201,10 +234,10 @@ class KnowledgeRegistry(BaseRegistry):
             # Check if entry exists
             existing = await self.get(zettel_id)
             
-            entry_data = {
+            # Metadata for knowledge table (no content or version)
+            entry_metadata = {
                 "zettel_id": zettel_id,
                 "title": title,
-                "content": content,
                 "entry_type": entry_type,
                 "tags": tags or [],
                 "category": category,
@@ -212,31 +245,62 @@ class KnowledgeRegistry(BaseRegistry):
                 "source_url": source_url,
             }
             
+            # Determine version number
             if version:
-                entry_data["version"] = version
+                new_version = version
             elif existing:
                 # Auto-increment version
                 current_version = existing.get("version", "1.0.0")
                 try:
                     parts = current_version.split(".")
                     patch = int(parts[-1]) + 1
-                    entry_data["version"] = ".".join(parts[:-1] + [str(patch)])
+                    new_version = ".".join(parts[:-1] + [str(patch)])
                 except:
-                    entry_data["version"] = "1.0.1"
+                    new_version = "1.0.1"
+            else:
+                new_version = "1.0.0"
+            
+            knowledge_id = None
             
             if existing:
-                # Update existing entry
-                self.client.table("knowledge_entries").update(entry_data).eq("zettel_id", zettel_id).execute()
+                # Update existing entry metadata
+                result = self.client.table("knowledge").update(entry_metadata).eq("zettel_id", zettel_id).execute()
+                # Get knowledge_id
+                knowledge_result = self.client.table("knowledge").select("id").eq("zettel_id", zettel_id).single().execute()
+                knowledge_id = knowledge_result.data["id"]
+                
+                # Mark all previous versions as not latest
+                self.client.table("knowledge_versions").update({"is_latest": False}).eq("knowledge_id", knowledge_id).execute()
             else:
                 # Create new entry
-                if "version" not in entry_data:
-                    entry_data["version"] = "1.0.0"
-                self.client.table("knowledge_entries").insert(entry_data).execute()
+                import hashlib
+                result = self.client.table("knowledge").insert(entry_metadata).execute()
+                knowledge_id = result.data[0]["id"]
+            
+            # Create new version with content
+            import hashlib
+            version_data = {
+                "knowledge_id": knowledge_id,
+                "version": new_version,
+                "content": content,
+                "content_hash": hashlib.md5(content.encode()).hexdigest(),
+                "is_latest": True
+            }
+            
+            self.client.table("knowledge_versions").insert(version_data).execute()
+            
+            # Create embedding for registry vector search
+            await self._create_embedding(
+                item_id=zettel_id,
+                item_type="knowledge",
+                content=f"{zettel_id} {title} {content[:1000]}",
+                metadata={"category": category, "entry_type": entry_type, "version": new_version}
+            )
             
             return {
                 "status": "success",
                 "zettel_id": zettel_id,
-                "version": entry_data.get("version", "1.0.0")
+                "version": new_version
             }
         except Exception as e:
             return {"error": str(e)}
@@ -379,8 +443,11 @@ class KnowledgeRegistry(BaseRegistry):
                 # Delete incoming relationships
                 self.client.table("knowledge_relationships").delete().eq("to_zettel_id", zettel_id).execute()
             
-            # Delete the entry
-            self.client.table("knowledge_entries").delete().eq("zettel_id", zettel_id).execute()
+            # Delete the entry (CASCADE will automatically delete versions)
+            self.client.table("knowledge").delete().eq("zettel_id", zettel_id).execute()
+            
+            # Delete embedding
+            await self._delete_embedding(zettel_id)
             
             return {
                 "status": "success",

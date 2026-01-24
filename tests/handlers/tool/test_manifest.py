@@ -105,7 +105,7 @@ def broken(
         assert manifest.tool_id == temp_path.stem
         assert manifest.tool_type == "python"
         assert manifest.version == "1.0.0"
-        assert manifest.description == "Legacy Python script"  # Fallback description
+        assert manifest.description == "Python tool"  # Fallback description
         assert manifest.parameters == []  # No parameters extracted
 
     finally:

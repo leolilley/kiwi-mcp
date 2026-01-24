@@ -477,7 +477,13 @@ curl -X POST http://localhost:3000/tools/execute \
 
 #### Create Knowledge Entry
 
+**Note:** The file must exist first. Use `create_knowledge` directive or create the file manually, then use `create` action to validate and sign.
+
 ```bash
+# Step 1: Create the file (via create_knowledge directive or manually)
+# File should be at: .ai/knowledge/{category}/{zettel_id}.md
+
+# Step 2: Validate and sign the file
 curl -X POST http://localhost:3000/tools/execute \
   -H "Content-Type: application/json" \
   -d '{
@@ -485,10 +491,8 @@ curl -X POST http://localhost:3000/tools/execute \
     "action": "create",
     "item_id": "003-new-pattern",
     "parameters": {
-      "title": "New Design Pattern",
-      "content": "# Pattern Description\n\nContent here...",
-      "entry_type": "pattern",
-      "tags": ["design", "architecture"]
+      "location": "project",
+      "category": "patterns"
     },
     "project_path": "/home/user/myproject"
   }'

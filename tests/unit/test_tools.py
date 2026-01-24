@@ -44,7 +44,7 @@ class TestSearchTool:
         item_type_enum = tool.schema.inputSchema["properties"]["item_type"]["enum"]
 
         assert "directive" in item_type_enum
-        assert "script" in item_type_enum
+        assert "tool" in item_type_enum
         assert "knowledge" in item_type_enum
 
     @pytest.mark.asyncio
@@ -139,14 +139,14 @@ class TestLoadTool:
 
         tool = LoadTool(registry=registry)
 
-        with patch("kiwi_mcp.handlers.script.handler.ScriptHandler") as MockHandler:
+        with patch("kiwi_mcp.handlers.tool.handler.ToolHandler") as MockHandler:
             mock_instance = MockHandler.return_value
             mock_instance.load = AsyncMock(return_value={"status": "loaded"})
 
             result = await tool.execute(
                 {
-                    "item_type": "script",
-                    "item_id": "my_script",
+                    "item_type": "tool",
+                    "item_id": "my_tool",
                     "destination": "project",
                     "source": "registry",
                     "project_path": "/tmp/test",
@@ -367,7 +367,7 @@ class TestToolParameterValidation:
         type_enum = tool.schema.inputSchema["properties"]["item_type"]["enum"]
 
         assert "directive" in type_enum
-        assert "script" in type_enum
+        assert "tool" in type_enum
         assert "knowledge" in type_enum
 
 

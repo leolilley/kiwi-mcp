@@ -90,9 +90,9 @@ class TestTypeHandlerRegistrySearch:
         mock_handler.search.return_value = {}
 
         registry = TypeHandlerRegistry(project_path="/tmp/test")
-        registry.handlers["script"] = mock_handler
+        registry.handlers["tool"] = mock_handler
 
-        await registry.search(item_type="script", query="test", source="registry", limit=20)
+        await registry.search(item_type="tool", query="test", source="registry", limit=20)
 
         # Check handler received parameters
         call_args = mock_handler.search.call_args
@@ -162,18 +162,18 @@ class TestTypeHandlerRegistryLoad:
 
     @pytest.mark.asyncio
     async def test_load_script_name_mapping(self):
-        """Test load maps item_id to script_name."""
+        """Test load maps item_id to tool_name (migrated from script_name)."""
         mock_handler = AsyncMock()
         mock_handler.load.return_value = {}
 
         registry = TypeHandlerRegistry(project_path="/tmp/test")
-        registry.handlers["script"] = mock_handler
+        registry.handlers["tool"] = mock_handler
 
-        await registry.load(item_type="script", item_id="test_script")
+        await registry.load(item_type="tool", item_id="test_tool")
 
-        # Check script_name parameter was used
+        # Check tool_name parameter was used (migrated from script_name)
         call_kwargs = mock_handler.load.call_args[1]
-        assert "script_name" in call_kwargs
+        assert "tool_name" in call_kwargs
 
     @pytest.mark.asyncio
     async def test_load_knowledge_id_mapping(self):
@@ -239,17 +239,17 @@ class TestTypeHandlerRegistryExecute:
 
     @pytest.mark.asyncio
     async def test_execute_maps_item_id_to_script_name(self):
-        """Test execute maps item_id for scripts."""
+        """Test execute maps item_id for tools (migrated from scripts)."""
         mock_handler = AsyncMock()
         mock_handler.execute.return_value = {}
 
         registry = TypeHandlerRegistry(project_path="/tmp/test")
-        registry.handlers["script"] = mock_handler
+        registry.handlers["tool"] = mock_handler
 
-        await registry.execute(item_type="script", action="run", item_id="test_script")
+        await registry.execute(item_type="tool", action="run", item_id="test_tool")
 
         call_kwargs = mock_handler.execute.call_args[1]
-        assert "script_name" in call_kwargs
+        assert "tool_name" in call_kwargs
 
     @pytest.mark.asyncio
     async def test_execute_maps_item_id_to_zettel_id(self):
@@ -331,23 +331,23 @@ class TestTypeHandlerRegistryIntegration:
         """Test registry behavior with multiple handlers."""
         # Create mocks for all three handler types
         mock_directive = AsyncMock()
-        mock_script = AsyncMock()
+        mock_tool = AsyncMock()
         mock_knowledge = AsyncMock()
 
         registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_directive
-        registry.handlers["script"] = mock_script
+        registry.handlers["tool"] = mock_tool
         registry.handlers["knowledge"] = mock_knowledge
 
         # Should work with all types
-        assert registry.get_supported_types() == ["directive", "script", "knowledge"]
+        assert registry.get_supported_types() == ["directive", "tool", "knowledge"]
 
         # Each search should route to correct handler
         await registry.search("directive", "test")
         assert mock_directive.search.called
 
-        await registry.search("script", "test")
-        assert mock_script.search.called
+        await registry.search("tool", "test")
+        assert mock_tool.search.called
 
         await registry.search("knowledge", "test")
         assert mock_knowledge.search.called
@@ -363,7 +363,7 @@ class TestTypeHandlerRegistryIntegration:
         assert info["project_path"] == project_path
         assert "handlers" in info
         assert "directive" in info["handlers"]
-        assert "script" in info["handlers"]
+        assert "tool" in info["handlers"]
         assert "knowledge" in info["handlers"]
 
     @pytest.mark.asyncio

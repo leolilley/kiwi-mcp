@@ -1,7 +1,7 @@
 """
 Path Resolution Utilities
 
-Finds directives, scripts, and knowledge entries in local filesystems.
+Finds directives, tools, and knowledge entries in local filesystems.
 """
 
 from pathlib import Path
@@ -51,31 +51,25 @@ class DirectiveResolver:
         return None
 
 
-class ScriptResolver:
-    """Resolve script file paths."""
+class ToolResolver:
+    """Resolve tool file paths."""
     
     def __init__(self, project_path: Optional[Path] = None):
         self.project_path = project_path or Path.cwd()
         self.user_space = get_user_space()
         
-        self.project_scripts = self.project_path / ".ai" / "scripts"
-        self.user_scripts = self.user_space / "scripts"
+        self.project_tools = self.project_path / ".ai" / "tools"
+        self.user_tools = self.user_space / "tools"
     
-    def resolve(self, script_name: str) -> Optional[Path]:
-        """
-        Find script file in project > user order.
-        
-        Searches recursively in all subdirectories.
-        """
-        # Check project space
-        if self.project_scripts.exists():
-            for file_path in self.project_scripts.rglob(f"{script_name}.py"):
+    def resolve(self, tool_name: str) -> Optional[Path]:
+        """Find tool file in project > user order."""
+        if self.project_tools.exists():
+            for file_path in self.project_tools.rglob(f"{tool_name}.py"):
                 if file_path.is_file():
                     return file_path
         
-        # Check user space
-        if self.user_scripts.exists():
-            for file_path in self.user_scripts.rglob(f"{script_name}.py"):
+        if self.user_tools.exists():
+            for file_path in self.user_tools.rglob(f"{tool_name}.py"):
                 if file_path.is_file():
                     return file_path
         

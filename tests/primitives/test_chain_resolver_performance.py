@@ -39,7 +39,7 @@ class TestChainResolverPerformance:
                 {
                     "depth": 0,
                     "tool_id": tool_id,
-                    "tool_type": "script",
+                    "tool_type": "python",
                     "executor_id": "python_runtime",
                     "manifest": {
                         "config": {
@@ -76,7 +76,7 @@ class TestChainResolverPerformance:
                 {
                     "depth": 0,
                     "tool_id": tool_id,
-                    "tool_type": "script",
+                    "tool_type": "node",
                     "executor_id": "node_runtime",
                     "manifest": {
                         "config": {
@@ -259,7 +259,7 @@ class TestChainResolverPerformance:
                 {
                     "depth": depth,
                     "tool_id": f"tool_{depth}",
-                    "tool_type": "script"
+                    "tool_type": "python"
                     if depth == 0
                     else ("runtime" if depth < 4 else "primitive"),
                     "executor_id": f"tool_{depth + 1}" if depth < 4 else None,
@@ -395,7 +395,7 @@ class TestChainResolverPerformance:
                     {
                         "depth": i,
                         "tool_id": f"level_{i}_tool",
-                        "tool_type": "script"
+                        "tool_type": "python"
                         if i == 0
                         else ("runtime" if i < depth - 1 else "primitive"),
                         "executor_id": f"level_{i + 1}_tool" if i < depth - 1 else None,

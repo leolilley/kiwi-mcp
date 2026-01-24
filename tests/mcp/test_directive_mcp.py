@@ -125,12 +125,45 @@ def test_parse_mcps_with_empty_tools():
 async def test_run_directive_with_mcps_success(handler):
     """Test running directive with successful MCP connections."""
     # Mock the directive file and parsing
-    mock_file_path = Path("/tmp/test.md")
+    from unittest.mock import MagicMock
+    mock_file_path = MagicMock(spec=Path)
+    # Mock read_text to return valid directive content (needed for signature verification)
+    mock_file_path.read_text.return_value = """<!-- kiwi-mcp:validated:2024-01-01T00:00:00Z:abc123 -->
+
+# Test Directive
+
+```xml
+<directive name="test_directive" version="1.0.0">
+  <metadata>
+    <description>Test directive</description>
+    <permissions>
+      <allow type="read" scope="all" />
+    </permissions>
+    <model tier="reasoning" />
+  </metadata>
+  <process>
+    <step name="test">
+      <action>Test action</action>
+    </step>
+  </process>
+</directive>
+```
+"""
+    mock_file_path.__str__ = lambda self=None: "/tmp/test.md"
     mock_directive_data = {
         "name": "test_directive",
         "description": "Test directive",
         "version": "1.0.0",
-        "parsed": {"mcps": {"mcp": {"_attrs": {"name": "github", "required": "false"}}}},
+        "parsed": {
+            "process": {
+                "step": {
+                    "_attrs": {"name": "test"},
+                    "action": "Test action",
+                }
+            },
+            "inputs": {"input": []},
+            "mcps": {"mcp": {"_attrs": {"name": "github", "required": "false"}}},
+        },
     }
 
     mock_schemas = [{"name": "list_repos", "description": "List repositories"}]
@@ -141,20 +174,17 @@ async def test_run_directive_with_mcps_success(handler):
             "kiwi_mcp.handlers.directive.handler.parse_directive_file",
             return_value=mock_directive_data,
         ),
-        patch("kiwi_mcp.handlers.directive.handler.ValidationManager") as mock_validator,
-        patch("kiwi_mcp.handlers.directive.handler.MetadataManager") as mock_metadata,
+        patch("kiwi_mcp.handlers.directive.handler.ValidationManager.validate_and_embed") as mock_validate,
+        patch("kiwi_mcp.handlers.directive.handler.MetadataManager.verify_signature") as mock_verify,
         patch.object(handler.schema_cache, "get", return_value=None),
         patch.object(
             handler.mcp_pool, "get_tool_schemas", return_value=mock_schemas
         ) as mock_get_schemas,
         patch.object(handler.schema_cache, "set") as mock_cache_set,
     ):
-        # Mock validation and metadata checks
-        mock_validator.validate.return_value = {"valid": True, "issues": []}
-        mock_metadata.verify_signature.return_value = {"status": "valid"}
-
-        # Mock file operations
-        mock_file_path.read_text = lambda: "directive content"
+        # Mock validation and metadata checks (static methods)
+        mock_validate.return_value = {"valid": True, "issues": []}
+        mock_verify.return_value = {"status": "valid"}
 
         result = await handler._run_directive("test_directive", {})
 
@@ -174,7 +204,31 @@ async def test_run_directive_with_mcps_success(handler):
 @pytest.mark.asyncio
 async def test_run_directive_with_required_mcp_failure(handler):
     """Test running directive when required MCP connection fails."""
-    mock_file_path = Path("/tmp/test.md")
+    from unittest.mock import MagicMock
+    mock_file_path = MagicMock(spec=Path)
+    # Mock read_text to return valid directive content (needed for signature verification)
+    mock_file_path.read_text.return_value = """<!-- kiwi-mcp:validated:2024-01-01T00:00:00Z:abc123 -->
+
+# Test Directive
+
+```xml
+<directive name="test_directive" version="1.0.0">
+  <metadata>
+    <description>Test directive</description>
+    <permissions>
+      <allow type="read" scope="all" />
+    </permissions>
+    <model tier="reasoning" />
+  </metadata>
+  <process>
+    <step name="test">
+      <action>Test action</action>
+    </step>
+  </process>
+</directive>
+```
+"""
+    mock_file_path.__str__ = lambda self=None: "/tmp/test.md"
     mock_directive_data = {
         "name": "test_directive",
         "description": "Test directive",
@@ -197,19 +251,16 @@ async def test_run_directive_with_required_mcp_failure(handler):
             "kiwi_mcp.handlers.directive.handler.parse_directive_file",
             return_value=mock_directive_data,
         ),
-        patch("kiwi_mcp.handlers.directive.handler.ValidationManager") as mock_validator,
-        patch("kiwi_mcp.handlers.directive.handler.MetadataManager") as mock_metadata,
+            patch("kiwi_mcp.handlers.directive.handler.ValidationManager.validate_and_embed") as mock_validate,
+            patch("kiwi_mcp.handlers.directive.handler.MetadataManager.verify_signature") as mock_verify,
         patch.object(handler.schema_cache, "get", return_value=None),
         patch.object(
             handler.mcp_pool, "get_tool_schemas", side_effect=Exception("Connection failed")
         ),
     ):
-        # Mock validation and metadata checks
-        mock_validator.validate.return_value = {"valid": True, "issues": []}
-        mock_metadata.verify_signature.return_value = {"status": "valid"}
-
-        # Mock file operations
-        mock_file_path.read_text = lambda: "directive content"
+        # Mock validation and metadata checks (static methods)
+        mock_validate.return_value = {"valid": True, "issues": []}
+        mock_verify.return_value = {"status": "valid"}
 
         result = await handler._run_directive("test_directive", {})
 
@@ -222,12 +273,43 @@ async def test_run_directive_with_required_mcp_failure(handler):
 @pytest.mark.asyncio
 async def test_run_directive_with_optional_mcp_failure(handler):
     """Test running directive when optional MCP connection fails."""
-    mock_file_path = Path("/tmp/test.md")
+    from unittest.mock import MagicMock
+    mock_file_path = MagicMock(spec=Path)
+    # Mock read_text to return valid directive content (needed for signature verification)
+    mock_file_path.read_text.return_value = """<!-- kiwi-mcp:validated:2024-01-01T00:00:00Z:abc123 -->
+
+# Test Directive
+
+```xml
+<directive name="test_directive" version="1.0.0">
+  <metadata>
+    <description>Test directive</description>
+    <permissions>
+      <allow type="read" scope="all" />
+    </permissions>
+    <model tier="reasoning" />
+  </metadata>
+  <process>
+    <step name="test">
+      <action>Test action</action>
+    </step>
+  </process>
+</directive>
+```
+"""
+    mock_file_path.__str__ = lambda self=None: "/tmp/test.md"
     mock_directive_data = {
         "name": "test_directive",
         "description": "Test directive",
         "version": "1.0.0",
         "parsed": {
+            "process": {
+                "step": {
+                    "_attrs": {"name": "test"},
+                    "action": "Test action",
+                }
+            },
+            "inputs": {"input": []},
             "mcps": {
                 "mcp": {
                     "_attrs": {
@@ -235,7 +317,7 @@ async def test_run_directive_with_optional_mcp_failure(handler):
                         "required": "false",  # Optional MCP
                     }
                 }
-            }
+            },
         },
     }
 
@@ -245,19 +327,16 @@ async def test_run_directive_with_optional_mcp_failure(handler):
             "kiwi_mcp.handlers.directive.handler.parse_directive_file",
             return_value=mock_directive_data,
         ),
-        patch("kiwi_mcp.handlers.directive.handler.ValidationManager") as mock_validator,
-        patch("kiwi_mcp.handlers.directive.handler.MetadataManager") as mock_metadata,
+            patch("kiwi_mcp.handlers.directive.handler.ValidationManager.validate_and_embed") as mock_validate,
+            patch("kiwi_mcp.handlers.directive.handler.MetadataManager.verify_signature") as mock_verify,
         patch.object(handler.schema_cache, "get", return_value=None),
         patch.object(
             handler.mcp_pool, "get_tool_schemas", side_effect=Exception("Connection failed")
         ),
     ):
-        # Mock validation and metadata checks
-        mock_validator.validate.return_value = {"valid": True, "issues": []}
-        mock_metadata.verify_signature.return_value = {"status": "valid"}
-
-        # Mock file operations
-        mock_file_path.read_text = lambda: "directive content"
+        # Mock validation and metadata checks (static methods)
+        mock_validate.return_value = {"valid": True, "issues": []}
+        mock_verify.return_value = {"status": "valid"}
 
         result = await handler._run_directive("test_directive", {})
 

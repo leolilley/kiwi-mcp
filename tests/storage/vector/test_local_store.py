@@ -1,254 +1,310 @@
-"""Test local vector store functionality."""
+"""Test local vector store functionality (SQLite-based)."""
 
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, AsyncMock
 from kiwi_mcp.storage.vector.local import LocalVectorStore
+from kiwi_mcp.storage.vector.simple_store import SimpleVectorStore
 from kiwi_mcp.storage.vector.base import SearchResult
 
 
 class TestLocalVectorStore:
     @pytest.fixture
-    def mock_embedding_model(self):
-        """Create a mock embedding model."""
-        model = MagicMock()
-        model.embed.return_value = [0.1, 0.2, 0.3, 0.4]
-        return model
+    def mock_embedding_service(self):
+        """Create a mock embedding service."""
+        service = MagicMock()
+        service.embed = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+        return service
 
-    def test_init(self, tmp_path, mock_embedding_model):
+    def test_init(self, tmp_path, mock_embedding_service):
         """Test initialization."""
         storage_path = tmp_path / "vector_store"
 
         store = LocalVectorStore(
             storage_path=storage_path,
             collection_name="test_collection",
-            embedding_model=mock_embedding_model,
+            embedding_service=mock_embedding_service,
         )
 
         assert store.storage_path == storage_path
         assert store.collection_name == "test_collection"
-        assert store.embedder == mock_embedding_model
-        assert store._client is None
-        assert store._collection is None
+        assert store.embedder == mock_embedding_service
         assert storage_path.exists()
+        # Check that internal store is initialized
+        assert store._store is not None
+        assert isinstance(store._store, SimpleVectorStore)
 
     def test_init_default_params(self, tmp_path):
-        """Test initialization with default parameters."""
+        """Test initialization with default parameters (no embedder)."""
         storage_path = tmp_path / "vector_store"
 
         store = LocalVectorStore(storage_path)
 
+        # Without embedding service, embedder should be None
         assert store.collection_name == "kiwi_items"
-        assert store.embedder is not None
-        assert store.embedder.model_name == "all-MiniLM-L6-v2"
-
-    @patch("kiwi_mcp.storage.vector.local.chromadb")
-    def test_get_client_success(self, mock_chromadb, tmp_path):
-        """Test successful client creation."""
-        storage_path = tmp_path / "vector_store"
-        mock_client = MagicMock()
-        mock_chromadb.Client.return_value = mock_client
-
-        store = LocalVectorStore(storage_path)
-        client = store._get_client()
-
-        assert client == mock_client
-        assert store._client == mock_client
-        mock_chromadb.Client.assert_called_once()
-
-        # Second call should return cached client
-        client2 = store._get_client()
-        assert client2 == mock_client
-        # Still only called once
-        assert mock_chromadb.Client.call_count == 1
-
-    def test_get_client_missing_dependency(self, tmp_path):
-        """Test handling of missing chromadb dependency."""
-        storage_path = tmp_path / "vector_store"
-        store = LocalVectorStore(storage_path)
-
-        with patch("kiwi_mcp.storage.vector.local.chromadb", side_effect=ImportError):
-            with pytest.raises(ImportError) as exc_info:
-                store._get_client()
-
-            assert "chromadb is required" in str(exc_info.value)
-
-    @patch("kiwi_mcp.storage.vector.local.chromadb")
-    def test_get_collection(self, mock_chromadb, tmp_path, mock_embedding_model):
-        """Test collection creation."""
-        storage_path = tmp_path / "vector_store"
-        mock_client = MagicMock()
-        mock_collection = MagicMock()
-        mock_chromadb.Client.return_value = mock_client
-        mock_client.get_or_create_collection.return_value = mock_collection
-
-        store = LocalVectorStore(
-            storage_path=storage_path,
-            collection_name="test_collection",
-            embedding_model=mock_embedding_model,
-        )
-
-        collection = store._get_collection()
-
-        assert collection == mock_collection
-        assert store._collection == mock_collection
-        mock_client.get_or_create_collection.assert_called_once_with(
-            name="test_collection", metadata={"hnsw:space": "cosine"}
-        )
+        assert store.embedder is None  # No default embedder anymore
 
     @pytest.mark.asyncio
-    async def test_embed_and_store(self, tmp_path, mock_embedding_model):
+    async def test_embed_and_store(self, tmp_path, mock_embedding_service):
         """Test embedding and storing items."""
         storage_path = tmp_path / "vector_store"
 
-        with patch("kiwi_mcp.storage.vector.local.chromadb"):
-            store = LocalVectorStore(storage_path, embedding_model=mock_embedding_model)
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
 
-            # Mock collection
-            mock_collection = MagicMock()
-            store._collection = mock_collection
+        result = await store.embed_and_store(
+            item_id="test_id",
+            item_type="directive",
+            content="test content",
+            metadata={"key": "value"},
+            signature="test_sig",
+        )
 
-            result = await store.embed_and_store(
-                item_id="test_id",
-                item_type="directive",
-                content="test content",
-                metadata={"key": "value"},
-                signature="test_sig",
-            )
-
-            assert result is True
-            mock_embedding_model.embed.assert_called_once_with("test content")
-            mock_collection.upsert.assert_called_once_with(
-                ids=["test_id"],
-                embeddings=[[0.1, 0.2, 0.3, 0.4]],
-                documents=["test content"],
-                metadatas=[{"item_type": "directive", "signature": "test_sig", "key": "value"}],
-            )
+        assert result is True
+        mock_embedding_service.embed.assert_called_once_with("test content")
 
     @pytest.mark.asyncio
-    async def test_search(self, tmp_path, mock_embedding_model):
+    async def test_search(self, tmp_path, mock_embedding_service):
         """Test searching items."""
         storage_path = tmp_path / "vector_store"
 
-        with patch("kiwi_mcp.storage.vector.local.chromadb"):
-            store = LocalVectorStore(storage_path, embedding_model=mock_embedding_model)
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
 
-            # Mock collection and search results
-            mock_collection = MagicMock()
-            store._collection = mock_collection
+        # Store some items first
+        await store.embed_and_store(
+            item_id="item1",
+            item_type="directive",
+            content="content about testing",
+            metadata={"name": "test1"},
+        )
+        await store.embed_and_store(
+            item_id="item2",
+            item_type="tool",
+            content="content about tools",
+            metadata={"name": "test2"},
+        )
 
-            mock_collection.query.return_value = {
-                "ids": [["item1", "item2"]],
-                "distances": [[0.1, 0.3]],
-                "documents": [["content1", "content2"]],
-                "metadatas": [
-                    [
-                        {"item_type": "directive", "key": "value1"},
-                        {"item_type": "script", "key": "value2"},
-                    ]
-                ],
-            }
+        # Search
+        results = await store.search("test query", limit=10)
 
-            results = await store.search("test query", limit=10, item_type="directive")
-
-            assert len(results) == 2
-            assert isinstance(results[0], SearchResult)
-            assert results[0].item_id == "item1"
-            assert results[0].item_type == "directive"
-            assert results[0].score == 0.9  # 1 - 0.1
-            assert results[0].content_preview == "content1"
-            assert results[0].source == "local"
-
-            mock_embedding_model.embed.assert_called_once_with("test query")
-            mock_collection.query.assert_called_once_with(
-                query_embeddings=[[0.1, 0.2, 0.3, 0.4]],
-                n_results=10,
-                where={"item_type": "directive"},
-            )
+        assert len(results) == 2
+        assert isinstance(results[0], SearchResult)
+        assert results[0].source == "local"
 
     @pytest.mark.asyncio
-    async def test_search_empty_results(self, tmp_path, mock_embedding_model):
+    async def test_search_with_item_type_filter(self, tmp_path, mock_embedding_service):
+        """Test search with item_type filter."""
+        storage_path = tmp_path / "vector_store"
+
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
+
+        await store.embed_and_store(
+            item_id="item1",
+            item_type="directive",
+            content="content1",
+            metadata={},
+        )
+        await store.embed_and_store(
+            item_id="item2",
+            item_type="tool",
+            content="content2",
+            metadata={},
+        )
+
+        results = await store.search("query", item_type="directive")
+
+        assert len(results) == 1
+        assert results[0].item_type == "directive"
+
+    @pytest.mark.asyncio
+    async def test_search_empty_results(self, tmp_path, mock_embedding_service):
         """Test search with empty results."""
         storage_path = tmp_path / "vector_store"
 
-        with patch("kiwi_mcp.storage.vector.local.chromadb"):
-            store = LocalVectorStore(storage_path, embedding_model=mock_embedding_model)
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
 
-            # Mock collection with empty results
-            mock_collection = MagicMock()
-            store._collection = mock_collection
-            mock_collection.query.return_value = {
-                "ids": [[]],
-                "distances": [[]],
-                "documents": [[]],
-                "metadatas": [[]],
-            }
+        results = await store.search("test query")
 
-            results = await store.search("test query")
-
-            assert len(results) == 0
+        assert len(results) == 0
 
     @pytest.mark.asyncio
-    async def test_delete(self, tmp_path, mock_embedding_model):
+    async def test_delete(self, tmp_path, mock_embedding_service):
         """Test deleting items."""
         storage_path = tmp_path / "vector_store"
 
-        with patch("kiwi_mcp.storage.vector.local.chromadb"):
-            store = LocalVectorStore(storage_path, embedding_model=mock_embedding_model)
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
 
-            mock_collection = MagicMock()
-            store._collection = mock_collection
+        await store.embed_and_store(
+            item_id="test_id",
+            item_type="directive",
+            content="test content",
+            metadata={},
+        )
 
-            result = await store.delete("test_id")
+        assert await store.exists("test_id") is True
 
-            assert result is True
-            mock_collection.delete.assert_called_once_with(ids=["test_id"])
+        result = await store.delete("test_id")
+
+        assert result is True
+        assert await store.exists("test_id") is False
 
     @pytest.mark.asyncio
-    async def test_delete_error(self, tmp_path, mock_embedding_model):
-        """Test delete error handling."""
+    async def test_delete_nonexistent(self, tmp_path, mock_embedding_service):
+        """Test deleting nonexistent item."""
         storage_path = tmp_path / "vector_store"
 
-        with patch("kiwi_mcp.storage.vector.local.chromadb"):
-            store = LocalVectorStore(storage_path, embedding_model=mock_embedding_model)
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
 
-            mock_collection = MagicMock()
-            mock_collection.delete.side_effect = Exception("Delete failed")
-            store._collection = mock_collection
+        result = await store.delete("nonexistent")
 
-            result = await store.delete("test_id")
-
-            assert result is False
+        assert result is False
 
     @pytest.mark.asyncio
-    async def test_exists_true(self, tmp_path, mock_embedding_model):
+    async def test_exists_true(self, tmp_path, mock_embedding_service):
         """Test exists check returns True."""
         storage_path = tmp_path / "vector_store"
 
-        with patch("kiwi_mcp.storage.vector.local.chromadb"):
-            store = LocalVectorStore(storage_path, embedding_model=mock_embedding_model)
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
 
-            mock_collection = MagicMock()
-            mock_collection.get.return_value = {"ids": ["test_id"]}
-            store._collection = mock_collection
+        await store.embed_and_store(
+            item_id="test_id",
+            item_type="directive",
+            content="test content",
+            metadata={},
+        )
 
-            result = await store.exists("test_id")
+        result = await store.exists("test_id")
 
-            assert result is True
-            mock_collection.get.assert_called_once_with(ids=["test_id"])
+        assert result is True
 
     @pytest.mark.asyncio
-    async def test_exists_false(self, tmp_path, mock_embedding_model):
+    async def test_exists_false(self, tmp_path, mock_embedding_service):
         """Test exists check returns False."""
         storage_path = tmp_path / "vector_store"
 
-        with patch("kiwi_mcp.storage.vector.local.chromadb"):
-            store = LocalVectorStore(storage_path, embedding_model=mock_embedding_model)
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
 
-            mock_collection = MagicMock()
-            mock_collection.get.return_value = {"ids": []}
-            store._collection = mock_collection
+        result = await store.exists("nonexistent")
 
-            result = await store.exists("test_id")
+        assert result is False
 
-            assert result is False
+    @pytest.mark.asyncio
+    async def test_update(self, tmp_path, mock_embedding_service):
+        """Test updating items."""
+        storage_path = tmp_path / "vector_store"
+
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
+
+        await store.embed_and_store(
+            item_id="test_id",
+            item_type="directive",
+            content="original content",
+            metadata={"version": "1"},
+        )
+
+        result = await store.update(
+            item_id="test_id",
+            content="updated content",
+            metadata={"version": "2"},
+        )
+
+        assert result is True
+
+    def test_get_stats(self, tmp_path, mock_embedding_service):
+        """Test getting store statistics."""
+        storage_path = tmp_path / "vector_store"
+
+        store = LocalVectorStore(
+            storage_path=storage_path,
+            embedding_service=mock_embedding_service
+        )
+
+        stats = store.get_stats()
+
+        assert "total" in stats
+        assert "by_type" in stats
+        assert "db_path" in stats
+        assert stats["total"] == 0
+
+
+class TestSimpleVectorStore:
+    """Test the underlying SimpleVectorStore directly."""
+
+    @pytest.fixture
+    def mock_embedding_service(self):
+        """Create a mock embedding service."""
+        service = MagicMock()
+        service.embed = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+        return service
+
+    def test_init_creates_db(self, tmp_path, mock_embedding_service):
+        """Test that initialization creates the database."""
+        storage_path = tmp_path / "vector_store"
+
+        store = SimpleVectorStore(
+            storage_path=storage_path,
+            collection_name="test",
+            embedding_service=mock_embedding_service,
+        )
+
+        db_path = storage_path / "test.db"
+        assert db_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_embed_and_store_no_embedder(self, tmp_path):
+        """Test that embed_and_store fails without embedder."""
+        storage_path = tmp_path / "vector_store"
+
+        store = SimpleVectorStore(
+            storage_path=storage_path,
+            collection_name="test",
+            embedding_service=None,
+        )
+
+        with pytest.raises(RuntimeError, match="Embedding service not configured"):
+            await store.embed_and_store(
+                item_id="test",
+                item_type="directive",
+                content="test",
+                metadata={},
+            )
+
+    @pytest.mark.asyncio
+    async def test_search_no_embedder(self, tmp_path):
+        """Test that search fails without embedder."""
+        storage_path = tmp_path / "vector_store"
+
+        store = SimpleVectorStore(
+            storage_path=storage_path,
+            collection_name="test",
+            embedding_service=None,
+        )
+
+        with pytest.raises(RuntimeError, match="Embedding service not configured"):
+            await store.search("query")

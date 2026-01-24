@@ -404,7 +404,7 @@ class TestPrimitiveExecutorEdgeCases:
             {
                 "depth": 0,
                 "tool_id": "no_primitive_tool",
-                "tool_type": "script",
+                "tool_type": "python",
                 "executor_id": None,
                 "manifest": {"config": {"command": "echo", "args": ["test"]}},
             }
@@ -426,7 +426,7 @@ class TestPrimitiveExecutorEdgeCases:
             {
                 "depth": 0,
                 "tool_id": "override_tool",
-                "tool_type": "script",
+                "tool_type": "python",
                 "executor_id": "python_runtime",
                 "manifest": {
                     "config": {
@@ -529,7 +529,7 @@ class TestPrimitiveExecutorEdgeCases:
             {
                 "depth": 0,
                 "tool_id": "override_tool",
-                "tool_type": "script",
+                "tool_type": "bash",
                 "executor_id": "subprocess",
                 "manifest": {
                     "config": {

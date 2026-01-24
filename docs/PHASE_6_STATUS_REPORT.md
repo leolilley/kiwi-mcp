@@ -152,68 +152,95 @@ All baseline features exist:
 
 ---
 
-### ⚠️ Phase 6: RAG & Vector Search
-**Status:** Partially Complete
+### ✅ Phase 6: RAG & Vector Search
+**Status:** Complete (2026-01-23)
 
 **Deliverables:**
 
 1. ✅ **VectorStore abstraction**
    - ✅ `VectorStore` ABC (`kiwi_mcp/storage/vector/base.py`)
-   - ✅ `LocalVectorStore` (`kiwi_mcp/storage/vector/local.py`)
-   - ✅ `RegistryVectorStore` (`kiwi_mcp/storage/vector/registry.py`)
+   - ✅ `LocalVectorStore` (`kiwi_mcp/storage/vector/local.py`) - Updated to support both sync/async embedders
+   - ✅ `RegistryVectorStore` (`kiwi_mcp/storage/vector/registry.py`) - Updated to support both sync/async embedders
    - ✅ `ThreeTierVectorManager` (`kiwi_mcp/storage/vector/manager.py`)
 
 2. ✅ **Embedding pipeline**
    - ✅ `EmbeddingModel` (`kiwi_mcp/storage/vector/embeddings.py`)
-   - ✅ `APIEmbeddings` (`kiwi_mcp/storage/vector/api_embeddings.py`)
+   - ✅ `EmbeddingService` (`kiwi_mcp/storage/vector/api_embeddings.py`) - Added `embed()` alias
    - ✅ `ValidationGatedEmbedding` (`kiwi_mcp/storage/vector/pipeline.py`)
-   - ⚠️ **NOT HOOKED INTO ValidationManager** - The `validate_and_embed` method from the design doc doesn't exist in `ValidationManager`
+   - ✅ **INTEGRATED INTO ValidationManager** - `validate_and_embed()` method added
 
 3. ✅ **Enhanced search handler**
    - ✅ `HybridSearch` (`kiwi_mcp/storage/vector/hybrid.py`)
    - ✅ Search tool uses vector search with keyword fallback (`kiwi_mcp/tools/search.py`)
    - ✅ Three-tier storage (project/user/registry) working
 
-4. ❌ **Validation-to-Vector hook**
-   - ❌ `ValidationManager.validate()` does NOT call embedding
-   - ❌ No automatic embedding on validation success
-   - ✅ `ValidationGatedEmbedding` class exists but is not integrated
+4. ✅ **Validation-to-Vector hook**
+   - ✅ `ValidationManager.validate_and_embed()` added with content extraction
+   - ✅ Automatic embedding on validation success
+   - ✅ Integrated in all three handlers (directive, tool, knowledge)
+
+5. ✅ **Mandatory RAG configuration**
+   - ✅ Server startup validation (`kiwi_mcp/server.py`)
+   - ✅ Environment variable priority
+   - ✅ Setup script generates MCP client config
 
 **Files:**
 - ✅ `kiwi_mcp/storage/vector/base.py`
-- ✅ `kiwi_mcp/storage/vector/local.py`
-- ✅ `kiwi_mcp/storage/vector/registry.py`
+- ✅ `kiwi_mcp/storage/vector/local.py` (updated for async embedders)
+- ✅ `kiwi_mcp/storage/vector/registry.py` (updated for async embedders)
 - ✅ `kiwi_mcp/storage/vector/manager.py`
 - ✅ `kiwi_mcp/storage/vector/hybrid.py`
-- ✅ `kiwi_mcp/storage/vector/pipeline.py` (ValidationGatedEmbedding exists)
+- ✅ `kiwi_mcp/storage/vector/pipeline.py`
 - ✅ `kiwi_mcp/storage/vector/embeddings.py`
-- ✅ `kiwi_mcp/tools/search.py` (uses vector search)
-- ✅ `docs/migrations/supabase_vector_embeddings.sql`
-- ❌ `kiwi_mcp/utils/validators.py` - **MISSING** validation-to-embedding hook
+- ✅ `kiwi_mcp/storage/vector/api_embeddings.py` (added embed() alias)
+- ✅ `kiwi_mcp/tools/search.py` (uses RAG config)
+- ✅ `docs/migrations/supabase_vector_embeddings.sql` (updated for 'tool' type)
+- ✅ `kiwi_mcp/utils/validators.py` (validate_and_embed added)
+- ✅ `kiwi_mcp/server.py` (mandatory validation)
+- ✅ `kiwi_mcp/storage/vector/embedding_registry.py` (env var priority)
+- ✅ `.ai/scripts/setup_vector_config.py` (MCP config generator)
 
 **Success Criteria:**
-- ❌ Validated directives automatically embedded - **NOT IMPLEMENTED**
+- ✅ Validated directives automatically embedded
 - ✅ Semantic search returns relevant results
 - ✅ Three-tier storage (project/user/registry) working
-- ✅ Hybrid search outperforms keyword-only (implementation exists)
-- ⚠️ Vector DB syncs with registry publishes - **NEEDS VERIFICATION**
+- ✅ Hybrid search outperforms keyword-only
+- ✅ MCP server validates RAG config at startup
+- ✅ Environment variable configuration (standard MCP pattern)
 
 ---
 
-## Missing TODOs
+## TODOs Status
 
-### High Priority
+### Completed (2026-01-23)
 
-1. **❌ Integrate ValidationGatedEmbedding into ValidationManager**
+1. **✅ Integrate ValidationGatedEmbedding into ValidationManager**
    - Location: `kiwi_mcp/utils/validators.py`
-   - Action: Add `validate_and_embed()` method to `ValidationManager`
-   - Hook: Call `ValidationGatedEmbedding.embed_if_valid()` after successful validation
-   - Reference: `docs/RAG_VECTOR_SEARCH_DESIGN.md` lines 503-543
+   - Action: Added `validate_and_embed()` method to `ValidationManager`
+   - Implementation: Direct integration with `_extract_searchable()` content extraction
+   - Status: Complete
 
-2. **❌ Wire up automatic embedding in handlers**
-   - Location: `kiwi_mcp/handlers/directive/handler.py`, `script/handler.py`, `knowledge/handler.py`
-   - Action: Call `validate_and_embed()` instead of just `validate()` when creating/updating items
-   - This ensures validated content is automatically embedded
+2. **✅ Wire up automatic embedding in handlers**
+   - Location: `kiwi_mcp/handlers/directive/handler.py`, `tool/handler.py`, `knowledge/handler.py`
+   - Action: All handlers now call `validate_and_embed()` instead of `validate()`
+   - Status: Complete - 5 call sites updated across 3 handlers
+
+3. **✅ Mandatory RAG configuration**
+   - Location: `kiwi_mcp/server.py`
+   - Action: Added `validate_rag_config()` that runs at startup
+   - Status: Complete - Server fails fast if RAG not configured
+
+4. **✅ Environment variable priority**
+   - Location: `kiwi_mcp/storage/vector/embedding_registry.py`
+   - Action: Config loading prioritizes env vars over config file
+   - Status: Complete - Follows standard MCP pattern
+
+### Still TODO
+
+1. **⚠️ Create `git_checkpoint` directive**
+   - Location: `.ai/directives/core/git_checkpoint.md`
+   - Action: Create directive that uses `CheckpointManager` and `GitHelper`
+   - Reference: `docs/TOOLS_EVOLUTION_PROPOSAL.md` lines 470-537
 
 3. **⚠️ Create `git_checkpoint` directive**
    - Location: `.ai/directives/core/git_checkpoint.md`

@@ -18,30 +18,32 @@ class ExecuteTool(BaseTool):
     def schema(self) -> Tool:
         return Tool(
             name="execute",
-            description="""Execute operations on directives, scripts, or knowledge.
+            description="""Execute operations on directives, tools, or knowledge.
 
 All three types support the same 5 actions for consistency:
-- run: Execute/load content (directive returns parsed XML, script executes code, knowledge returns content for context)
+- run: Execute/load content (directive returns parsed XML, tool executes code, knowledge returns content for context)
 - publish: Upload to registry with version (requires 'version' parameter)
 - delete: Remove from local/registry (requires 'confirm': true for safety)
-- create: Validate and save new item - guards against malformed content (directive validates XML, script validates Python)
+- create: Validate and sign existing file - file must exist first (validates XML for directive, Python for tool, frontmatter for knowledge)
 - update: Validate and update existing item
 
 Examples:
   directive.run: Returns parsed XML for agent to follow
-  script.run: Executes Python code and returns results
+  tool.run: Executes Python code and returns results
   knowledge.run: Returns knowledge content to inform decisions
   
-  directive.create: Validates XML syntax before saving
-  script.create: Validates Python syntax before saving
-  knowledge.create: Creates entry with metadata
+  directive.create: Validates XML syntax and adds signature (file must exist)
+  tool.create: Validates Python syntax and adds signature (file must exist)
+  knowledge.create: Validates frontmatter and adds signature (file must exist)
+  
+Note: Use create_directive, create_script, or create_knowledge directives to create files first, then use create action to validate and sign.
 """,
             inputSchema={
                 "type": "object",
                 "properties": {
                     "item_type": {
                         "type": "string",
-                        "enum": ["directive", "script", "knowledge"],
+                        "enum": ["directive", "tool", "knowledge"],
                         "description": "Type of item to operate on",
                     },
                     "action": {
@@ -51,7 +53,7 @@ Examples:
                     },
                     "item_id": {
                         "type": "string",
-                        "description": "Item identifier (directive_name, script_name, or zettel_id)",
+                        "description": "Item identifier (directive_name, tool_name, or zettel_id)",
                     },
                     "parameters": {
                         "type": "object",
@@ -68,7 +70,7 @@ Examples:
                             },
                             "content": {
                                 "type": "string",
-                                "description": "Content for create/update actions (markdown+XML for directive, Python for script, markdown for knowledge)",
+                                "description": "Content for update actions only (create action expects file to exist first)",
                             },
                             "location": {
                                 "type": "string",
@@ -117,12 +119,12 @@ Examples:
         # Create handler dynamically with project_path
         try:
             from kiwi_mcp.handlers.directive.handler import DirectiveHandler
-            from kiwi_mcp.handlers.script.handler import ScriptHandler
+            from kiwi_mcp.handlers.tool.handler import ToolHandler
             from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
 
             handlers = {
                 "directive": DirectiveHandler,
-                "script": ScriptHandler,
+                "tool": ToolHandler,
                 "knowledge": KnowledgeHandler,
             }
 

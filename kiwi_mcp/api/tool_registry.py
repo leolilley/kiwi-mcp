@@ -2,7 +2,7 @@
 Tool Registry API Client
 
 Handles all interactions with Supabase tools and tool_versions tables.
-Replaces ScriptRegistry after the unified tools migration.
+Tool registry for unified tools architecture.
 """
 
 from typing import Any, Dict, List, Optional
@@ -133,7 +133,7 @@ class ToolRegistry(BaseRegistry):
             result = (
                 self.client.table("tools")
                 .select(
-                    "id, tool_id, namespace, name, tool_type, category, subcategory, "
+                    "id, tool_id, namespace, name, tool_type, category, "
                     "tags, executor_id, is_builtin, description, is_official, visibility, "
                     "download_count, quality_score, success_rate, latest_version, "
                     "created_at, updated_at"
@@ -297,7 +297,11 @@ class ToolRegistry(BaseRegistry):
             if existing:
                 # Update existing tool
                 tool_uuid = existing["id"]
-                update_data = {"latest_version": version}
+                update_data = {
+                    "latest_version": version,
+                    "tool_type": tool_type,
+                    "executor_id": executor_id,
+                }
                 if description:
                     update_data["description"] = description
                 if category:
@@ -324,9 +328,27 @@ class ToolRegistry(BaseRegistry):
                 "tool_id", tool_uuid
             ).execute()
 
-            # Compute content hash from manifest
-            manifest_str = str(manifest)
-            content_hash = hashlib.sha256(manifest_str.encode()).hexdigest()
+            # Compute file hashes first (needed for canonical integrity)
+            file_entries = []
+            if files:
+                for path, content in files.items():
+                    file_hash = hashlib.sha256(content.encode()).hexdigest()
+                    file_entries.append({
+                        "path": path,
+                        "sha256": file_hash,
+                        "is_executable": path.endswith((".py", ".sh")),
+                        "content": content,
+                        "size_bytes": len(content),
+                    })
+            
+            # Compute canonical integrity hash (includes manifest + file hashes)
+            from kiwi_mcp.primitives.integrity import compute_tool_integrity
+            content_hash = compute_tool_integrity(
+                tool_id=tool_id,
+                version=version,
+                manifest=manifest,
+                files=file_entries
+            )
 
             # Insert new version
             version_data = {
@@ -342,24 +364,31 @@ class ToolRegistry(BaseRegistry):
             version_uuid = version_result.data[0]["id"]
 
             # Insert files if provided
-            if files:
-                for path, content in files.items():
-                    file_hash = hashlib.sha256(content.encode()).hexdigest()
-                    file_data = {
-                        "tool_version_id": version_uuid,
-                        "path": path,
-                        "content_text": content,
-                        "sha256": file_hash,
-                        "size_bytes": len(content),
-                        "is_executable": path.endswith((".py", ".sh")),
-                    }
-                    self.client.table("tool_version_files").insert(file_data).execute()
+            for file_entry in file_entries:
+                file_data = {
+                    "tool_version_id": version_uuid,
+                    "path": file_entry["path"],
+                    "content_text": file_entry["content"],
+                    "sha256": file_entry["sha256"],
+                    "size_bytes": file_entry["size_bytes"],
+                    "is_executable": file_entry["is_executable"],
+                }
+                self.client.table("tool_version_files").insert(file_data).execute()
+
+            # Create embedding for registry vector search
+            await self._create_embedding(
+                item_id=tool_id,
+                item_type="tool",
+                content=f"{tool_id} {manifest.get('name', '')} {description or ''} {manifest.get('description', '')}",
+                metadata={"category": category, "version": version, "tool_type": tool_type}
+            )
 
             return {
                 "tool_id": tool_id,
                 "tool_uuid": tool_uuid,
                 "version_uuid": version_uuid,
                 "version": version,
+                "content_hash": content_hash,
                 "status": "published",
             }
         except Exception as e:
@@ -414,6 +443,9 @@ class ToolRegistry(BaseRegistry):
             else:
                 # Delete tool (cascades to versions and files)
                 self.client.table("tools").delete().eq("id", tool_uuid).execute()
+                
+                # Delete embedding
+                await self._delete_embedding(tool_id)
 
                 return {"deleted": True, "tool_id": tool_id, "all_versions": True}
         except Exception as e:

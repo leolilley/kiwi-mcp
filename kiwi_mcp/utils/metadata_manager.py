@@ -103,11 +103,11 @@ class DirectiveMetadataStrategy(MetadataStrategy):
         return content[start_idx:end_idx + len(end_tag)].strip()
 
 
-class ScriptMetadataStrategy(MetadataStrategy):
-    """Strategy for script metadata operations (Python files)."""
+class ToolMetadataStrategy(MetadataStrategy):
+    """Strategy for tool metadata operations (Python files)."""
 
     def extract_content_for_hash(self, file_content: str) -> str:
-        """Extract script content for hashing (without signature)."""
+        """Extract tool content for hashing (without signature)."""
         # Remove signature line to compute hash
         content_without_sig = self.remove_signature(file_content)
         # Also remove shebang if present (for consistent hashing)
@@ -282,7 +282,7 @@ class MetadataManager:
 
     STRATEGIES = {
         "directive": DirectiveMetadataStrategy(),
-        "script": ScriptMetadataStrategy(),
+        "tool": ToolMetadataStrategy(),
         "knowledge": KnowledgeMetadataStrategy(),
     }
 
@@ -299,7 +299,7 @@ class MetadataManager:
         """Parse file using appropriate parser."""
         if item_type == "directive":
             return parse_directive_file(file_path)
-        elif item_type == "script":
+        elif item_type == "tool":
             return parse_script_metadata(file_path)
         elif item_type == "knowledge":
             return parse_knowledge_entry(file_path)
@@ -337,7 +337,7 @@ class MetadataManager:
         signature_data = strategy.extract_signature(file_content)
 
         if not signature_data:
-            return None  # No signature - that's fine, might be legacy
+            return None
 
         stored_timestamp = signature_data["timestamp"]
         stored_hash = signature_data["hash"]

@@ -19,7 +19,14 @@ from kiwi_mcp.utils.parsers import parse_directive_file
 from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
 from kiwi_mcp.utils.metadata_manager import MetadataManager
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
+from kiwi_mcp.utils.xml_error_helper import format_error_with_context
 from kiwi_mcp.mcp import MCPClientPool, SchemaCache
+from kiwi_mcp.primitives.integrity import (
+    compute_directive_integrity,
+    verify_directive_integrity,
+    short_hash,
+)
+from kiwi_mcp.utils.schema_validator import SchemaValidator
 
 
 class DirectiveHandler:
@@ -38,6 +45,215 @@ class DirectiveHandler:
         # MCP support
         self.mcp_pool = MCPClientPool()
         self.schema_cache = SchemaCache()
+        
+        # Input schema validation
+        self._schema_validator = SchemaValidator()
+        
+        # Vector store for automatic embedding
+        self._vector_store = None
+        self._init_vector_store()
+
+    def _init_vector_store(self):
+        """Initialize project vector store for automatic embedding."""
+        try:
+            from kiwi_mcp.storage.vector import LocalVectorStore, EmbeddingService, load_vector_config
+            
+            # Load embedding config from environment
+            config = load_vector_config()
+            embedding_service = EmbeddingService(config)
+            
+            vector_path = self.project_path / ".ai" / "vector" / "project"
+            vector_path.mkdir(parents=True, exist_ok=True)
+            
+            self._vector_store = LocalVectorStore(
+                storage_path=vector_path,
+                collection_name="project_items",
+                embedding_service=embedding_service
+            )
+        except ValueError as e:
+            # Missing config - vector search disabled
+            self.logger.debug(f"Vector store not configured: {e}")
+            self._vector_store = None
+        except Exception as e:
+            self.logger.warning(f"Vector store init failed: {e}")
+            self._vector_store = None
+
+    def _compute_directive_integrity(
+        self, directive_data: Dict[str, Any], file_content: str
+    ) -> str:
+        """
+        Compute canonical integrity hash for a directive.
+        
+        Args:
+            directive_data: Parsed directive data
+            file_content: Raw file content
+            
+        Returns:
+            SHA256 hex digest (64 characters)
+        """
+        strategy = MetadataManager.get_strategy("directive")
+        xml_content = strategy.extract_content_for_hash(file_content)
+        
+        # Build metadata dict for integrity computation
+        metadata = {
+            "category": directive_data.get("category"),
+            "description": directive_data.get("description"),
+            "model_tier": directive_data.get("model", {}).get("tier") if isinstance(directive_data.get("model"), dict) else None,
+        }
+        
+        return compute_directive_integrity(
+            directive_name=directive_data.get("name", ""),
+            version=directive_data.get("version", "0.0.0"),
+            xml_content=xml_content or "",
+            metadata=metadata,
+        )
+    
+    def _verify_directive_integrity(
+        self, directive_data: Dict[str, Any], file_content: str, stored_hash: str
+    ) -> bool:
+        """
+        Verify directive content matches stored canonical integrity hash.
+        
+        Args:
+            directive_data: Parsed directive data
+            file_content: Raw file content
+            stored_hash: Expected integrity hash
+            
+        Returns:
+            True if computed hash matches stored hash
+        """
+        computed = self._compute_directive_integrity(directive_data, file_content)
+        return computed == stored_hash
+
+    def _extract_input_schema(self, parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Extract optional input_schema from parsed directive XML.
+        
+        The input_schema can be defined in <inputs> as a JSON schema attribute
+        or as a child <schema> element containing JSON.
+        
+        Example XML:
+            <inputs>
+              <input name="topic" type="string" required="true">Topic to research</input>
+              <schema>{"type": "object", "properties": {"topic": {"minLength": 3}}}</schema>
+            </inputs>
+        
+        Args:
+            parsed: Parsed directive XML structure
+            
+        Returns:
+            JSON Schema dict or None if not defined
+        """
+        if "inputs" not in parsed:
+            return None
+        
+        inputs_section = parsed["inputs"]
+        
+        # Check for <schema> element
+        if "schema" in inputs_section:
+            schema_data = inputs_section["schema"]
+            # Handle both text content and _text attribute
+            schema_text = schema_data.get("_text") if isinstance(schema_data, dict) else schema_data
+            if schema_text:
+                try:
+                    import json
+                    return json.loads(schema_text)
+                except json.JSONDecodeError:
+                    self.logger.warning("Invalid JSON in directive input_schema")
+                    return None
+        
+        # Check for schema attribute on inputs element
+        if isinstance(inputs_section, dict):
+            attrs = inputs_section.get("_attrs", {})
+            schema_attr = attrs.get("schema")
+            if schema_attr:
+                try:
+                    import json
+                    return json.loads(schema_attr)
+                except json.JSONDecodeError:
+                    self.logger.warning("Invalid JSON in directive input_schema attribute")
+                    return None
+        
+        return None
+    
+    def _build_input_schema_from_spec(self, inputs_spec: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Build a JSON Schema from the directive's input specifications.
+        
+        This auto-generates a schema from the <input> elements if no
+        explicit schema is provided.
+        
+        Args:
+            inputs_spec: List of input specifications from _extract_inputs()
+            
+        Returns:
+            JSON Schema dict
+        """
+        properties = {}
+        required = []
+        
+        for inp in inputs_spec:
+            name = inp.get("name", "")
+            if not name:
+                continue
+            
+            # Map directive types to JSON Schema types
+            type_mapping = {
+                "string": "string",
+                "number": "number",
+                "integer": "integer",
+                "boolean": "boolean",
+                "array": "array",
+                "object": "object",
+            }
+            
+            inp_type = inp.get("type", "string")
+            json_type = type_mapping.get(inp_type, "string")
+            
+            prop_schema = {"type": json_type}
+            
+            # Add description if available
+            if inp.get("description"):
+                prop_schema["description"] = inp["description"]
+            
+            properties[name] = prop_schema
+            
+            if inp.get("required"):
+                required.append(name)
+        
+        schema = {
+            "type": "object",
+            "properties": properties,
+        }
+        
+        if required:
+            schema["required"] = required
+        
+        return schema
+    
+    def _validate_inputs_with_schema(
+        self, 
+        params: Dict[str, Any], 
+        schema: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Validate input parameters against JSON Schema.
+        
+        Args:
+            params: Input parameters to validate
+            schema: JSON Schema to validate against
+            
+        Returns:
+            Validation result with valid, issues, warnings
+        """
+        if not self._schema_validator.is_available():
+            return {
+                "valid": True,
+                "issues": [],
+                "warnings": ["JSON Schema validation not available - skipping input validation"],
+            }
+        
+        return self._schema_validator.validate(params, schema)
 
     async def search(
         self,
@@ -171,7 +387,6 @@ class DirectiveHandler:
                 # Extract metadata
                 content = registry_data.get("content")
                 category = registry_data.get("category", "core")
-                subcategory = registry_data.get("subcategory")
 
                 if not content:
                     return {"error": f"Directive '{directive_name}' has no content"}
@@ -185,11 +400,16 @@ class DirectiveHandler:
                 else:  # destination == "project"
                     base_path = self.project_path / ".ai" / "directives"
 
-                # Build category path
-                if subcategory:
-                    target_dir = base_path / category / subcategory
+                # Build category path from slash-separated category string
+                # category can be "core" or "core/api/endpoints" etc.
+                if category:
+                    # Split category by slashes and build path
+                    category_parts = category.split("/")
+                    target_dir = base_path
+                    for part in category_parts:
+                        target_dir = target_dir / part
                 else:
-                    target_dir = base_path / category
+                    target_dir = base_path
 
                 # Create directory if needed
                 target_dir.mkdir(parents=True, exist_ok=True)
@@ -429,10 +649,15 @@ class DirectiveHandler:
         # Parse directive file
         try:
             directive_data = parse_directive_file(file_path)
-            legacy_warning = directive_data.get("legacy_warning")
 
-            # Validate directive using centralized validator
-            validation_result = ValidationManager.validate("directive", file_path, directive_data)
+            # Validate directive using centralized validator and embed if valid
+            validation_result = await ValidationManager.validate_and_embed(
+                "directive", 
+                file_path, 
+                directive_data,
+                vector_store=self._vector_store,
+                item_id=directive_data.get("name")
+            )
             if not validation_result["valid"]:
                 # Format error response
                 error_response = {
@@ -576,6 +801,29 @@ class DirectiveHandler:
                     "solution": f"Provide the missing required inputs in the 'parameters' field. Example: parameters={{'{missing_inputs[0]['name']}': 'value'}}",
                 }
 
+            # Schema-based input validation (optional but recommended)
+            # First check for explicit schema in directive, then auto-generate from spec
+            input_schema = self._extract_input_schema(parsed)
+            if input_schema is None and inputs_spec:
+                # Auto-generate schema from input specifications
+                input_schema = self._build_input_schema_from_spec(inputs_spec)
+            
+            schema_validation_result = None
+            if input_schema and params:
+                schema_validation_result = self._validate_inputs_with_schema(params, input_schema)
+                
+                if not schema_validation_result.get("valid", True):
+                    return {
+                        "error": "Input validation failed",
+                        "validation_issues": schema_validation_result.get("issues", []),
+                        "name": directive_data["name"],
+                        "description": directive_data["description"],
+                        "all_inputs": inputs_spec,
+                        "provided_inputs": params,
+                        "input_schema": input_schema,
+                        "solution": "Fix the validation issues in the provided inputs",
+                    }
+
             # Parse MCP declarations and fetch tool schemas
             mcps_required = self._parse_mcps(directive_data)
             mcp_tools = {}
@@ -606,18 +854,33 @@ class DirectiveHandler:
                             }
                         mcp_tools[mcp_name] = {"available": False, "error": str(e)}
 
+            # Compute canonical integrity for verification reporting
+            canonical_integrity = self._compute_directive_integrity(directive_data, file_content)
+
             result = {
                 "status": "ready",
                 "name": directive_data["name"],
                 "description": directive_data["description"],
+                "version": directive_data.get("version", "0.0.0"),
                 "inputs": inputs_spec,
                 "process": process_steps,
                 "provided_inputs": params,
+                "integrity": canonical_integrity,
+                "integrity_short": short_hash(canonical_integrity),
+                "inputs_validated": schema_validation_result is not None,
                 "instructions": (
                     "Follow each process step in order. "
                     "Use provided_inputs for any matching input names."
                 ),
             }
+            
+            # Add input schema if defined
+            if input_schema:
+                result["input_schema"] = input_schema
+            
+            # Add validation warnings if any
+            if schema_validation_result and schema_validation_result.get("warnings"):
+                result["validation_warnings"] = schema_validation_result["warnings"]
 
             # Add MCP tool context if any MCPs were declared
             if mcp_tools:
@@ -626,10 +889,6 @@ class DirectiveHandler:
                     "description": "All MCP tools called via Kiwi execute",
                     "example": "execute(item_type='tool', action='call', ...)",
                 }
-
-            # Add legacy warning if present (non-blocking)
-            if legacy_warning:
-                result["warning"] = legacy_warning
 
             # Check for newer versions in other locations
             # Version is guaranteed to exist after validation, but add safety check
@@ -965,6 +1224,19 @@ class DirectiveHandler:
                 ),
             }
 
+        # Validate path structure
+        from kiwi_mcp.utils.paths import validate_path_structure
+        path_validation = validate_path_structure(
+            file_path, "directive", location, self.project_path
+        )
+        if not path_validation["valid"]:
+            return {
+                "error": "Directive path structure invalid",
+                "details": path_validation["issues"],
+                "path": str(file_path),
+                "solution": "File must be under .ai/directives/ with correct structure",
+            }
+
         # Read and validate the file
         content = file_path.read_text()
 
@@ -982,10 +1254,16 @@ class DirectiveHandler:
             ET.fromstring(xml_content)  # Validate XML syntax
 
         except ET.ParseError as e:
+            # Use enhanced error formatting with context and suggestions
+            enhanced_error = format_error_with_context(
+                str(e),
+                xml_content,
+                str(file_path)
+            )
             return {
                 "error": "Invalid directive XML",
-                "parse_error": str(e),
-                "hint": "Check for unescaped < > & characters. Use CDATA for special chars.",
+                "parse_error": enhanced_error,
+                "hint": "See parse_error field for detailed error message with line numbers and suggestions.",
                 "file": str(file_path),
             }
         except Exception as e:
@@ -998,10 +1276,15 @@ class DirectiveHandler:
         # Parse and validate
         try:
             directive_data = parse_directive_file(file_path)
-            legacy_warning = directive_data.get("legacy_warning")
 
-            # Validate using centralized validator
-            validation_result = ValidationManager.validate("directive", file_path, directive_data)
+            # Validate using centralized validator and embed if valid
+            validation_result = await ValidationManager.validate_and_embed(
+                "directive", 
+                file_path, 
+                directive_data,
+                vector_store=self._vector_store,
+                item_id=directive_data.get("name")
+            )
             if not validation_result["valid"]:
                 # Format error response with helpful details
                 error_response = {
@@ -1088,15 +1371,15 @@ class DirectiveHandler:
         signature_info = MetadataManager.get_signature_info("directive", signed_content)
         content_hash = signature_info["hash"] if signature_info else None
         timestamp = signature_info["timestamp"] if signature_info else None
+        
+        # Compute canonical integrity hash for version-aware verification
+        canonical_integrity = self._compute_directive_integrity(directive_data, signed_content)
 
-        # Parse to get category and check for legacy warnings
         try:
             directive = parse_directive_file(file_path)
             category = directive.get("category", "unknown")
-            legacy_warning = directive.get("legacy_warning")
         except:
             category = "unknown"
-            legacy_warning = None
 
         result = {
             "status": "created",
@@ -1106,12 +1389,11 @@ class DirectiveHandler:
             "category": category,
             "validated": True,
             "signature": {"hash": content_hash, "timestamp": timestamp},
+            "integrity": canonical_integrity,
+            "integrity_short": short_hash(canonical_integrity),
             "message": f"Directive validated and signed. Ready to use.",
         }
 
-        # Add legacy warning if present (non-blocking)
-        if legacy_warning:
-            result["warning"] = legacy_warning
 
         return result
 
@@ -1153,10 +1435,16 @@ class DirectiveHandler:
             ET.fromstring(xml_content)  # Validate XML syntax
 
         except ET.ParseError as e:
+            # Use enhanced error formatting with context and suggestions
+            enhanced_error = format_error_with_context(
+                str(e),
+                xml_content,
+                str(file_path)
+            )
             return {
                 "error": "Invalid directive XML",
-                "parse_error": str(e),
-                "hint": "Check for unescaped < > & characters. Use CDATA for special chars.",
+                "parse_error": enhanced_error,
+                "hint": "See parse_error field for detailed error message with line numbers and suggestions.",
                 "file": str(file_path),
             }
         except Exception as e:
@@ -1169,10 +1457,15 @@ class DirectiveHandler:
         # Parse and validate
         try:
             directive_data = parse_directive_file(file_path)
-            legacy_warning = directive_data.get("legacy_warning")
 
-            # Validate using centralized validator
-            validation_result = ValidationManager.validate("directive", file_path, directive_data)
+            # Validate using centralized validator and embed if valid
+            validation_result = await ValidationManager.validate_and_embed(
+                "directive", 
+                file_path, 
+                directive_data,
+                vector_store=self._vector_store,
+                item_id=directive_data.get("name")
+            )
             if not validation_result["valid"]:
                 # Format error response with helpful details
                 error_response = {
@@ -1259,37 +1552,41 @@ class DirectiveHandler:
         signature_info = MetadataManager.get_signature_info("directive", signed_content)
         content_hash = signature_info["hash"] if signature_info else None
         timestamp = signature_info["timestamp"] if signature_info else None
+        
+        # Compute canonical integrity hash for version-aware verification
+        canonical_integrity = self._compute_directive_integrity(directive_data, signed_content)
 
-        # Parse to get category and check for legacy warnings
         try:
             directive = parse_directive_file(file_path)
             new_category = directive.get("category")
-            legacy_warning = directive.get("legacy_warning")
         except:
             new_category = None
-            legacy_warning = None
 
-        # Determine current category from file path
-        # Path structure: .../directives/{category}/{name}.md
-        # If parent is "directives", category is unknown (file in root)
-        # Otherwise, parent.name is the category
-        current_category = None
-        if file_path.parent.name != "directives":
-            current_category = file_path.parent.name
+        # Extract current category from file path (supports nested categories)
+        from kiwi_mcp.utils.paths import extract_category_path
+        
+        # Determine location
+        location = "project" if str(file_path).startswith(str(self.project_path)) else "user"
+        current_category = extract_category_path(file_path, "directive", location, self.project_path)
 
         # Handle category change: move file if category changed
         moved = False
         final_path = file_path
         if new_category and new_category != current_category and new_category != "unknown":
             # Determine new path based on project or user space
-            if self.project_path and str(file_path).startswith(str(self.project_path)):
-                # Project space
-                new_dir = self.project_path / ".ai" / "directives" / new_category
+            if location == "project":
+                # Build path from slash-separated category
+                new_dir = self.project_path / ".ai" / "directives"
+                if new_category:
+                    for part in new_category.split("/"):
+                        new_dir = new_dir / part
             else:
                 # User space
                 from kiwi_mcp.utils.paths import get_user_space
-
-                new_dir = get_user_space() / "directives" / new_category
+                new_dir = get_user_space() / "directives"
+                if new_category:
+                    for part in new_category.split("/"):
+                        new_dir = new_dir / part
 
             new_dir.mkdir(parents=True, exist_ok=True)
             final_path = new_dir / file_path.name
@@ -1317,6 +1614,8 @@ class DirectiveHandler:
             "category": new_category or current_category or "unknown",
             "validated": True,
             "signature": {"hash": content_hash, "timestamp": timestamp},
+            "integrity": canonical_integrity,
+            "integrity_short": short_hash(canonical_integrity),
             "message": f"Directive validated and signed. Ready to use.",
         }
 
@@ -1333,8 +1632,5 @@ class DirectiveHandler:
                 f"execute(action='publish', item_id='{directive_name}', parameters={{'version': '...'}})"
             )
 
-        # Add legacy warning if present (non-blocking)
-        if legacy_warning:
-            result["warning"] = legacy_warning
 
         return result

@@ -18,6 +18,12 @@ from kiwi_mcp.utils.parsers import parse_knowledge_entry
 from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
 from kiwi_mcp.utils.metadata_manager import MetadataManager
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
+from kiwi_mcp.primitives.integrity import (
+    compute_knowledge_integrity,
+    verify_knowledge_integrity,
+    short_hash,
+)
+from kiwi_mcp.utils.schema_validator import SchemaValidator
 
 
 class KnowledgeHandler:
@@ -32,6 +38,196 @@ class KnowledgeHandler:
         # Local file handling
         self.resolver = KnowledgeResolver(self.project_path)
         self.search_paths = [self.resolver.project_knowledge, self.resolver.user_knowledge]
+        
+        # Frontmatter schema validation
+        self._schema_validator = SchemaValidator()
+        
+        # Vector store for automatic embedding
+        self._vector_store = None
+        self._init_vector_store()
+
+    def _init_vector_store(self):
+        """Initialize project vector store for automatic embedding."""
+        try:
+            from kiwi_mcp.storage.vector import LocalVectorStore, EmbeddingService, load_vector_config
+            
+            # Load embedding config from environment
+            config = load_vector_config()
+            embedding_service = EmbeddingService(config)
+            
+            vector_path = self.project_path / ".ai" / "vector" / "project"
+            vector_path.mkdir(parents=True, exist_ok=True)
+            
+            self._vector_store = LocalVectorStore(
+                storage_path=vector_path,
+                collection_name="project_items",
+                embedding_service=embedding_service
+            )
+        except ValueError as e:
+            # Missing config - vector search disabled
+            self.logger.debug(f"Vector store not configured: {e}")
+            self._vector_store = None
+        except Exception as e:
+            self.logger.warning(f"Vector store init failed: {e}")
+            self._vector_store = None
+
+    def _compute_knowledge_integrity(
+        self, entry_data: Dict[str, Any]
+    ) -> str:
+        """
+        Compute canonical integrity hash for a knowledge entry.
+        
+        Args:
+            entry_data: Parsed knowledge entry data
+            
+        Returns:
+            SHA256 hex digest (64 characters)
+        """
+        # Build frontmatter dict (excluding validation fields)
+        frontmatter = {
+            "zettel_id": entry_data.get("zettel_id"),
+            "title": entry_data.get("title"),
+            "entry_type": entry_data.get("entry_type"),
+            "category": entry_data.get("category"),
+            "tags": entry_data.get("tags", []),
+        }
+        
+        return compute_knowledge_integrity(
+            zettel_id=entry_data.get("zettel_id", ""),
+            version=entry_data.get("version", "1.0.0"),
+            content=entry_data.get("content", ""),
+            frontmatter=frontmatter,
+        )
+    
+    def _verify_knowledge_integrity(
+        self, entry_data: Dict[str, Any], stored_hash: str
+    ) -> bool:
+        """
+        Verify knowledge entry content matches stored canonical integrity hash.
+        
+        Args:
+            entry_data: Parsed knowledge entry data
+            stored_hash: Expected integrity hash
+            
+        Returns:
+            True if computed hash matches stored hash
+        """
+        computed = self._compute_knowledge_integrity(entry_data)
+        return computed == stored_hash
+
+    def _extract_frontmatter_schema(self, entry_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Extract optional frontmatter_schema from knowledge entry.
+        
+        The schema can be defined in the frontmatter as a 'schema' field
+        containing a JSON Schema for validating custom frontmatter fields.
+        
+        Example frontmatter:
+            ---
+            zettel_id: 20260124-api-patterns
+            title: API Design Patterns
+            custom_field: some_value
+            schema:
+              type: object
+              properties:
+                custom_field:
+                  type: string
+                  minLength: 3
+            ---
+        
+        Args:
+            entry_data: Parsed knowledge entry data
+            
+        Returns:
+            JSON Schema dict or None if not defined
+        """
+        schema = entry_data.get("schema")
+        if schema and isinstance(schema, dict):
+            return schema
+        return None
+    
+    def _build_base_frontmatter_schema(self) -> Dict[str, Any]:
+        """
+        Build base JSON Schema for standard knowledge frontmatter fields.
+        
+        Returns:
+            JSON Schema dict for base frontmatter validation
+        """
+        return {
+            "type": "object",
+            "properties": {
+                "zettel_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Unique identifier for the knowledge entry"
+                },
+                "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title of the knowledge entry"
+                },
+                "entry_type": {
+                    "type": "string",
+                    "enum": ["pattern", "learning", "reference", "concept", "decision", "insight", "procedure"],
+                    "description": "Type of knowledge entry"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Category for organization"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags for categorization"
+                },
+                "version": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+$",
+                    "description": "Semantic version"
+                },
+            },
+            "required": ["zettel_id", "title"],
+        }
+    
+    def _validate_frontmatter_with_schema(
+        self, 
+        entry_data: Dict[str, Any], 
+        custom_schema: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Validate knowledge entry frontmatter against schema.
+        
+        Args:
+            entry_data: Parsed knowledge entry data (includes frontmatter fields)
+            custom_schema: Optional custom schema to merge with base schema
+            
+        Returns:
+            Validation result with valid, issues, warnings
+        """
+        if not self._schema_validator.is_available():
+            return {
+                "valid": True,
+                "issues": [],
+                "warnings": ["JSON Schema validation not available - skipping frontmatter validation"],
+            }
+        
+        # Build combined schema
+        base_schema = self._build_base_frontmatter_schema()
+        
+        if custom_schema:
+            # Merge custom schema properties into base
+            if "properties" in custom_schema:
+                base_schema["properties"].update(custom_schema["properties"])
+            if "required" in custom_schema:
+                base_schema["required"] = list(set(base_schema.get("required", []) + custom_schema["required"]))
+        
+        # Extract frontmatter fields for validation (exclude content and validation fields)
+        frontmatter_to_validate = {
+            k: v for k, v in entry_data.items() 
+            if k not in ("content", "validated_at", "content_hash", "integrity", "path", "source", "schema")
+        }
+        
+        return self._schema_validator.validate(frontmatter_to_validate, base_schema)
 
     async def search(
         self,
@@ -490,31 +686,49 @@ class KnowledgeHandler:
         file_content = file_path.read_text()
         signature_status = MetadataManager.verify_signature("knowledge", file_content)
 
-        # Block execution if signature is invalid or modified
-        if signature_status:
-            if signature_status.get("status") == "modified":
-                return {
-                    "status": "error",
-                    "error": "Knowledge entry content has been modified since last validation",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the entry",
-                }
-            elif signature_status.get("status") == "invalid":
-                return {
-                    "status": "error",
-                    "error": "Knowledge entry signature is invalid",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the entry",
-                }
+        # Block execution if signature is missing, invalid, or modified
+        if signature_status is None:
+            return {
+                "status": "error",
+                "error": "Knowledge entry has no valid signature",
+                "path": str(file_path),
+                "hint": "Knowledge entry needs validation",
+                "solution": (
+                    f"Run: execute(item_type='knowledge', action='update', "
+                    f"item_id='{zettel_id}', parameters={{'location': 'project'}}, "
+                    f"project_path='{self.project_path}')"
+                ),
+            }
+
+        if signature_status.get("status") == "modified":
+            return {
+                "status": "error",
+                "error": "Knowledge entry content has been modified since last validation",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the entry",
+            }
+        elif signature_status.get("status") == "invalid":
+            return {
+                "status": "error",
+                "error": "Knowledge entry signature is invalid",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the entry",
+            }
 
         # Parse entry file and validate
         try:
             entry_data = parse_knowledge_entry(file_path)
             
-            # Validate using centralized validator
-            validation_result = ValidationManager.validate("knowledge", file_path, entry_data)
+            # Validate using centralized validator and embed if valid
+            validation_result = await ValidationManager.validate_and_embed(
+                "knowledge", 
+                file_path, 
+                entry_data,
+                vector_store=self._vector_store,
+                item_id=entry_data.get("zettel_id")
+            )
             if not validation_result["valid"]:
                 return {
                     "status": "error",
@@ -532,13 +746,50 @@ class KnowledgeHandler:
             version_warning = await self._check_for_newer_version(
                 zettel_id, current_version, current_source
             )
+            
+            # Frontmatter schema validation (optional but recommended)
+            # Only fail on critical issues, warnings are acceptable
+            custom_schema = self._extract_frontmatter_schema(entry_data)
+            frontmatter_validation = self._validate_frontmatter_with_schema(entry_data, custom_schema)
+            
+            # Return error only if validation has critical issues (not just warnings)
+            # Warnings are acceptable and don't block execution
+            if not frontmatter_validation.get("valid", True):
+                issues = frontmatter_validation.get("issues", [])
+                # Only fail if there are actual errors, not just warnings
+                if issues and not all("warning" in issue.lower() for issue in issues):
+                    return {
+                        "status": "error",
+                        "error": "Frontmatter validation failed",
+                        "validation_issues": issues,
+                        "zettel_id": entry_data.get("zettel_id"),
+                        "title": entry_data.get("title"),
+                        "path": str(file_path),
+                        "solution": "Fix the validation issues in the frontmatter",
+                    }
+            
+            # Compute canonical integrity for verification reporting
+            canonical_integrity = self._compute_knowledge_integrity(entry_data)
 
             out = {
                 "status": "ready",
+                "zettel_id": entry_data["zettel_id"],
                 "title": entry_data["title"],
+                "version": current_version,
                 "content": entry_data["content"],
+                "entry_type": entry_data.get("entry_type"),
+                "category": entry_data.get("category"),
+                "tags": entry_data.get("tags", []),
+                "integrity": canonical_integrity,
+                "integrity_short": short_hash(canonical_integrity),
+                "frontmatter_validated": True,
                 "instructions": "Use this knowledge to inform your decisions.",
             }
+            
+            # Add validation warnings if any
+            if frontmatter_validation.get("warnings"):
+                out["validation_warnings"] = frontmatter_validation["warnings"]
+            
             if version_warning:
                 out["version_warning"] = version_warning
             return out
@@ -546,17 +797,12 @@ class KnowledgeHandler:
             return {"error": f"Failed to parse knowledge entry: {str(e)}", "path": str(file_path)}
 
     async def _create_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new knowledge entry."""
-        title = params.get("title")
-        content = params.get("content")
+        """
+        Validate and register an existing knowledge entry file.
 
-        if not title or not content:
-            return {
-                "error": "title and content are required",
-                "required": {"title": "Entry title", "content": "Markdown content"},
-                "example": "parameters={'title': 'My Note', 'content': '...', 'location': 'project'}",
-            }
-
+        Expects the knowledge entry file to already exist on disk.
+        This action validates the frontmatter, content, and adds a signature.
+        """
         location = params.get("location", "project")
         if location not in ("project", "user"):
             return {
@@ -564,53 +810,56 @@ class KnowledgeHandler:
                 "valid_locations": ["project", "user"],
             }
 
-        # Save to file
+        # Find the knowledge entry file
         if location == "project":
-            base_dir = self.project_path / ".ai" / "knowledge"
+            search_base = self.project_path / ".ai" / "knowledge"
         else:
-            base_dir = get_user_space() / "knowledge"
+            search_base = get_user_space() / "knowledge"
 
-        entry_type = params.get("entry_type", "learning")
-        category = params.get("category", entry_type + "s")
-        save_dir = base_dir / category
-        save_dir.mkdir(parents=True, exist_ok=True)
+        file_path = self._find_entry_in_path(zettel_id, search_base)
 
-        file_path = save_dir / f"{zettel_id}.md"
-
-        if file_path.exists():
+        if not file_path or not file_path.exists():
+            category_hint = params.get("category", "learnings")  # Default category hint
             return {
-                "error": f"Knowledge entry '{zettel_id}' already exists",
-                "path": str(file_path),
-                "suggestion": "Use 'update' action to modify existing entry",
+                "error": f"Knowledge entry file not found: {zettel_id}",
+                "hint": f"Create the file first at .ai/knowledge/{category_hint}/{zettel_id}.md",
+                "searched_in": str(search_base),
             }
 
-        # Create markdown content with YAML frontmatter (temporarily without signature)
-        tags = params.get("tags", [])
-        temp_frontmatter = f"""---
-zettel_id: {zettel_id}
-title: {title}
-entry_type: {entry_type}
-category: {category}
-tags: {json.dumps(tags)}
----
+        # Validate path structure
+        from kiwi_mcp.utils.paths import validate_path_structure
+        path_validation = validate_path_structure(
+            file_path, "knowledge", location, self.project_path
+        )
+        if not path_validation["valid"]:
+            return {
+                "error": "Knowledge entry path structure invalid",
+                "details": path_validation["issues"],
+                "path": str(file_path),
+                "solution": "File must be under .ai/knowledge/ with correct structure",
+            }
 
-"""
-        temp_content = temp_frontmatter + content
-        file_path.write_text(temp_content)
-        
+        # Read and validate the file
+        content = file_path.read_text()
+
         # Parse and validate
         try:
             entry_data = parse_knowledge_entry(file_path)
-            validation_result = ValidationManager.validate("knowledge", file_path, entry_data)
+            validation_result = await ValidationManager.validate_and_embed(
+                "knowledge", 
+                file_path, 
+                entry_data,
+                vector_store=self._vector_store,
+                item_id=entry_data.get("zettel_id")
+            )
             if not validation_result["valid"]:
-                file_path.unlink()  # Clean up invalid file
                 return {
                     "error": "Knowledge entry validation failed",
                     "details": validation_result["issues"],
                     "path": str(file_path),
+                    "solution": "Fix validation issues and re-run create action",
                 }
         except Exception as e:
-            file_path.unlink()  # Clean up on error
             return {
                 "error": "Failed to validate knowledge entry",
                 "details": str(e),
@@ -618,54 +867,58 @@ tags: {json.dumps(tags)}
             }
         
         # Generate signature for validated content using MetadataManager
-        content_hash = MetadataManager.compute_hash("knowledge", temp_content)
-        timestamp = MetadataManager.get_strategy("knowledge").format_signature("", "").split("validated_at: ")[1].split("\n")[0] if MetadataManager.get_strategy("knowledge").format_signature("", "") else None
-        # Actually, let's use the utility functions directly
         from kiwi_mcp.utils.metadata_manager import compute_content_hash, generate_timestamp
-        content_hash = compute_content_hash(content)  # Hash just the content part
+        
+        # Extract content part (without frontmatter) for hashing
+        strategy = MetadataManager.get_strategy("knowledge")
+        content_for_hash = strategy.extract_content_for_hash(content)
+        content_hash = compute_content_hash(content_for_hash)
         timestamp = generate_timestamp()
+
+        # Get existing frontmatter fields from parsed data
+        existing_frontmatter = {
+            "zettel_id": entry_data.get("zettel_id"),
+            "title": entry_data.get("title"),
+            "entry_type": entry_data.get("entry_type"),
+            "category": entry_data.get("category"),
+            "tags": entry_data.get("tags", []),
+            "version": entry_data.get("version", "1.0.0"),
+        }
 
         # Create final content with signature in frontmatter
         frontmatter = f"""---
-zettel_id: {zettel_id}
-title: {title}
-entry_type: {entry_type}
-category: {category}
-tags: {json.dumps(tags)}
+zettel_id: {existing_frontmatter['zettel_id']}
+title: {existing_frontmatter['title']}
+entry_type: {existing_frontmatter['entry_type']}
+category: {existing_frontmatter['category']}
+tags: {json.dumps(existing_frontmatter['tags'])}
+version: "{existing_frontmatter['version']}"
 validated_at: {timestamp}
 content_hash: {content_hash}
 ---
 
 """
-        full_content = frontmatter + content
+        # Extract content part (everything after frontmatter)
+        content_body = entry_data.get("content", "")
+        full_content = frontmatter + content_body
         file_path.write_text(full_content)
 
-        # Verify filename matches zettel_id (sanity check - this should never fail)
-        if file_path.stem != zettel_id:
-            file_path.unlink()  # Clean up
-            return {
-                "error": "Internal error: Created file with mismatched filename",
-                "problem": {
-                    "expected": f"{zettel_id}.md",
-                    "actual": file_path.name,
-                    "zettel_id": zettel_id,
-                    "path": str(file_path)
-                },
-                "solution": {
-                    "message": "This indicates a bug in file creation logic. File was cleaned up.",
-                    "action": "Report this error. The file was not created. Try create action again.",
-                    "workaround": f"Manually create file: {file_path.parent / f'{zettel_id}.md'}"
-                }
-            }
+        # Compute canonical integrity hash for version-aware verification
+        canonical_integrity = self._compute_knowledge_integrity(entry_data)
+
+        # Extract category from parsed entry data (validated by parser to match path)
+        category = entry_data.get("category", "")
 
         return {
             "status": "created",
-            "zettel_id": zettel_id,
+            "zettel_id": entry_data.get("zettel_id"),
             "path": str(file_path),
             "location": location,
             "category": category,
-            "entry_type": entry_type,
+            "entry_type": existing_frontmatter["entry_type"],
             "signature": {"hash": content_hash, "timestamp": timestamp},
+            "integrity": canonical_integrity,
+            "integrity_short": short_hash(canonical_integrity),
         }
 
     async def _update_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -700,7 +953,13 @@ content_hash: {content_hash}
             "category": category,
             "tags": tags,
         }
-        validation_result = ValidationManager.validate("knowledge", file_path, updated_entry_data)
+        validation_result = await ValidationManager.validate_and_embed(
+            "knowledge", 
+            file_path, 
+            updated_entry_data,
+            vector_store=self._vector_store,
+            item_id=updated_entry_data.get("zettel_id")
+        )
         if not validation_result["valid"]:
             return {
                 "error": "Knowledge entry validation failed",
@@ -765,12 +1024,28 @@ content_hash: {content_hash}
 """
         full_content = frontmatter + content
         file_path.write_text(full_content)
+        
+        # Compute canonical integrity hash for version-aware verification
+        # Use existing version or default to 1.0.0
+        version = entry_data.get("version", "1.0.0")
+        entry_data_for_integrity = {
+            "zettel_id": file_zettel_id,
+            "title": title,
+            "entry_type": entry_type,
+            "category": category,
+            "tags": tags,
+            "version": version,
+            "content": content,
+        }
+        canonical_integrity = self._compute_knowledge_integrity(entry_data_for_integrity)
 
         return {
             "status": "updated",
             "zettel_id": file_zettel_id,
             "path": str(file_path),
             "signature": {"hash": content_hash, "timestamp": timestamp},
+            "integrity": canonical_integrity,
+            "integrity_short": short_hash(canonical_integrity),
         }
 
     async def _delete_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -825,22 +1100,33 @@ content_hash: {content_hash}
         file_content = file_path.read_text()
         signature_status = MetadataManager.verify_signature("knowledge", file_content)
 
-        # Block publishing if signature is invalid or modified
-        if signature_status:
-            if signature_status.get("status") == "modified":
-                return {
-                    "error": "Knowledge entry content has been modified since last validation",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the entry before publishing",
-                }
-            elif signature_status.get("status") == "invalid":
-                return {
-                    "error": "Knowledge entry signature is invalid",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the entry before publishing",
-                }
+        # Block publishing if signature is missing, invalid, or modified
+        if signature_status is None:
+            return {
+                "error": "Cannot publish: knowledge entry has no valid signature",
+                "path": str(file_path),
+                "hint": "Knowledge entries must be validated before publishing",
+                "solution": (
+                    f"Run: execute(item_type='knowledge', action='update', "
+                    f"item_id='{zettel_id}', parameters={{'location': 'project'}}, "
+                    f"project_path='{self.project_path}')"
+                ),
+            }
+
+        if signature_status.get("status") == "modified":
+            return {
+                "error": "Knowledge entry content has been modified since last validation",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the entry before publishing",
+            }
+        elif signature_status.get("status") == "invalid":
+            return {
+                "error": "Knowledge entry signature is invalid",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the entry before publishing",
+            }
 
         # Parse entry to get content and metadata (including version)
         # parse_knowledge_entry() will validate filename/zettel_id match and raise if mismatch

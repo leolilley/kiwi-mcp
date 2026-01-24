@@ -8,8 +8,6 @@ import time
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
-
-from ..handlers.tool.manifest import ToolManifest
 from .permissions import PermissionContext, PermissionChecker
 from .loop_detector import LoopDetector, StuckSignal
 from .audit import AuditLogger
@@ -115,27 +113,20 @@ class ToolProxy:
                 annealing_hint="Check tool implementation and parameters",
             )
 
-    async def _load_manifest(self, tool_id: str) -> Optional[ToolManifest]:
-        """Load tool manifest by ID.
-
-        This is a simplified version - in practice this would integrate
-        with the tool handler to load manifests from various sources.
-        """
-        # TODO: Integrate with ToolHandler to load manifests
-        # For now, return a basic manifest for testing
-        from ..handlers.tool.manifest import ToolManifest
-
-        # This would normally load from .ai/tools/{tool_id}.yaml
-        # or generate virtual manifest from .ai/scripts/{tool_id}.py
-        return ToolManifest(
-            tool_id=tool_id,
-            tool_type="python",  # Default assumption
-            version="1.0.0",
-            description=f"Tool: {tool_id}",
-            executor_config={},
-            parameters=[],
-            mutates_state=False,
-        )
+    async def _load_manifest(self, tool_id: str) -> Optional[Dict[str, Any]]:
+        """Load tool metadata by ID using schema-driven extraction."""
+        from kiwi_mcp.utils.resolvers import ToolResolver
+        from kiwi_mcp.schemas import extract_tool_metadata
+        
+        resolver = ToolResolver()
+        file_path = resolver.resolve(tool_id)
+        if not file_path:
+            return None
+        
+        try:
+            return extract_tool_metadata(file_path)
+        except Exception:
+            return None
 
     def reset_loop_detector(self):
         """Reset the loop detector state."""

@@ -425,7 +425,7 @@ class TestPrimitiveExecutorIntegration:
             {
                 "depth": 0,
                 "tool_id": "extended_tool",
-                "tool_type": "script",
+                "tool_type": "python",
                 "executor_id": "subprocess",
                 "manifest": {
                     "config": {

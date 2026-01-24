@@ -8,7 +8,7 @@ from kiwi_mcp.tools.base import BaseTool
 
 class LoadTool(BaseTool):
     """Load items for inspection or copy between locations.
-    
+
     When destination is omitted or equals source: read-only inspection (returns content).
     When destination differs from source: copies the item to destination.
     """
@@ -38,7 +38,7 @@ Use cases:
                 "properties": {
                     "item_type": {
                         "type": "string",
-                        "enum": ["directive", "script", "knowledge"],
+                        "enum": ["directive", "tool", "knowledge"],
                         "description": "Type of item",
                     },
                     "item_id": {
@@ -101,12 +101,12 @@ Use cases:
         # Create handler dynamically with project_path
         try:
             from kiwi_mcp.handlers.directive.handler import DirectiveHandler
-            from kiwi_mcp.handlers.script.handler import ScriptHandler
+            from kiwi_mcp.handlers.tool.handler import ToolHandler
             from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
 
             handlers = {
                 "directive": DirectiveHandler,
-                "script": ScriptHandler,
+                "tool": ToolHandler,
                 "knowledge": KnowledgeHandler,
             }
 

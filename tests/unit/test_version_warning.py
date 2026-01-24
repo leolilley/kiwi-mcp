@@ -10,25 +10,32 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from kiwi_mcp.utils.validators import compare_versions
-from kiwi_mcp.utils.parsers import parse_directive_file, parse_script_metadata, parse_knowledge_entry
+from kiwi_mcp.utils.parsers import (
+    parse_directive_file,
+    parse_script_metadata,
+    parse_knowledge_entry,
+)
 
 # Import handlers - may fail if supabase not installed
 try:
     from kiwi_mcp.handlers.directive.handler import DirectiveHandler
+
     HAS_DIRECTIVE_HANDLER = True
 except (ImportError, ModuleNotFoundError):
     DirectiveHandler = None
     HAS_DIRECTIVE_HANDLER = False
 
 try:
-    from kiwi_mcp.handlers.script.handler import ScriptHandler
+    from kiwi_mcp.handlers.tool.handler import ToolHandler
+
     HAS_SCRIPT_HANDLER = True
 except (ImportError, ModuleNotFoundError):
-    ScriptHandler = None
+    ToolHandler = None
     HAS_SCRIPT_HANDLER = False
 
 try:
     from kiwi_mcp.handlers.knowledge.handler import KnowledgeHandler
+
     HAS_KNOWLEDGE_HANDLER = True
 except (ImportError, ModuleNotFoundError):
     KnowledgeHandler = None
@@ -90,7 +97,7 @@ class TestCompareVersions:
         """Should raise ValueError for invalid version strings."""
         with pytest.raises(ValueError):
             compare_versions("invalid", "1.0.0")
-        
+
         with pytest.raises(ValueError):
             compare_versions("1.0.0", "invalid")
 
@@ -104,7 +111,7 @@ class TestParserVersionHandling:
         """Should parse directive with version attribute."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
-        
+
         directive_content = """# Test Directive
 
 ```xml
@@ -121,9 +128,9 @@ class TestParserVersionHandling:
 """
         directive_file = directive_dir / "test_version.md"
         directive_file.write_text(directive_content)
-        
+
         result = parse_directive_file(directive_file)
-        
+
         assert result["version"] == "1.2.3"
 
     @pytest.mark.unit
@@ -132,7 +139,7 @@ class TestParserVersionHandling:
         """Should return None when version attribute is missing."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
-        
+
         directive_content = """# Test Directive
 
 ```xml
@@ -149,9 +156,9 @@ class TestParserVersionHandling:
 """
         directive_file = directive_dir / "test_no_version.md"
         directive_file.write_text(directive_content)
-        
+
         result = parse_directive_file(directive_file)
-        
+
         assert result["version"] is None
 
 
@@ -171,13 +178,13 @@ class TestDirectiveHandlerVersionChecking:
         """Should return None when no newer version exists."""
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.0.0"}
-            
+
             result = await handler._check_for_newer_version(
                 directive_name="test_directive",
                 current_version="1.0.0",
                 current_source="project",
             )
-            
+
             assert result is None
 
     @pytest.mark.asyncio
@@ -187,13 +194,13 @@ class TestDirectiveHandlerVersionChecking:
         """Should return warning when registry has newer version."""
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.2.0"}
-            
+
             result = await handler._check_for_newer_version(
                 directive_name="test_directive",
                 current_version="1.0.0",
                 current_source="project",
             )
-            
+
             assert result is not None
             assert result["current_version"] == "1.0.0"
             assert result["newer_version"] == "1.2.0"
@@ -208,7 +215,7 @@ class TestDirectiveHandlerVersionChecking:
         # Create directive in userspace with newer version
         user_directive_dir = tmp_path / ".ai" / "directives" / "test"
         user_directive_dir.mkdir(parents=True)
-        
+
         user_directive_content = """# Test Directive
 
 ```xml
@@ -225,20 +232,20 @@ class TestDirectiveHandlerVersionChecking:
 """
         user_directive_file = user_directive_dir / "test_directive.md"
         user_directive_file.write_text(user_directive_content)
-        
+
         # Mock registry to return older version
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.0.0"}
-            
+
             # Mock user directives path
             handler.resolver.user_directives = tmp_path / ".ai" / "directives"
-            
+
             result = await handler._check_for_newer_version(
                 directive_name="test_directive",
                 current_version="1.0.0",
                 current_source="project",
             )
-            
+
             assert result is not None
             assert result["newer_version"] == "1.5.0"
             assert result["location"] == "user"
@@ -251,7 +258,7 @@ class TestDirectiveHandlerVersionChecking:
         # Create directive in userspace with newer version
         user_directive_dir = tmp_path / ".ai" / "directives" / "test"
         user_directive_dir.mkdir(parents=True)
-        
+
         user_directive_content = """# Test Directive
 
 ```xml
@@ -268,20 +275,20 @@ class TestDirectiveHandlerVersionChecking:
 """
         user_directive_file = user_directive_dir / "test_directive.md"
         user_directive_file.write_text(user_directive_content)
-        
+
         # Mock registry to return even newer version
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "2.0.0"}
-            
+
             # Mock user directives path
             handler.resolver.user_directives = tmp_path / ".ai" / "directives"
-            
+
             result = await handler._check_for_newer_version(
                 directive_name="test_directive",
                 current_version="1.0.0",
                 current_source="project",
             )
-            
+
             assert result is not None
             assert result["newer_version"] == "2.0.0"
             assert result["location"] == "registry"
@@ -293,16 +300,16 @@ class TestDirectiveHandlerVersionChecking:
         """Should only check registry when running from user space."""
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.2.0"}
-            
+
             result = await handler._check_for_newer_version(
                 directive_name="test_directive",
                 current_version="1.0.0",
                 current_source="user",
             )
-            
+
             # Should check registry
             mock_get.assert_called_once_with("test_directive")
-            
+
             # Should return warning
             assert result is not None
             assert result["location"] == "registry"
@@ -314,13 +321,13 @@ class TestDirectiveHandlerVersionChecking:
         """Should handle registry errors gracefully and not block."""
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.side_effect = Exception("Registry unavailable")
-            
+
             result = await handler._check_for_newer_version(
                 directive_name="test_directive",
                 current_version="1.0.0",
                 current_source="project",
             )
-            
+
             # Should return None (no warning) when registry fails
             assert result is None
 
@@ -332,22 +339,22 @@ class TestDirectiveHandlerVersionChecking:
         # Create invalid directive file in userspace
         user_directive_dir = tmp_path / ".ai" / "directives" / "test"
         user_directive_dir.mkdir(parents=True)
-        
+
         invalid_file = user_directive_dir / "test_directive.md"
         invalid_file.write_text("Invalid content")
-        
+
         # Mock user directives path
         handler.resolver.user_directives = tmp_path / ".ai" / "directives"
-        
+
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.0.0"}
-            
+
             result = await handler._check_for_newer_version(
                 directive_name="test_directive",
                 current_version="1.0.0",
                 current_source="project",
             )
-            
+
             # Should not raise exception, should return None
             assert result is None
 
@@ -358,13 +365,13 @@ class TestDirectiveHandlerVersionChecking:
         """Should handle invalid version strings in registry gracefully."""
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "invalid-version"}
-            
+
             result = await handler._check_for_newer_version(
                 directive_name="test_directive",
                 current_version="1.0.0",
                 current_source="project",
             )
-            
+
             # Should not raise exception, should return None
             assert result is None
 
@@ -383,7 +390,7 @@ class TestDirectiveHandlerRunWithVersionWarning:
         """Create a valid directive file for testing."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
-        
+
         directive_content = """# Test Directive
 
 ```xml
@@ -405,25 +412,28 @@ class TestDirectiveHandlerRunWithVersionWarning:
 """
         directive_file = directive_dir / "test_directive.md"
         directive_file.write_text(directive_content)
-        
+
         # Sign the directive
         from kiwi_mcp.utils.metadata_manager import MetadataManager
+
         content = directive_file.read_text()
         signed_content = MetadataManager.sign_content("directive", content)
         directive_file.write_text(signed_content)
-        
+
         return directive_file
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     @pytest.mark.version
-    async def test_run_directive_adds_version_warning_when_newer_exists(self, handler, valid_directive_file):
+    async def test_run_directive_adds_version_warning_when_newer_exists(
+        self, handler, valid_directive_file
+    ):
         """Should add version_warning to result when newer version exists."""
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.2.0"}
-            
+
             result = await handler.execute("run", "test_directive", {})
-            
+
             assert "version_warning" in result
             assert result["version_warning"]["newer_version"] == "1.2.0"
             assert result["version_warning"]["location"] == "registry"
@@ -431,13 +441,15 @@ class TestDirectiveHandlerRunWithVersionWarning:
     @pytest.mark.asyncio
     @pytest.mark.unit
     @pytest.mark.version
-    async def test_run_directive_no_warning_when_current_is_newest(self, handler, valid_directive_file):
+    async def test_run_directive_no_warning_when_current_is_newest(
+        self, handler, valid_directive_file
+    ):
         """Should not add version_warning when current version is newest."""
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.0.0"}
-            
+
             result = await handler.execute("run", "test_directive", {})
-            
+
             assert "version_warning" not in result
             assert result["status"] == "ready"
 
@@ -448,7 +460,7 @@ class TestDirectiveHandlerRunWithVersionWarning:
         """Should not add version_warning when version is missing (validation should catch it)."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
-        
+
         # Directive without version (should fail validation)
         directive_content = """# Test Directive
 
@@ -466,12 +478,14 @@ class TestDirectiveHandlerRunWithVersionWarning:
 """
         directive_file = directive_dir / "test_no_version.md"
         directive_file.write_text(directive_content)
-        
+
         result = await handler.execute("run", "test_no_version", {})
-        
+
         # Should fail validation, not reach version checking
         assert "error" in result
-        assert "version" in result["error"].lower() or any("version" in issue.lower() for issue in result.get("details", []))
+        assert "version" in result["error"].lower() or any(
+            "version" in issue.lower() for issue in result.get("details", [])
+        )
 
 
 class TestParseScriptMetadataVersion:
@@ -496,71 +510,82 @@ class TestParseScriptMetadataVersion:
         assert meta.get("version") is None
 
 
-@pytest.mark.skipif(not HAS_SCRIPT_HANDLER, reason="ScriptHandler requires supabase")
-class TestScriptHandlerVersionChecking:
-    """Test ScriptHandler._check_for_newer_version."""
+@pytest.mark.skipif(not HAS_SCRIPT_HANDLER, reason="ToolHandler requires supabase")
+class TestToolHandlerVersionChecking:
+    """Test ToolHandler._check_for_newer_version."""
 
     @pytest.fixture
     def handler(self, tmp_path):
-        return ScriptHandler(project_path=str(tmp_path))
+        return ToolHandler(project_path=str(tmp_path))
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     @pytest.mark.version
-    async def test_script_check_registry_has_newer(self, handler):
+    async def test_tool_check_registry_has_newer(self, handler):
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
             m.return_value = {"version": "1.2.0"}
-            r = await handler._check_for_newer_version("s", "1.0.0", "project")
+            r = await handler._check_for_newer_version("test_tool", "1.0.0", "project")
         assert r is not None and r["newer_version"] == "1.2.0" and r["location"] == "registry"
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     @pytest.mark.version
-    async def test_script_check_no_newer(self, handler):
+    async def test_tool_check_no_newer(self, handler):
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
             m.return_value = {"version": "1.0.0"}
-            r = await handler._check_for_newer_version("s", "1.0.0", "project")
+            r = await handler._check_for_newer_version("test_tool", "1.0.0", "project")
         assert r is None
 
 
-@pytest.mark.skipif(not HAS_SCRIPT_HANDLER, reason="ScriptHandler requires supabase")
-class TestScriptHandlerRunWithVersionWarning:
-    """Test _run_script adds version_warning when newer exists."""
+@pytest.mark.skipif(not HAS_SCRIPT_HANDLER, reason="ToolHandler requires supabase")
+class TestToolHandlerRunWithVersionWarning:
+    """Test _run_tool adds version_warning when newer exists."""
 
     @pytest.fixture
     def handler(self, tmp_path):
-        return ScriptHandler(project_path=str(tmp_path))
+        return ToolHandler(project_path=str(tmp_path))
 
     @pytest.fixture
-    def valid_script_with_version(self, tmp_path):
+    def valid_tool_with_version(self, tmp_path):
         from kiwi_mcp.utils.metadata_manager import MetadataManager
+
         d = tmp_path / ".ai" / "scripts" / "test"
         d.mkdir(parents=True)
         content = '__version__ = "1.0.0"\n"""Test."""\nimport json\nprint(json.dumps({"status":"success","data":{}}))\n'
-        p = d / "valid_script.py"
+        p = d / "valid_tool.py"
         p.write_text(content)
-        signed = MetadataManager.sign_content("script", content)
+        signed = MetadataManager.sign_content("tool", content)
         p.write_text(signed)
         return p
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     @pytest.mark.version
-    async def test_script_run_adds_version_warning_when_newer(self, handler, valid_script_with_version):
+    async def test_tool_run_adds_version_warning_when_newer(
+        self, handler, valid_tool_with_version
+    ):
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
             m.return_value = {"version": "1.2.0"}
-            with patch.object(handler, "_execute_subprocess") as sub:
-                sub.return_value = {"status": "success", "data": {}}
-                r = await handler.execute("run", "valid_script", {})
+            # Mock validation to pass
+            with patch("kiwi_mcp.handlers.tool.handler.ValidationManager.validate_and_embed") as mock_validate:
+                mock_validate.return_value = {"valid": True, "issues": []}
+                # Mock primitive_executor.execute instead of _execute_subprocess
+                with patch.object(handler.primitive_executor, "execute", new_callable=AsyncMock) as sub:
+                    from kiwi_mcp.primitives.executor import ExecutionResult
+                    sub.return_value = ExecutionResult(success=True, data={}, duration_ms=100)
+                    r = await handler.execute("run", "valid_tool", {})
         assert "version_warning" in r and r["version_warning"]["newer_version"] == "1.2.0"
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     @pytest.mark.version
-    async def test_script_dry_run_adds_version_warning(self, handler, valid_script_with_version):
+    async def test_tool_dry_run_adds_version_warning(self, handler, valid_tool_with_version):
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
             m.return_value = {"version": "1.2.0"}
-            r = await handler.execute("run", "valid_script", {"dry_run": True})
+            # Mock validation to pass
+            with patch("kiwi_mcp.handlers.tool.handler.ValidationManager.validate_and_embed") as mock_validate:
+                mock_validate.return_value = {"valid": True, "issues": []}
+                r = await handler.execute("run", "valid_tool", {"dry_run": True})
         assert r.get("status") == "validation_passed" and "version_warning" in r
 
 
@@ -611,9 +636,14 @@ class TestKnowledgeHandlerRunWithVersionWarning:
     @pytest.mark.asyncio
     @pytest.mark.unit
     @pytest.mark.version
-    async def test_knowledge_run_adds_version_warning_when_newer(self, handler, valid_knowledge_with_version):
+    async def test_knowledge_run_adds_version_warning_when_newer(
+        self, handler, valid_knowledge_with_version
+    ):
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as m:
             m.return_value = {"version": "1.2.0"}
-            with patch("kiwi_mcp.handlers.knowledge.handler.MetadataManager.verify_signature", return_value=None):
+            with patch(
+                "kiwi_mcp.handlers.knowledge.handler.MetadataManager.verify_signature",
+                return_value=None,
+            ):
                 r = await handler.execute("run", "k1", {})
         assert "version_warning" in r and r["version_warning"]["newer_version"] == "1.2.0"

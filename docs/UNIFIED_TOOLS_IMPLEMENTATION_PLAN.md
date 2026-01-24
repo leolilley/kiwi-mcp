@@ -1,7 +1,7 @@
 # Unified Tools Implementation Plan
 
 **Date:** 2026-01-23  
-**Status:** Core Architecture Complete, Handler Integration Complete ✅  
+**Status:** Core Architecture Complete, Handler Integration Complete, Legacy Cleanup Complete ✅  
 **Supersedes:** Portions of [UNIFIED_TOOLS_ARCHITECTURE.md](./UNIFIED_TOOLS_ARCHITECTURE.md)  
 **Related:** [TOOL_IMPLEMENTATION_STATUS.md](./TOOL_IMPLEMENTATION_STATUS.md), [KIWI_HARNESS_ROADMAP.md](./KIWI_HARNESS_ROADMAP.md)
 
@@ -42,19 +42,55 @@
   - No references to PythonExecutor, BashExecutor, or APIExecutor found
   - All execution now uses data-driven primitive approach
 
+### ✅ Legacy Cleanup Complete (2026-01-23)
+
+**ScriptHandler & ScriptRegistry Removal:**
+- [x] **Completely removed ScriptHandler and ScriptRegistry** ✅ **COMPLETED**
+  - Deleted `/kiwi_mcp/handlers/script/` directory
+  - Deleted `/kiwi_mcp/api/script_registry.py` file
+  - Removed all imports and references
+- [x] **Eliminated all backwards compatibility code** ✅ **COMPLETED**
+  - Removed script backwards compatibility from `TypeHandlerRegistry`
+  - Removed legacy model_class support from parsers and validators
+  - Removed all legacy warning handling from directive handler
+  - Cleaned up all comments and code related to backwards compatibility
+- [x] **Updated MCP tools to use unified architecture** ✅ **COMPLETED**
+  - Updated search, load, and execute tools to use "tool" instead of "script"
+  - Removed script enum values from tool schemas
+  - Updated handler mappings to use ToolHandler
+- [x] **Updated tests** ✅ **COMPLETED**
+  - Replaced ScriptHandler imports with ToolHandler in test files
+  - Updated test assertions to use "tool" instead of "script"
+  - Fixed registry tests to use tool handlers
+- [x] **Verified functionality** ✅ **COMPLETED**
+  - Registry now only supports: `['directive', 'tool', 'knowledge']`
+  - All tool operations use ToolHandler with PrimitiveExecutor
+  - Core functionality tests pass (4/4 tool handler tests, 105/105 primitive tests)
+  - No backwards compatibility remnants remain
+
+### ✅ Validation Framework Complete (2026-01-23)
+
+**Two-Layer Validation Architecture:**
+- [x] **Layer 1: Definition-time validation** - `ToolValidator` in validators.py
+  - Validates manifest structure (tool_id, tool_type, version, executor_id)
+  - Hardcoded, synchronous, no DB calls
+  - Stable engine contract
+- [x] **Layer 2: Runtime parameter validation** - `PrimitiveExecutor._validate_runtime_params()`
+  - Validates execution params against tool's `config_schema`
+  - Data-driven per-tool (this is where "everything else is data" applies)
+  - Uses SchemaValidator with JSON Schema from manifest
+
 ### 📋 Remaining Tasks
 
 **Framework Completion:**
-
-**Framework Completion:**
-- [ ] Update `ScriptHandler` to use `ToolRegistry` or deprecate
-- [ ] Deprecate/remove `ScriptRegistry` after verification
-- [ ] Implement validation framework (data-driven, not hardcoded)
+- [x] ~~Implement validation framework~~ ✅ **COMPLETED** (Two-layer architecture)
 - [ ] Create git_checkpoint directive
 - [ ] Create migration automation for legacy tools
 
 **Completed:**
 - [x] ~~Create comprehensive tests for ToolRegistry~~ ✅ **COMPLETED** (28 tests including stress & performance)
+- [x] ~~Update `ScriptHandler` to use `ToolRegistry` or deprecate~~ ✅ **COMPLETED** (Completely removed)
+- [x] ~~Deprecate/remove `ScriptRegistry` after verification~~ ✅ **COMPLETED** (Completely removed)
 
 ---
 
@@ -63,6 +99,14 @@
 This document outlines the **pragmatic implementation** of the unified tools architecture, following the core principle:
 
 > **Only two primitives are hard-coded. Everything else is data.**
+
+**🎉 MAJOR MILESTONE ACHIEVED (2026-01-23):** The legacy ScriptHandler and ScriptRegistry have been completely removed from the codebase. The system now operates on a clean, unified architecture with no backwards compatibility cruft. All script operations have been successfully migrated to the modern ToolHandler with PrimitiveExecutor pattern.
+
+**Architecture Status:**
+- ✅ **Clean Unified Architecture**: Only `['directive', 'tool', 'knowledge']` types supported
+- ✅ **No Legacy Code**: Zero backwards compatibility remnants
+- ✅ **Data-Driven Execution**: All tool operations use PrimitiveExecutor with chain resolution
+- ✅ **Comprehensive Testing**: 105/105 primitive tests + 4/4 tool handler tests passing
 
 ### The Two Primitives
 

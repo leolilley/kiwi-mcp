@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,11 +28,55 @@ __version__ = "0.1.0"
 __package_name__ = "kiwi-mcp"
 
 
+def validate_rag_config() -> dict:
+    """Validate RAG configuration - MANDATORY for MCP operation."""
+    embedding_url = os.getenv("EMBEDDING_URL")
+    vector_db_url = os.getenv("VECTOR_DB_URL")
+    
+    errors = []
+    if not embedding_url:
+        errors.append("EMBEDDING_URL is required")
+    if not vector_db_url:
+        errors.append("VECTOR_DB_URL is required")
+    
+    if errors:
+        error_msg = "\n".join([
+            "RAG configuration missing. Kiwi MCP requires vector search.",
+            "",
+            "Missing:",
+            *[f"  - {e}" for e in errors],
+            "",
+            "Configure via MCP client settings:",
+            '  "env": {',
+            '    "EMBEDDING_URL": "https://api.openai.com/v1/embeddings",',
+            '    "EMBEDDING_API_KEY": "sk-...",',
+            '    "VECTOR_DB_URL": "postgresql://...",',
+            '  }',
+            "",
+            "Or set environment variables:",
+            "  export EMBEDDING_URL=...",
+            "  export VECTOR_DB_URL=...",
+            "",
+            "Setup help: python -m kiwi_mcp.setup_rag",
+        ])
+        raise ValueError(error_msg)
+    
+    return {
+        "embedding_url": embedding_url,
+        "embedding_key": os.getenv("EMBEDDING_API_KEY", ""),
+        "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+        "vector_db_url": vector_db_url,
+    }
+
+
 class KiwiMCP:
     """Unified Kiwi MCP server with 4 tools."""
 
     def __init__(self):
+        # MANDATORY: Validate RAG config first
+        self.rag_config = validate_rag_config()
         self.logger = logging.getLogger("KiwiMCP")
+        self.logger.info(f"RAG configured: embedding_url={self.rag_config['embedding_url']}")
         self.server = Server(__package_name__)
         
         # Initialize tools (handlers are created dynamically per request)

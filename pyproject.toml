@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "aiofiles>=23.0.0",
     "packaging>=24.0",
+    "jsonschema>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -26,13 +27,7 @@ dev = [
     "ruff>=0.1.0",
 ]
 rag = [
-    "numpy>=1.20.0",      # For cosine similarity calculations
-]
-rag-full = [
-    "numpy>=1.20.0",
-    "chromadb>=0.4.0",           # Optional: heavy local storage
-    "sentence-transformers>=2.2.0",  # Optional: local inference
-    "pgvector>=0.2.0",           # Optional: registry store
+    "numpy>=1.20.0",      # For cosine similarity calculations (optional but recommended)
 ]
 
 [project.scripts]
@@ -50,6 +45,9 @@ include = ["kiwi_mcp*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "version: marks tests related to version checking and warnings",
+]
 
 [tool.ruff]
 line-length = 100

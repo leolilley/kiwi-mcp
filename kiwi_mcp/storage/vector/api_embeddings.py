@@ -43,6 +43,10 @@ class EmbeddingService:
             return embeddings[0]
 
         raise RuntimeError(f"Failed to generate embedding for text: {text[:50]}...")
+    
+    async def embed(self, text: str) -> List[float]:
+        """Alias for embed_text."""
+        return await self.embed_text(text)
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using configured request format."""

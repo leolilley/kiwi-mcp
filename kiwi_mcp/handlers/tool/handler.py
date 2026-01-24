@@ -4,7 +4,7 @@ Tool handler for kiwi-mcp.
 Implements search, load, execute operations for tools.
 Handles LOCAL file operations directly, only uses registry for REMOTE operations.
 
-This is the renamed and refactored ScriptHandler with executor pattern support.
+Tool handler with executor pattern support.
 """
 
 from typing import Dict, Any, Optional, List, Literal
@@ -13,14 +13,12 @@ from pathlib import Path
 from kiwi_mcp.handlers import SortBy
 from kiwi_mcp.api.tool_registry import ToolRegistry
 from kiwi_mcp.utils.logger import get_logger
-from kiwi_mcp.utils.resolvers import ScriptResolver, get_user_space
-from kiwi_mcp.utils.parsers import parse_script_metadata
+from kiwi_mcp.utils.resolvers import ToolResolver, get_user_space
 from kiwi_mcp.utils.file_search import search_python_files, score_relevance
 from kiwi_mcp.utils.output_manager import OutputManager, truncate_for_response
 from kiwi_mcp.utils.metadata_manager import MetadataManager
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
-
-from .manifest import ToolManifest
+from kiwi_mcp.schemas import extract_tool_metadata, validate_tool_metadata
 from kiwi_mcp.primitives.executor import PrimitiveExecutor, ExecutionResult
 
 
@@ -30,7 +28,7 @@ class ToolHandler:
     def __init__(self, project_path: str):
         """Initialize handler with project path."""
         self.project_path = Path(project_path)
-        self.resolver = ScriptResolver(project_path=self.project_path)
+        self.resolver = ToolResolver(project_path=self.project_path)
         self.registry = ToolRegistry()
         self.logger = get_logger("tool_handler")
 
@@ -39,6 +37,35 @@ class ToolHandler:
 
         # Initialize primitive executor
         self.primitive_executor = PrimitiveExecutor(self.registry)
+        
+        # Vector store for automatic embedding
+        self._vector_store = None
+        self._init_vector_store()
+
+    def _init_vector_store(self):
+        """Initialize project vector store for automatic embedding."""
+        try:
+            from kiwi_mcp.storage.vector import LocalVectorStore, EmbeddingService, load_vector_config
+            
+            # Load embedding config from environment
+            config = load_vector_config()
+            embedding_service = EmbeddingService(config)
+            
+            vector_path = self.project_path / ".ai" / "vector" / "project"
+            vector_path.mkdir(parents=True, exist_ok=True)
+            
+            self._vector_store = LocalVectorStore(
+                storage_path=vector_path,
+                collection_name="project_items",
+                embedding_service=embedding_service
+            )
+        except ValueError as e:
+            # Missing config - vector search disabled
+            self.logger.debug(f"Vector store not configured: {e}")
+            self._vector_store = None
+        except Exception as e:
+            self.logger.warning(f"Vector store init failed: {e}")
+            self._vector_store = None
 
     def _has_git(self) -> bool:
         """Check if project is in a git repository."""
@@ -93,15 +120,15 @@ class ToolHandler:
         """Search local tool/script files."""
         results = []
 
-        # Search paths
         search_dirs = []
-        project_scripts = self.project_path / ".ai" / "scripts"
-        if project_scripts.exists():
-            search_dirs.append(project_scripts)
-
-        user_scripts = get_user_space() / "scripts"
-        if user_scripts.exists():
-            search_dirs.append(user_scripts)
+        
+        project_tools = self.project_path / ".ai" / "tools"
+        if project_tools.exists():
+            search_dirs.append(project_tools)
+        
+        user_tools = get_user_space() / "tools"
+        if user_tools.exists():
+            search_dirs.append(user_tools)
 
         # Search each directory
         for search_dir in search_dirs:
@@ -109,22 +136,19 @@ class ToolHandler:
 
             for file_path in files:
                 try:
-                    script = parse_script_metadata(file_path)
+                    meta = extract_tool_metadata(file_path, self.project_path)
 
-                    # Calculate relevance score
-                    searchable_text = f"{script['name']} {script['description']}"
-                    score = score_relevance(
-                        searchable_text, query.split()
-                    )  # Fix: correct parameter order
+                    searchable_text = f"{meta['name']} {meta.get('description', '')}"
+                    score = score_relevance(searchable_text, query.split())
 
                     results.append(
                         {
-                            "name": script["name"],
-                            "description": script["description"],
+                            "name": meta["name"],
+                            "description": meta.get("description", ""),
                             "source": "project" if ".ai/" in str(file_path) else "user",
                             "path": str(file_path),
                             "score": score,
-                            "tool_type": self._detect_tool_type(file_path),
+                            "tool_type": meta.get("tool_type", "unknown"),
                         }
                     )
                 except Exception as e:
@@ -148,22 +172,11 @@ class ToolHandler:
             return []
 
     def _detect_tool_type(self, file_path: Path) -> str:
-        """Detect tool type from file extension or manifest."""
-        # Check for tool.yaml manifest in same directory
-        manifest_path = file_path.parent / "tool.yaml"
-        if manifest_path.exists():
-            try:
-                manifest = ToolManifest.from_yaml(manifest_path)
-                return manifest.tool_type
-            except Exception:
-                pass
-
-        # Default based on file extension
-        if file_path.suffix == ".py":
-            return "python"
-        elif file_path.suffix == ".sh":
-            return "bash"
-        else:
+        """Detect tool type using schema-driven extraction."""
+        try:
+            meta = extract_tool_metadata(file_path, self.project_path)
+            return meta.get("tool_type") or "unknown"
+        except Exception:
             return "unknown"
 
     async def load(
@@ -171,6 +184,7 @@ class ToolHandler:
         tool_name: str,
         source: Literal["project", "user", "registry"],
         destination: Optional[Literal["project", "user"]] = None,
+        version: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Load tool from specified source.
@@ -199,24 +213,44 @@ class ToolHandler:
                         "message": "Set SUPABASE_URL and SUPABASE_KEY to load from registry",
                     }
 
-                # Get from registry
-                tool_data = await self.registry.get(tool_name)
+                # Get from registry (version defaults to latest if not specified)
+                tool_data = await self.registry.get(tool_name, version=version)
                 if not tool_data:
                     return {"error": f"Tool '{tool_name}' not found in registry"}
 
-                # For registry, default destination to "project" if not specified
                 effective_destination = destination or "project"
 
-                # Determine target path based on destination
                 if effective_destination == "user":
-                    target_dir = get_user_space() / "scripts"
-                else:  # destination == "project"
-                    target_dir = self.project_path / ".ai" / "scripts"
+                    target_dir = get_user_space() / "tools"
+                else:
+                    target_dir = self.project_path / ".ai" / "tools"
 
                 target_dir.mkdir(parents=True, exist_ok=True)
 
-                # Determine category subdirectory
-                category = tool_data.get("category", "utility")
+                # Extract category: check manifest first, then derive from tool_type
+                manifest = tool_data.get("manifest", {})
+                category = manifest.get("category") or tool_data.get("category")
+                
+                # If no category, derive from tool_type (e.g., "primitive" -> "primitives")
+                if not category:
+                    tool_type = manifest.get("tool_type") or tool_data.get("tool_type")
+                    if tool_type:
+                        # Map tool_type to category directory
+                        type_to_category = {
+                            "primitive": "primitives",
+                            "runtime": "runtimes",
+                            "mcp_server": "mcp_servers",
+                            "mcp_tool": "mcp_tools",
+                            "script": "scripts",
+                            "api": "apis",
+                        }
+                        category = type_to_category.get(tool_type, tool_type + "s")
+                    else:
+                        return {
+                            "error": f"Tool '{tool_name}' missing both 'category' and 'tool_type' fields",
+                            "message": "Cannot determine installation directory for tool",
+                        }
+                
                 category_dir = target_dir / category
                 category_dir.mkdir(exist_ok=True)
 
@@ -226,8 +260,7 @@ class ToolHandler:
 
                 self.logger.info(f"Downloaded tool from registry to: {target_file}")
 
-                # Create virtual manifest
-                manifest = ToolManifest.virtual_from_script(target_file)
+                meta = extract_tool_metadata(target_file, self.project_path)
 
                 return {
                     "name": tool_name,
@@ -235,12 +268,7 @@ class ToolHandler:
                     "content": tool_data["content"],
                     "source": "registry",
                     "destination": effective_destination,
-                    "manifest": {
-                        "tool_id": manifest.tool_id,
-                        "tool_type": manifest.tool_type,
-                        "version": manifest.version,
-                        "description": manifest.description,
-                    },
+                    "metadata": meta,
                     "message": f"Tool downloaded from registry to {effective_destination}",
                 }
 
@@ -250,13 +278,11 @@ class ToolHandler:
                 if not file_path:
                     return {"error": f"Tool '{tool_name}' not found locally"}
 
-                # If copying to different location
                 if not is_read_only:
-                    # Determine target location
                     if destination == "user":
-                        target_dir = get_user_space() / "scripts"
-                    else:  # destination == "project"
-                        target_dir = self.project_path / ".ai" / "scripts"
+                        target_dir = get_user_space() / "tools"
+                    else:
+                        target_dir = self.project_path / ".ai" / "tools"
 
                     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -275,29 +301,14 @@ class ToolHandler:
                     self.logger.info(f"Copied tool from {source} to {destination}: {target_file}")
                     file_path = target_file  # Use new path for metadata extraction
 
-                # Extract metadata
-                tool_metadata = parse_script_metadata(file_path)
-
-                # Create manifest (virtual or from file)
-                manifest_path = file_path.parent / "tool.yaml"
-                if manifest_path.exists():
-                    manifest = ToolManifest.from_yaml(manifest_path)
-                else:
-                    manifest = ToolManifest.virtual_from_script(file_path)
+                meta = extract_tool_metadata(file_path, self.project_path)
 
                 result = {
                     "name": tool_name,
                     "path": str(file_path),
                     "content": file_path.read_text(),
                     "source": source,
-                    "manifest": {
-                        "tool_id": manifest.tool_id,
-                        "tool_type": manifest.tool_type,
-                        "version": manifest.version,
-                        "description": manifest.description,
-                        "parameters": manifest.parameters,
-                    },
-                    "metadata": tool_metadata,
+                    "metadata": meta,
                 }
 
                 if not is_read_only:
@@ -375,88 +386,104 @@ class ToolHandler:
                 "suggestion": "Use load() to download from registry first",
             }
 
-        # Create or load manifest
-        manifest_path = file_path.parent / "tool.yaml"
-        if manifest_path.exists():
-            manifest = ToolManifest.from_yaml(manifest_path)
-        else:
-            manifest = ToolManifest.virtual_from_script(file_path)
+        # Extract metadata using schema
+        tool_meta = extract_tool_metadata(file_path, self.project_path)
 
-        # Signature validation (reusing existing logic)
+        # Signature validation
         file_content = file_path.read_text()
-        signature_status = MetadataManager.verify_signature(
-            "script", file_content
-        )  # Still using "script" type
+        signature_status = MetadataManager.verify_signature("tool", file_content)
 
-        if signature_status:
-            if signature_status.get("status") == "modified":
-                return {
-                    "status": "error",
-                    "error": "Tool content has been modified since last validation",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the tool",
-                }
-            elif signature_status.get("status") == "invalid":
-                return {
-                    "status": "error",
-                    "error": "Tool signature is invalid",
-                    "signature": signature_status,
-                    "path": str(file_path),
-                    "solution": "Use execute action 'update' or 'create' to re-validate the tool",
-                }
+        if signature_status is None:
+            return {
+                "status": "error",
+                "error": "Tool has no valid signature",
+                "path": str(file_path),
+                "hint": "Tool needs validation",
+                "solution": (
+                    f"Run: execute(item_type='tool', action='update', "
+                    f"item_id='{tool_name}', parameters={{'location': 'project'}}, "
+                    f"project_path='{self.project_path}')"
+                ),
+            }
 
-        # Validate tool using centralized validator
-        script_meta = parse_script_metadata(file_path)
-        validation_result = ValidationManager.validate(
-            "script", file_path, script_meta
-        )  # Still using "script" type
+        if signature_status.get("status") == "modified":
+            return {
+                "status": "error",
+                "error": "Tool content has been modified since last validation",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the tool",
+            }
+        elif signature_status.get("status") == "invalid":
+            return {
+                "status": "error",
+                "error": "Tool signature is invalid",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the tool",
+            }
+
+        # Validate using schema
+        validation_result = validate_tool_metadata(tool_meta)
         if not validation_result["valid"]:
             return {
                 "status": "error",
                 "error": "Tool validation failed",
                 "details": validation_result["issues"],
                 "path": str(file_path),
+                "warnings": validation_result.get("warnings", []),
             }
 
+        current_version = tool_meta.get("version")
+        current_source = (
+            "project"
+            if str(file_path).startswith(str(self.resolver.project_tools))
+            else "user"
+        )
+        version_warning = await self._check_for_newer_version(
+            tool_name, current_version, current_source
+        )
+
         if dry_run:
-            return {
+            response = {
                 "status": "validation_passed",
                 "message": "Tool is ready to execute",
                 "path": str(file_path),
-                "manifest": {
-                    "tool_id": manifest.tool_id,
-                    "tool_type": manifest.tool_type,
-                    "version": manifest.version,
-                },
+                "metadata": tool_meta,
             }
+            if version_warning:
+                response["version_warning"] = version_warning
+            return response
 
         # Execute using PrimitiveExecutor with chain resolution
         try:
-            result = await self.primitive_executor.execute(manifest.tool_id, params)
+            result = await self.primitive_executor.execute(tool_meta["name"], params)
 
-            # Convert ExecutionResult to expected format
             if result.success:
                 response = {
                     "status": "success",
                     "data": result.data,
                     "metadata": {
                         "duration_ms": result.duration_ms,
-                        "tool_type": manifest.tool_type,
+                        "tool_type": tool_meta.get("tool_type"),
                         "primitive_type": result.metadata.get("type")
                         if result.metadata
                         else "unknown",
                     },
                 }
 
-                # Add checkpoint recommendation if tool mutates state
-                if manifest.mutates_state and self._has_git():
+                if tool_meta.get("mutates_state") and self._has_git():
                     response["checkpoint_recommended"] = True
+                    tool_name_val = tool_meta.get("name", "unknown")
                     response["checkpoint_hint"] = (
                         "This tool mutates state. Consider running git_checkpoint: "
                         f"execute(item_type='directive', action='run', item_id='git_checkpoint', "
-                        f"parameters={{'operation': '{manifest.tool_id}'}})"
+                        f"parameters={{'operation': '{tool_name_val}'}})"
                     )
+
+                # Add version warning if newer version exists
+                if version_warning:
+                    response["version_warning"] = version_warning
 
                 return response
             else:
@@ -465,7 +492,7 @@ class ToolHandler:
                     "error": result.error or "Unknown execution error",
                     "metadata": {
                         "duration_ms": result.duration_ms,
-                        "tool_type": manifest.tool_type,
+                        "tool_type": tool_meta.get("tool_type"),
                         "primitive_type": result.metadata.get("type")
                         if result.metadata
                         else "unknown",
@@ -476,21 +503,352 @@ class ToolHandler:
             self.logger.error(f"Tool execution failed: {e}")
             return {"status": "error", "error": str(e)}
 
-    # Placeholder methods for other actions (delegate to script handler for now)
     async def _publish_tool(self, tool_name: str, version: Optional[str]) -> Dict[str, Any]:
-        """Publish tool to registry."""
-        return {"error": "Tool publishing not yet implemented"}
+        """
+        Publish tool to registry.
+        
+        Enforces hash validation - content must be validated before publishing.
+        """
+        # Find local tool file
+        file_path = self.resolver.resolve(tool_name)
+        if not file_path:
+            return {
+                "error": f"Tool '{tool_name}' not found locally",
+                "suggestion": "Create tool first before publishing",
+            }
+        
+        # ENFORCE hash validation - ALWAYS check, never skip
+        file_content = file_path.read_text()
+        signature_status = MetadataManager.verify_signature("tool", file_content)
+        
+        # Block publishing if signature is missing, invalid, or modified
+        if signature_status is None:
+            return {
+                "error": "Cannot publish: tool has no valid signature",
+                "path": str(file_path),
+                "hint": "Tools must be validated before publishing",
+                "solution": (
+                    f"Run: execute(item_type='tool', action='update', "
+                    f"item_id='{tool_name}', parameters={{'location': 'project'}}, "
+                    f"project_path='{self.project_path}')"
+                ),
+            }
+
+        if signature_status.get("status") == "modified":
+            return {
+                "error": "Tool content has been modified since last validation",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the tool before publishing",
+            }
+        elif signature_status.get("status") == "invalid":
+            return {
+                "error": "Tool signature is invalid",
+                "signature": signature_status,
+                "path": str(file_path),
+                "solution": "Use execute action 'update' or 'create' to re-validate the tool before publishing",
+            }
+        
+        # Extract and validate using schema
+        tool_meta = extract_tool_metadata(file_path, self.project_path)
+        validation_result = validate_tool_metadata(tool_meta)
+        if not validation_result["valid"]:
+            return {
+                "error": "Tool validation failed",
+                "details": validation_result["issues"],
+                "path": str(file_path),
+            }
+        
+        publish_version = version or tool_meta.get("version")
+        files = {file_path.name: file_content}
+        
+        try:
+            result = await self.registry.publish(
+                tool_id=tool_name,
+                version=publish_version,
+                tool_type=tool_meta.get("tool_type"),
+                executor_id=tool_meta.get("executor_id"),
+                manifest=tool_meta,
+                files=files,
+                category=tool_meta.get("category"),
+                description=tool_meta.get("description"),
+                changelog=f"Published version {publish_version}",
+            )
+            
+            if "error" in result:
+                return result
+            
+            return {
+                "status": "published",
+                "tool_id": tool_name,
+                "version": publish_version,
+                "registry_result": result,
+                "path": str(file_path),
+            }
+        except Exception as e:
+            self.logger.error(f"Publish failed: {e}")
+            return {"error": f"Publish failed: {e}"}
 
     async def _delete_tool(self, tool_name: str, confirm: bool) -> Dict[str, Any]:
-        """Delete tool."""
-        return {"error": "Tool deletion not yet implemented"}
+        """Delete tool from local and/or registry."""
+        if not confirm:
+            return {
+                "error": "Delete requires confirmation",
+                "required": {"confirm": True},
+                "example": "parameters={'confirm': True}",
+            }
+        
+        deleted = []
+        
+        # Delete local file
+        file_path = self.resolver.resolve(tool_name)
+        if file_path:
+            file_path.unlink()
+            deleted.append("local")
+            
+            # Also delete manifest if present
+            manifest_path = file_path.parent / "tool.yaml"
+            if manifest_path.exists():
+                manifest_path.unlink()
+        
+        # Delete from registry
+        if self.registry.is_configured:
+            try:
+                result = await self.registry.delete(tool_name, confirm=True)
+                if "error" not in result:
+                    deleted.append("registry")
+            except Exception as e:
+                self.logger.warning(f"Registry delete failed: {e}")
+        
+        if not deleted:
+            return {"error": f"Tool '{tool_name}' not found in any location"}
+        
+        return {"status": "deleted", "tool_id": tool_name, "deleted_from": deleted}
 
     async def _create_tool(
-        self, tool_name: str, content: str, location: str, category: str
+        self, tool_name: str, content: Optional[str], location: str, category: Optional[str]
     ) -> Dict[str, Any]:
-        """Create new tool."""
-        return {"error": "Tool creation not yet implemented"}
+        """
+        Validate and register an existing tool file.
+
+        Expects the tool file to already exist on disk.
+        This action validates the script, checks metadata, and adds a signature.
+        
+        Args:
+            tool_name: Name of the tool (snake_case)
+            content: Not used (kept for backward compatibility, file must exist)
+            location: "project" or "user"
+            category: Optional category subdirectory (for search hint)
+        """
+        if location not in ("project", "user"):
+            return {
+                "error": f"Invalid location: {location}",
+                "valid_locations": ["project", "user"],
+            }
+        
+        if location == "project":
+            search_base = self.project_path / ".ai" / "tools"
+        else:
+            search_base = get_user_space() / "tools"
+        
+        # Search for the tool file
+        file_path = None
+        if search_base.exists():
+            for candidate in Path(search_base).rglob(f"{tool_name}.py"):
+                if candidate.stem == tool_name:
+                    file_path = candidate
+                    break
+        
+        if not file_path or not file_path.exists():
+            category_hint = category or "utility"
+            return {
+                "error": f"Tool file not found: {tool_name}",
+                "hint": f"Create the file first at .ai/tools/{category_hint}/{tool_name}.py",
+                "searched_in": str(search_base),
+            }
+        
+        # Validate path structure
+        from kiwi_mcp.utils.paths import validate_path_structure
+        path_validation = validate_path_structure(
+            file_path, "tool", location, self.project_path
+        )
+        if not path_validation["valid"]:
+            return {
+                "error": "Tool path structure invalid",
+                "details": path_validation["issues"],
+                "path": str(file_path),
+                "solution": "File must be under .ai/tools/ with correct structure",
+            }
+        
+        file_content = file_path.read_text()
+        
+        # Extract and validate using schema
+        try:
+            tool_meta = extract_tool_metadata(file_path, self.project_path)
+            validation_result = validate_tool_metadata(tool_meta)
+            if not validation_result["valid"]:
+                return {
+                    "error": "Tool validation failed",
+                    "details": validation_result["issues"],
+                    "warnings": validation_result.get("warnings", []),
+                    "path": str(file_path),
+                    "solution": "Fix validation issues and re-run create action",
+                }
+        except Exception as e:
+            return {
+                "error": f"Failed to validate tool: {e}",
+                "path": str(file_path),
+            }
+        
+        # Sign the validated content
+        signed_content = MetadataManager.sign_content("tool", file_content)
+        file_path.write_text(signed_content)
+        
+        signature_status = MetadataManager.verify_signature("tool", signed_content)
+        
+        return {
+            "status": "created",
+            "tool_id": tool_name,
+            "path": str(file_path),
+            "location": location,
+            "category": tool_meta.get("category"),
+            "signature": signature_status,
+        }
 
     async def _update_tool(self, tool_name: str, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update tool."""
-        return {"error": "Tool updates not yet implemented"}
+        """
+        Update existing tool with new content and re-sign.
+        
+        Args:
+            tool_name: Name of the tool to update
+            updates: Dict with optional keys: content, version, description
+        """
+        # Find existing file
+        file_path = self.resolver.resolve(tool_name)
+        if not file_path:
+            return {
+                "error": f"Tool '{tool_name}' not found",
+                "suggestion": "Use 'create' action for new tools",
+            }
+        
+        # Get current content
+        current_content = file_path.read_text()
+        
+        # Get updates
+        new_content = updates.get("content")
+        if not new_content:
+            # If no new content, just re-sign existing (for re-validation)
+            new_content = MetadataManager.get_strategy("tool").remove_signature(current_content)
+        
+        try:
+            file_path.write_text(new_content)
+            
+            tool_meta = extract_tool_metadata(file_path, self.project_path)
+            validation_result = validate_tool_metadata(tool_meta)
+            if not validation_result["valid"]:
+                file_path.write_text(current_content)
+                return {
+                    "error": "Tool validation failed",
+                    "details": validation_result["issues"],
+                    "warnings": validation_result.get("warnings", []),
+                    "path": str(file_path),
+                }
+        except Exception as e:
+            file_path.write_text(current_content)
+            return {"error": f"Failed to validate tool: {e}"}
+        
+        # Sign the validated content
+        signed_content = MetadataManager.sign_content("tool", new_content)
+        file_path.write_text(signed_content)
+        
+        # Extract signature info
+        signature_status = MetadataManager.verify_signature("tool", signed_content)
+        
+        return {
+            "status": "updated",
+            "tool_id": tool_name,
+            "path": str(file_path),
+            "signature": signature_status,
+        }
+
+    async def _check_for_newer_version(
+        self,
+        tool_name: str,
+        current_version: str,
+        current_source: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check for newer versions of a tool in other locations.
+
+        Args:
+            tool_name: Name of tool
+            current_version: Current version being run
+            current_source: "project" or "user"
+
+        Returns:
+            Warning dict if newer version found, None otherwise
+        """
+        newest_version = current_version
+        newest_location = None
+
+        # Check user space (if running from project)
+        if current_source == "project":
+            try:
+                user_file_path = self.resolver.resolve(tool_name)
+                # Check if it's in user space
+                if user_file_path and str(user_file_path).startswith(str(get_user_space() / "tools")):
+                    try:
+                        user_tool_meta = extract_tool_metadata(user_file_path, self.project_path)
+                        user_version = user_tool_meta.get("version")
+                        if user_version:
+                            try:
+                                if compare_versions(current_version, user_version) < 0:
+                                    # User version is newer
+                                    if compare_versions(newest_version, user_version) < 0:
+                                        newest_version = user_version
+                                        newest_location = "user"
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"Failed to compare versions with user space: {e}"
+                                )
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Failed to parse user space tool {tool_name}: {e}"
+                        )
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to check user space for tool {tool_name}: {e}"
+                )
+
+        # Check registry (always)
+        try:
+            registry_data = await self.registry.get(tool_name)
+            if registry_data and registry_data.get("version"):
+                registry_version = registry_data["version"]
+                try:
+                    if compare_versions(current_version, registry_version) < 0:
+                        # Registry version is newer
+                        if compare_versions(newest_version, registry_version) < 0:
+                            newest_version = registry_version
+                            newest_location = "registry"
+                except Exception as e:
+                    self.logger.warning(f"Failed to compare versions with registry: {e}")
+        except Exception as e:
+            self.logger.warning(f"Failed to check registry for tool {tool_name}: {e}")
+
+        # Return warning if newer version found
+        if newest_location and newest_version != current_version:
+            suggestion = (
+                f"Use load() to download the newer version from {newest_location}"
+                if newest_location == "registry"
+                else f"Use load() to copy the newer version from user space"
+            )
+            return {
+                "message": "A newer version of this tool is available",
+                "current_version": current_version,
+                "newer_version": newest_version,
+                "location": newest_location,
+                "suggestion": suggestion,
+            }
+
+        return None

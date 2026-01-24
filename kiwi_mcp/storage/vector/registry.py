@@ -1,14 +1,29 @@
+"""Registry vector store using Supabase with pgvector.
+
+Uses the item_embeddings table and search_embeddings RPC function.
+"""
+
 import os
-from typing import Optional
+from typing import Optional, Any, List
 
 from .base import VectorStore, SearchResult
-from .embeddings import EmbeddingModel
 
 
 class RegistryVectorStore(VectorStore):
-    def __init__(self, embedding_model: Optional[EmbeddingModel] = None):
+    """Vector store backed by Supabase pgvector."""
+
+    def __init__(
+        self,
+        embedding_service: Optional[Any] = None,
+    ):
         self._client = None
-        self.embedder = embedding_model or EmbeddingModel()
+        self.embedder = embedding_service
+        
+        if self.embedder is None:
+            raise ValueError(
+                "RegistryVectorStore requires an embedding service. "
+                "Pass embedding_service parameter."
+            )
 
     def _get_client(self):
         """Lazy load Supabase client."""
@@ -40,7 +55,13 @@ class RegistryVectorStore(VectorStore):
         metadata: dict,
         signature: Optional[str] = None,
     ) -> bool:
-        embedding = self.embedder.embed(content)
+        # Handle both sync and async embedders
+        import inspect
+        if inspect.iscoroutinefunction(self.embedder.embed):
+            embedding = await self.embedder.embed(content)
+        else:
+            embedding = self.embedder.embed(content)
+        
         client = self._get_client()
 
         try:
@@ -65,7 +86,13 @@ class RegistryVectorStore(VectorStore):
         item_type: Optional[str] = None,
         filters: Optional[dict] = None,
     ) -> list[SearchResult]:
-        query_embedding = self.embedder.embed(query)
+        # Handle both sync and async embedders
+        import inspect
+        if inspect.iscoroutinefunction(self.embedder.embed):
+            query_embedding = await self.embedder.embed(query)
+        else:
+            query_embedding = self.embedder.embed(query)
+        
         client = self._get_client()
 
         try:

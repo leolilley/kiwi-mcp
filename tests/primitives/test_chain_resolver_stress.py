@@ -38,7 +38,7 @@ class TestChainResolverStress:
             {
                 "depth": 0,
                 "tool_id": "data_processor",
-                "tool_type": "script",
+                "tool_type": "python",
                 "executor_id": "python_runtime",
                 "manifest": {
                     "config": {
@@ -101,7 +101,7 @@ class TestChainResolverStress:
             {
                 "depth": 0,
                 "tool_id": "web_scraper",
-                "tool_type": "script",
+                "tool_type": "python",
                 "executor_id": "python_runtime",
                 "manifest": {
                     "config": {
@@ -164,7 +164,7 @@ class TestChainResolverStress:
             {
                 "depth": 0,
                 "tool_id": "api_client",
-                "tool_type": "script",
+                "tool_type": "node",
                 "executor_id": "node_runtime",
                 "manifest": {
                     "config": {
@@ -428,7 +428,7 @@ class TestChainResolverStress:
             {
                 "depth": 0,
                 "tool_id": "complex_script",
-                "tool_type": "script",
+                "tool_type": "python",
                 "executor_id": "runtime",
                 "manifest": {
                     "config": {
@@ -583,7 +583,7 @@ class TestChainResolverStress:
             {
                 "depth": 0,
                 "tool_id": "large_script",
-                "tool_type": "script",
+                "tool_type": "bash",
                 "executor_id": "subprocess",
                 "manifest": large_manifest,
             },
@@ -614,14 +614,14 @@ class TestChainResolverStress:
             {
                 "depth": 0,
                 "tool_id": "script_a",
-                "tool_type": "script",
+                "tool_type": "python",
                 "executor_id": "script_b",
                 "manifest": {"config": {"from": "script_a"}},
             },
             {
                 "depth": 1,
                 "tool_id": "script_b",
-                "tool_type": "script",
+                "tool_type": "python",
                 "executor_id": "script_a",  # Circular!
                 "manifest": {"config": {"from": "script_b"}},
             },

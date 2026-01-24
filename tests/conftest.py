@@ -17,11 +17,11 @@ os.environ["SUPABASE_SECRET_KEY"] = "test-secret-key"
 def mock_supabase_client():
     """Create a mock Supabase client."""
     client = MagicMock()
-    
+
     # Mock table operations
     client.table = MagicMock(return_value=MagicMock())
     client.rpc = MagicMock(return_value=MagicMock())
-    
+
     return client
 
 
@@ -33,8 +33,7 @@ def mock_directives_search_result():
             {
                 "id": "1",
                 "name": "bootstrap_directive",
-                "category": "setup",
-                "subcategory": "initialization",
+                "category": "setup/initialization",
                 "description": "Bootstrap a new project with essential configurations",
                 "is_official": True,
                 "download_count": 150,
@@ -46,8 +45,7 @@ def mock_directives_search_result():
             {
                 "id": "2",
                 "name": "setup_auth",
-                "category": "authentication",
-                "subcategory": "oauth",
+                "category": "authentication/oauth",
                 "description": "Setup OAuth authentication with multiple providers",
                 "is_official": False,
                 "download_count": 50,
@@ -55,21 +53,20 @@ def mock_directives_search_result():
                 "tech_stack": ["Python", "OAuth"],
                 "created_at": "2024-01-05T00:00:00Z",
                 "updated_at": "2024-01-10T00:00:00Z",
-            }
+            },
         ]
     }
 
 
 @pytest.fixture
-def mock_scripts_search_result():
-    """Mock search results for scripts."""
+def mock_tools_search_result():
+    """Mock search results for tools."""
     return {
         "data": [
             {
                 "id": "1",
                 "name": "google_maps_scraper",
-                "category": "scraping",
-                "subcategory": "maps",
+                "category": "scraping/maps",  # Combined from category + subcategory
                 "description": "Scrape business locations from Google Maps",
                 "is_official": True,
                 "download_count": 500,
@@ -85,8 +82,7 @@ def mock_scripts_search_result():
             {
                 "id": "2",
                 "name": "email_validator",
-                "category": "validation",
-                "subcategory": "email",
+                "category": "validation/email",  # Combined from category + subcategory
                 "description": "Validate email addresses and check deliverability",
                 "is_official": False,
                 "download_count": 200,
@@ -98,7 +94,7 @@ def mock_scripts_search_result():
                 "latest_version": "1.5.0",
                 "created_at": "2024-01-05T00:00:00Z",
                 "updated_at": "2024-01-10T00:00:00Z",
-            }
+            },
         ]
     }
 
@@ -123,7 +119,7 @@ def mock_knowledge_search_result():
                 "category": "authentication",
                 "tags": ["jwt", "python", "auth"],
                 "snippet": "JWT tokens are self-contained and can be used for stateless authentication.",
-            }
+            },
         ]
     }
 
@@ -132,7 +128,7 @@ def mock_knowledge_search_result():
 def directive_registry(monkeypatch):
     """Create a DirectiveRegistry with mocked Supabase client."""
     from kiwi_mcp.api.directive_registry import DirectiveRegistry
-    
+
     registry = DirectiveRegistry()
     # Mock the client to avoid actual connection attempts
     registry.client = MagicMock()
@@ -140,11 +136,11 @@ def directive_registry(monkeypatch):
 
 
 @pytest.fixture
-def script_registry(monkeypatch):
-    """Create a ScriptRegistry with mocked Supabase client."""
-    from kiwi_mcp.api.script_registry import ScriptRegistry
-    
-    registry = ScriptRegistry()
+def tool_registry(monkeypatch):
+    """Create a ToolRegistry with mocked Supabase client."""
+    from kiwi_mcp.api.tool_registry import ToolRegistry
+
+    registry = ToolRegistry()
     # Mock the client to avoid actual connection attempts
     registry.client = MagicMock()
     return registry
@@ -154,7 +150,7 @@ def script_registry(monkeypatch):
 def knowledge_registry(monkeypatch):
     """Create a KnowledgeRegistry with mocked Supabase client."""
     from kiwi_mcp.api.knowledge_registry import KnowledgeRegistry
-    
+
     registry = KnowledgeRegistry()
     # Mock the client to avoid actual connection attempts
     registry.client = MagicMock()
@@ -167,7 +163,7 @@ def mock_filesystem(tmp_path):
     return {
         "project_root": tmp_path,
         "directives_dir": tmp_path / ".ai" / "directives",
-        "scripts_dir": tmp_path / ".ai" / "scripts",
+        "tools_dir": tmp_path / ".ai" / "scripts",
         "knowledge_dir": tmp_path / ".ai" / "knowledge",
     }
 
@@ -175,6 +171,7 @@ def mock_filesystem(tmp_path):
 # ============================================================================
 # Test File Creation Helpers
 # ============================================================================
+
 
 @pytest.fixture
 def sample_directive_content():
@@ -200,7 +197,7 @@ def sample_directive_file(tmp_path, sample_directive_content):
     """Create a sample directive file for testing."""
     directive_dir = tmp_path / ".ai" / "directives" / "test"
     directive_dir.mkdir(parents=True)
-    
+
     file_content = f"""# Test Directive
 
 ```xml
@@ -213,9 +210,11 @@ def sample_directive_file(tmp_path, sample_directive_content):
 
 
 @pytest.fixture
-def sample_script_content():
-    """Sample script content for testing."""
-    return '''"""Test script for unit testing"""
+def sample_tool_content():
+    """Sample tool content for testing."""
+    return '''"""Test tool for unit testing"""
+__version__ = "1.0.0"
+
 import sys
 import json
 
@@ -229,14 +228,14 @@ if __name__ == "__main__":
 
 
 @pytest.fixture
-def sample_script_file(tmp_path, sample_script_content):
-    """Create a sample script file for testing."""
-    script_dir = tmp_path / ".ai" / "scripts" / "test"
-    script_dir.mkdir(parents=True)
-    
-    script_file = script_dir / "test_script.py"
-    script_file.write_text(sample_script_content)
-    return script_file
+def sample_tool_file(tmp_path, sample_tool_content):
+    """Create a sample tool file for testing."""
+    tool_dir = tmp_path / ".ai" / "scripts" / "test"
+    tool_dir.mkdir(parents=True)
+
+    tool_file = tool_dir / "test_tool.py"
+    tool_file.write_text(sample_tool_content)
+    return tool_file
 
 
 @pytest.fixture
@@ -250,8 +249,9 @@ def sample_knowledge_file(tmp_path, sample_knowledge_content):
     """Create a sample knowledge entry file for testing."""
     knowledge_dir = tmp_path / ".ai" / "knowledge" / "test"
     knowledge_dir.mkdir(parents=True)
-    
+
     file_content = f"""---
+version: "1.0.0"
 zettel_id: 001-test
 title: Test Knowledge Entry
 entry_type: learning

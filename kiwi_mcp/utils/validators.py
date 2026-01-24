@@ -222,12 +222,6 @@ class DirectiveValidator(BaseValidator):
                 f"Invalid version format '{directive_version}'. Must be semver (e.g., 1.0.0, 2.1.3)"
             )
 
-        # Check for legacy model_class warning
-        if parsed_data.get("legacy_warning"):
-            warnings.append(
-                parsed_data["legacy_warning"].get("message", "Legacy model_class tag detected")
-            )
-
         return {
             "valid": len(issues) == 0,
             "issues": issues,
@@ -249,33 +243,56 @@ class DirectiveValidator(BaseValidator):
         return content[start_idx : end_idx + len(end_tag)].strip()
 
 
-class ScriptValidator(BaseValidator):
-    """Validator for scripts."""
+class ToolValidator(BaseValidator):
+    """Validator for unified tools - validates manifest structure at definition time.
+
+    This is Layer 1 validation: checking that tool manifests are well-formed.
+    It does NOT use database calls or async operations.
+
+    Runtime parameter validation (Layer 2) happens in PrimitiveExecutor using
+    the tool's config_schema - that's where "everything else is data" applies.
+    """
 
     def validate_filename_match(
         self, file_path: Path, parsed_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Validate filename matches script name."""
-        script_name = parsed_data.get("name")
-        if not script_name:
+        """Validate that filename matches tool identifier."""
+        issues = []
+
+        tool_id = parsed_data.get("tool_id") or parsed_data.get("name")
+        if not tool_id:
             return {
                 "valid": False,
-                "issues": ["Script name not found in parsed data"],
+                "issues": ["Tool ID not found in parsed data"],
             }
 
-        expected_filename = f"{script_name}.py"
-        actual_filename = file_path.name
+        # Check filename matches tool_id (with appropriate extension)
+        expected_extensions = {".py", ".sh", ".yaml", ".yml"}
+        actual_extension = file_path.suffix.lower()
 
-        if actual_filename != expected_filename:
+        if actual_extension not in expected_extensions:
+            issues.append(
+                f"Unsupported file extension '{actual_extension}'. "
+                f"Expected one of: {', '.join(sorted(expected_extensions))}"
+            )
+
+        expected_stem = tool_id
+        actual_stem = file_path.stem
+
+        if actual_stem != expected_stem:
+            issues.append(
+                f"Filename mismatch: expected '{expected_stem}{actual_extension}', "
+                f"got '{file_path.name}'"
+            )
+
+        if issues:
             return {
                 "valid": False,
-                "issues": [
-                    f"Filename mismatch: expected '{expected_filename}', got '{actual_filename}'"
-                ],
+                "issues": issues,
                 "error_details": {
-                    "expected": expected_filename,
-                    "actual": actual_filename,
-                    "script_name": script_name,
+                    "expected": f"{expected_stem}{actual_extension}",
+                    "actual": file_path.name,
+                    "tool_id": tool_id,
                     "path": str(file_path),
                 },
             }
@@ -283,22 +300,39 @@ class ScriptValidator(BaseValidator):
         return {"valid": True, "issues": []}
 
     def validate_metadata(self, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate script metadata."""
+        """Validate tool manifest metadata - definition-time checks only."""
         issues = []
         warnings = []
 
-        # Scripts have minimal required metadata - just name
-        # Could add validation for dependencies, etc. in the future
-        name = parsed_data.get("name")
-        if not name:
-            issues.append("Script name is required")
+        # Required fields for all tools
+        tool_id = parsed_data.get("tool_id") or parsed_data.get("name")
+        if not tool_id:
+            issues.append("Tool ID (tool_id or name) is required")
 
-        # Version is required (enables version-warning when running)
-        script_version = parsed_data.get("version")
-        if not script_version or script_version == "0.0.0":
+        tool_type = parsed_data.get("tool_type")
+        if not tool_type:
+            issues.append("Tool type (tool_type) is required")
+        elif not isinstance(tool_type, str) or not tool_type.strip():
+            issues.append("Tool type (tool_type) must be a non-empty string")
+
+        # Version validation
+        version = parsed_data.get("version")
+        if not version or version == "0.0.0":
             issues.append(
-                'Script is missing required __version__. Add at module level: __version__ = "1.0.0"'
+                'Tool is missing required version. Add at module level: __version__ = "1.0.0"'
             )
+        elif not re.match(r"^\d+\.\d+\.\d+", str(version)):
+            issues.append(f"Invalid version format '{version}'. Must be semver (e.g., 1.0.0)")
+
+        # executor_id required for non-primitives
+        # Only primitives can have NULL executor_id (they are the bottom of the chain)
+        if tool_type and tool_type != "primitive":
+            executor_id = parsed_data.get("executor_id") or parsed_data.get("executor")
+            if not executor_id:
+                issues.append(
+                    f"Tool type '{tool_type}' requires executor_id field. "
+                    "Non-primitive tools must reference another tool in the executor chain."
+                )
 
         return {
             "valid": len(issues) == 0,
@@ -403,7 +437,7 @@ def compare_versions(version1: str, version2: str) -> int:
 class ValidationResult:
     """Result from a validation operation."""
 
-    def __init__(self, valid: bool, error: str = None):
+    def __init__(self, valid: bool, error: Optional[str] = None):
         self.valid = valid
         self.error = error
 
@@ -463,17 +497,30 @@ class APIValidator:
 
 
 class ValidationManager:
-    """Unified validation interface."""
+    """Unified validation interface.
+
+    Two-Layer Validation Architecture:
+    - Layer 1 (Definition-time): Validators in this class check manifest structure
+    - Layer 2 (Runtime): PrimitiveExecutor validates params against config_schema
+
+    This separation keeps definition validation simple and synchronous while
+    allowing runtime validation to be data-driven per tool.
+    """
 
     VALIDATORS = {
         "directive": DirectiveValidator(),
-        "script": ScriptValidator(),
+        "tool": ToolValidator(),  # Simple, no DB dependency - Layer 1 validation
         "knowledge": KnowledgeValidator(),
     }
 
     @classmethod
     def get_validator(cls, item_type: str) -> BaseValidator:
         """Get validator for item type."""
+        # Map tool subtypes to tool validator
+        tool_types = {"primitive", "runtime", "mcp_server", "mcp_tool", "api"}
+        if item_type in tool_types:
+            item_type = "tool"
+
         validator = cls.VALIDATORS.get(item_type)
         if not validator:
             raise ValueError(
@@ -493,3 +540,91 @@ class ValidationManager:
         """
         validator = cls.get_validator(item_type)
         return validator.validate(file_path, parsed_data)
+
+    @classmethod
+    async def validate_and_embed(
+        cls,
+        item_type: str,
+        file_path: Path,
+        parsed_data: Dict[str, Any],
+        vector_store: Optional[Any] = None,
+        item_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Validate and optionally embed content to vector store.
+        
+        This is the validation gate - only valid content gets embedded.
+        
+        Args:
+            item_type: Type of item (directive, tool, knowledge)
+            file_path: Path to the item file
+            parsed_data: Parsed item data
+            vector_store: Optional vector store for embedding
+            item_id: Optional item ID for embedding
+            
+        Returns:
+            Validation result with optional embedding status
+        """
+        # First validate
+        result = cls.validate(item_type, file_path, parsed_data)
+        
+        # If valid and vector store provided, embed
+        if result["valid"] and vector_store and item_id:
+            try:
+                content = cls._extract_searchable(item_type, file_path, parsed_data)
+                metadata = {
+                    "name": parsed_data.get("name") or parsed_data.get("title", ""),
+                    "description": parsed_data.get("description", "")[:200],
+                }
+                
+                success = await vector_store.embed_and_store(
+                    item_id=item_id,
+                    item_type=item_type,
+                    content=content,
+                    metadata=metadata
+                )
+                result["embedded"] = success
+            except Exception as e:
+                result["embedding_error"] = str(e)
+        
+        return result
+
+    @classmethod
+    def _extract_searchable(cls, item_type: str, file_path: Path, parsed_data: Dict) -> str:
+        """Extract searchable content based on item type.
+        
+        Args:
+            item_type: Type of item
+            file_path: Path to file
+            parsed_data: Parsed item data
+            
+        Returns:
+            Searchable text content
+        """
+        if item_type == "directive":
+            parts = [
+                f"Directive: {parsed_data.get('name', '')}",
+                f"Description: {parsed_data.get('description', '')}",
+            ]
+            for step in parsed_data.get('steps', []):
+                parts.append(f"Step: {step.get('description', '')}")
+            return "\n".join(parts)
+        
+        elif item_type == "tool":
+            parts = [f"Tool: {parsed_data.get('name', '')}"]
+            # Extract docstrings from Python code
+            try:
+                import ast
+                tree = ast.parse(file_path.read_text())
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                        docstring = ast.get_docstring(node)
+                        if docstring:
+                            parts.append(docstring)
+            except:
+                pass
+            return "\n".join(parts)
+        
+        elif item_type == "knowledge":
+            return f"{parsed_data.get('title', '')}\n{file_path.read_text()}"
+        
+        return file_path.read_text()

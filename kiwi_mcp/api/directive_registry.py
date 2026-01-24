@@ -47,7 +47,7 @@ class DirectiveRegistry(BaseRegistry):
         try:
             # Build query with DB-side filtering using ilike
             query_builder = self.client.table("directives").select(
-                "id, name, category, subcategory, description, is_official, "
+                "id, name, category, description, is_official, "
                 "download_count, quality_score, tech_stack, created_at, updated_at"
             )
             
@@ -70,7 +70,6 @@ class DirectiveRegistry(BaseRegistry):
                     "id": row.get("id"),
                     "name": row.get("name"),
                     "category": row.get("category"),
-                    "subcategory": row.get("subcategory"),
                     "description": row.get("description"),
                     "is_official": row.get("is_official", False),
                     "download_count": row.get("download_count", 0),
@@ -133,7 +132,7 @@ class DirectiveRegistry(BaseRegistry):
         try:
             # Get directive metadata
             result = self.client.table("directives").select(
-                "id, name, category, subcategory, description, is_official, "
+                "id, name, category, description, is_official, "
                 "download_count, quality_score, tech_stack, created_at, updated_at"
             ).eq("name", name).single().execute()
             
@@ -197,7 +196,7 @@ class DirectiveRegistry(BaseRegistry):
         
         try:
             query = self.client.table("directives").select(
-                "id, name, category, subcategory, description, is_official, "
+                "id, name, category, description, is_official, "
                 "download_count, quality_score, tech_stack, created_at, updated_at"
             )
             
@@ -216,7 +215,6 @@ class DirectiveRegistry(BaseRegistry):
         version: str,
         content: str,
         category: str,
-        subcategory: Optional[str] = None,
         description: Optional[str] = None,
         changelog: Optional[str] = None,
         tech_stack: Optional[List[str]] = None,
@@ -231,8 +229,7 @@ class DirectiveRegistry(BaseRegistry):
             name: Directive name
             version: Semver version
             content: Markdown content
-            category: Category path
-            subcategory: Optional subcategory
+            category: Category path (slash-separated, e.g., "core/api/endpoints")
             description: Optional description
             changelog: Optional changelog
             tech_stack: Optional tech stack
@@ -261,8 +258,6 @@ class DirectiveRegistry(BaseRegistry):
                     update_data["description"] = description
                 if category:
                     update_data["category"] = category
-                if subcategory:
-                    update_data["subcategory"] = subcategory
                 if tech_stack:
                     update_data["tech_stack"] = tech_stack
                 
@@ -273,7 +268,6 @@ class DirectiveRegistry(BaseRegistry):
                 directive_data = {
                     "name": name,
                     "category": category,
-                    "subcategory": subcategory,
                     "description": description or "",
                     "tech_stack": tech_stack or [],
                 }
@@ -300,6 +294,14 @@ class DirectiveRegistry(BaseRegistry):
             }
             
             version_result = self.client.table("directive_versions").insert(version_data).execute()
+            
+            # Create embedding for registry vector search
+            await self._create_embedding(
+                item_id=name,
+                item_type="directive",
+                content=f"{name} {description or ''} {content[:1000]}",
+                metadata={"category": category, "version": version}
+            )
             
             return {
                 "directive_id": directive_id,
@@ -362,6 +364,9 @@ class DirectiveRegistry(BaseRegistry):
                 ).execute()
                 
                 self.client.table("directives").delete().eq("id", directive_id).execute()
+                
+                # Delete embedding
+                await self._delete_embedding(name)
                 
                 return {
                     "deleted": True,
