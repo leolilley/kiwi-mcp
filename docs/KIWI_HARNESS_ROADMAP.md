@@ -143,7 +143,7 @@ kiwi_mcp/handlers/
 ├── registry.py          # Add "tool" type, alias "script"
 └── tool/                # Renamed from script/
     ├── __init__.py
-    ├── handler.py       # Renamed ScriptHandler → ToolHandler
+    ├── handler.py       # ToolHandler
     ├── manifest.py      # NEW: ToolManifest dataclass
     └── executors/       # NEW: Executor framework
         ├── __init__.py  # ExecutorRegistry
@@ -154,7 +154,6 @@ kiwi_mcp/handlers/
 ### Success Criteria
 
 - [ ] All existing tests pass
-- [ ] `execute(item_type="script", ...)` still works
 - [ ] `execute(item_type="tool", ...)` works identically
 - [ ] New tool with `tool.yaml` manifest can be created and run
 
@@ -239,9 +238,9 @@ kiwi_mcp/utils/validators.py  # Add BashValidator, APIValidator
 Permissions declared in directives are **hard-enforced** at the proxy layer, not just "suggested" to the LLM:
 
 ```
-Agent Request → KiwiProxy → Permission Check → IF allowed → Execute
-                                             │
-                                             └─ IF denied → Error + Optional Annealing
+Agent Request → ToolProxy → Permission Check → IF allowed → Execute
+                                            │
+                                            └─ IF denied → Error + Optional Annealing
 ```
 
 This prevents:
@@ -252,10 +251,10 @@ This prevents:
 
 ### Deliverables
 
-1. **KiwiProxy class** with permission enforcement
+1. **ToolProxy class** with permission enforcement
 
    ```python
-   class KiwiProxy:
+   class ToolProxy:
        def __init__(self, permission_context: PermissionContext):
            self.permissions = permission_context  # From directive <permissions>
            self.audit = AuditLogger()
@@ -415,7 +414,7 @@ def spawn_subagent(self, child_directive: str, inputs: dict):
 kiwi_mcp/
 ├── runtime/             # NEW directory
 │   ├── __init__.py
-│   ├── proxy.py         # KiwiProxy with permission enforcement
+│   ├── proxy.py         # ToolProxy with permission enforcement
 │   ├── permissions.py   # PermissionContext, PermissionChecker
 │   ├── audit.py         # AuditLogger
 │   └── loop_detector.py # LoopDetector for stuck detection
@@ -435,6 +434,7 @@ kiwi_mcp/
 - [ ] Subagents cannot exceed parent permissions
 - [ ] `help(action="stuck")` signals for intervention
 - [ ] Loop detection suggests help signal when stuck
+- [ ] Tool calls routed through ToolProxy with permission enforcement
 
 ### Effort: 8 days (increased from 6 due to help redesign)
 
@@ -680,62 +680,389 @@ kiwi_mcp/handlers/
 
 ---
 
-## Phase 7: Directive Executor Runtime (Weeks 15-17)
+## Phase 7: LLM Runtime & Directive Execution (Weeks 15-17)
 
-**Goal:** Spawn purpose-built executors for directives instead of returning content.
+**Goal:** Implement `llm_runtime` tool and enable directives to execute via LLM threads instead of returning content.
+
+**Related:** [UNIFIED_TOOLS_ARCHITECTURE.md](./UNIFIED_TOOLS_ARCHITECTURE.md), [DIRECTIVE_RUNTIME_ARCHITECTURE.md](./DIRECTIVE_RUNTIME_ARCHITECTURE.md)
+
+### Architecture Overview
+
+In the unified tools architecture, `llm_runtime` is a **tool** (not a separate class) that:
+
+- Has `tool_type: runtime`
+- Uses `executor: http_client` (inherits from http_client primitive)
+- Makes HTTP requests to LLM APIs (Anthropic, OpenAI, etc.)
+- Is stored in the unified `tools` table
+
+Directives execute by:
+
+1. Directive has `executor: llm_runtime` in manifest
+2. Tool chain resolves: `directive → llm_runtime → http_client`
+3. `llm_runtime` handler makes HTTP requests to LLM API
+4. LLM executes directive with scoped tools via ToolProxy
 
 ### Deliverables
 
-1. **DirectiveExecutor**
+1. **`llm_runtime` Tool Manifest**
 
-   ```python
-   class DirectiveExecutor:
-       async def execute(self) -> dict:
-           # LLM loop
-           # Tool calls via proxy
-           # Return result
+   ```yaml
+   tool_id: llm_runtime
+   tool_type: runtime
+   executor: http_client
+   version: "1.0.0"
+   description: "Runtime for spawning LLM threads"
+   config:
+     providers:
+       anthropic:
+         url: https://api.anthropic.com/v1/messages
+         auth: "Bearer ${ANTHROPIC_API_KEY}"
+       openai:
+         url: https://api.openai.com/v1/chat/completions
+         auth: "Bearer ${OPENAI_API_KEY}"
+     model_tiers:
+       fast: { provider: anthropic, model: claude-3-haiku-20240307 }
+       balanced: { provider: anthropic, model: claude-sonnet-4-20250514 }
+       powerful: { provider: anthropic, model: claude-sonnet-4-20250514 }
+     defaults:
+       max_tokens: 4096
+       temperature: 0
    ```
 
-2. **ExecutorBuilder**
+2. **http_client Primitive Enhancement** (for LLM API requests)
 
-   - Parse directive
-   - Build tool manifest from `<tools>`
-   - Create system prompt
-   - Configure model from `<model tier>`
+   The existing `PrimitiveExecutor` already resolves chains and routes to primitives. When `llm_runtime` tool is executed:
 
-3. **Modified `_run_directive`**
+   - Chain resolves: `llm_runtime → http_client`
+   - Configs are merged (from chain)
+   - `http_client.execute()` receives merged config with LLM provider settings
 
-   - Add `spawn_executor` mode (default for automation)
-   - Keep legacy mode for interactive use
+   **Enhancement needed in `http_client`:**
 
-4. **Session management**
+   ```python
+   class HttpClientPrimitive:
+       """Primitive for making HTTP requests - enhanced for LLM APIs."""
 
-   - `.ai/sessions/{id}.json`
-   - Status tracking
-   - Cleanup policy
+       async def execute(self, config: dict, params: dict) -> HttpResult:
+           # Existing: Standard HTTP requests work as-is
+           # NEW: Detect LLM request (check if config has providers/model_tiers)
+           # NEW: If LLM request:
+           #   - Extract provider from params or config
+           #   - Build LLM-specific request body from params:
+           #     - params["messages"] → request body
+           #     - params["tools"] → request body
+           #     - params["model"] → request body
+           #   - Use provider URL/auth from config
+           #   - Parse LLM response format
+           # Return HttpResult with parsed LLM response
 
-5. **Cost tracking**
+       async def stream(self, config: dict, params: dict) -> AsyncIterator[dict]:
+           # NEW: Streaming support for SSE responses
+           # Similar to execute() but uses httpx.stream()
+           # Parse SSE chunks as they arrive
+           # Yield events: {"type": "token", "content": "..."}
+           # Yield events: {"type": "tool_call", ...}
+           # Yield events: {"type": "complete", ...}
+   ```
+
+   **How it works:**
+
+   - `llm_runtime` tool config contains: `providers`, `model_tiers`, `defaults`
+   - When executed, params include: `messages`, `tools`, `model`, `stream` (optional)
+   - `http_client` detects LLM request by checking for `providers` in merged config
+   - Builds request using provider-specific format (Anthropic vs OpenAI)
+   - Returns parsed response (or streams if `stream=True`)
+
+3. **Streaming Response Handling**
+
+   **Problem:** LLM APIs (Anthropic, OpenAI) return streaming responses (Server-Sent Events). We need to:
+
+   - Handle SSE streams from HTTP responses
+   - Route streamed tokens to appropriate destinations
+   - Support both streaming and non-streaming modes
+
+   **Solution:** Two execution modes:
+
+   **Mode 1: Non-streaming (default)**
+
+   - Collect all tokens until complete
+   - Write to thread file as they arrive (for audit)
+   - Return final result when done
+   - Used for: Automated directive execution, background tasks
+
+   **Mode 2: Streaming (optional)**
+
+   - Yield tokens/events as they arrive via async iterator
+   - Real-time updates to caller
+   - Used for: Interactive execution, UI updates, progress monitoring
+
+   **Execution Flow:**
+
+   ```
+   Directive execution starts
+      ↓
+   Tool chain resolves: directive → llm_runtime → http_client
+      ↓
+   http_client.execute() or http_client.stream()
+      - Reads llm_runtime tool config (provider, model, etc.)
+      - Builds LLM-specific HTTP request
+      - Makes request to LLM API
+      - Handles streaming (SSE) if requested
+      ↓
+   LLM responds (with tool calls if needed)
+      ↓
+   Response parsed and returned
+      ↓
+   Directive orchestrator handles tool calls:
+      - Extracts tool calls from LLM response
+      - Routes through ToolProxy (permission enforcement)
+      - Executes tools
+      - Sends results back to LLM (next iteration)
+   ```
+
+   **Streaming Flow:**
+
+   ```
+   LLM API (SSE stream)
+      ↓
+   http_client.stream() [NEW: streaming method in primitive]
+      ↓
+   Yields events as they arrive:
+     - {"type": "token", "content": "Hello"}
+     - {"type": "token", "content": " world"}
+     - {"type": "tool_call", "tool": "filesystem.read", ...}
+     - {"type": "complete", "result": {...}}
+      ↓
+   Multiple destinations (all happen in parallel):
+     a) Thread file (.ai/threads/{id}.json) - ALWAYS written for audit
+     b) MCP progress notifications - if called via MCP protocol
+     c) Returned async iterator - if caller requests streaming mode
+   ```
+
+   **Where Streamed Data Goes:**
+
+   1. **Thread File (Always)**
+
+      - Every token/event written to `.ai/threads/{thread_id}.json`
+      - Format: JSONL (one event per line) for append efficiency
+      - Used for: Audit trail, replay, debugging, cost tracking
+
+   2. **MCP Progress (If called via MCP)**
+
+      - If directive executed via MCP `execute` tool
+      - Stream events sent as MCP progress notifications
+      - Format: MCP `progress` notifications to caller
+      - Used for: Real-time UI updates, progress bars
+
+   3. **Async Iterator (If streaming mode requested)**
+      - Caller can request streaming: `execute(..., stream=True)`
+      - Returns `AsyncIterator[dict]` instead of final result
+      - Caller can process events in real-time
+      - Used for: Interactive execution, custom processing
+
+   **Example Usage:**
+
+   ```python
+   # Non-streaming (default)
+   result = await execute(item_type="directive", action="run", item_id="deploy")
+   # Returns: {"status": "success", "result": "...", "thread_id": "..."}
+   # Thread file written in background
+
+   # Streaming mode
+   async for event in execute(item_type="directive", action="run", item_id="deploy", stream=True):
+       if event["type"] == "token":
+           print(event["content"], end="", flush=True)  # Real-time output
+       elif event["type"] == "tool_call":
+           print(f"\n[Calling {event['tool']}...]")
+       elif event["type"] == "complete":
+           print(f"\n[Complete: {event['result']}]")
+   ```
+
+   **http_client Enhancement:**
+
+   ```python
+   class HttpClientPrimitive:
+       async def execute(self, ...) -> HttpResult:
+           # Existing: non-streaming
+
+       async def stream(self, config: dict, params: dict) -> AsyncIterator[dict]:
+           # NEW: Streaming support
+           # Make request with stream=True
+           # Yield chunks as they arrive
+           # Handle SSE format
+           async with client.stream(method, url, ...) as response:
+               async for chunk in response.aiter_bytes():
+                   yield {"type": "chunk", "data": chunk}
+   ```
+
+4. **Directive Execution Orchestrator**
+
+   Since `llm_runtime` is just a tool, we need an orchestrator in `DirectiveHandler` that:
+
+   - Builds the LLM conversation from directive content
+   - Calls `llm_runtime` tool via existing `PrimitiveExecutor` (tool chain resolution)
+   - Handles the LLM loop: API call → tool calls → ToolProxy → results → repeat
+   - Manages thread state and streaming
+
+   **Integration with existing code:**
+
+   - Uses existing `PrimitiveExecutor` to execute `llm_runtime` tool
+   - Uses existing `ToolProxy` for permission enforcement
+   - Adds orchestrator logic in `DirectiveHandler._run_directive()`
+
+   ```python
+   # In DirectiveHandler
+   async def _run_directive(self, directive_name: str, inputs: dict) -> dict:
+       # 1. Load directive
+       directive_data = await self.load(directive_name)
+
+       # 2. Build LLM conversation
+       system_prompt = self._build_system_prompt(directive_data)
+       tool_schemas = self._build_tool_schemas(directive_data)
+       permission_context = self._build_permission_context(directive_data)
+
+       # 3. Create ToolProxy with permissions
+       tool_proxy = ToolProxy(permission_context, ...)
+
+       # 4. LLM loop (orchestrator logic)
+       messages = [{"role": "user", "content": "Execute the directive."}]
+       while not complete:
+           # Call llm_runtime tool via PrimitiveExecutor
+           result = await self.primitive_executor.execute(
+               "llm_runtime",
+               params={
+                   "messages": messages,
+                   "tools": tool_schemas,
+                   "model": self._select_model(directive_data),
+                   "system": system_prompt
+               }
+           )
+
+           # Parse LLM response
+           llm_response = result.data
+
+           # If tool calls: route through ToolProxy
+           if tool_calls in llm_response:
+               tool_results = await self._execute_tool_calls(tool_calls, tool_proxy)
+               messages.append({"role": "assistant", "content": llm_response})
+               messages.append({"role": "user", "content": tool_results})
+           else:
+               # Complete
+               return {"status": "success", "result": llm_response}
+   ```
+
+5. **ToolProxy Integration**
+
+   - All tool calls from LLM go through ToolProxy
+   - Enforces permissions from directive
+   - Routes to actual tools (scripts, MCP tools, filesystem, etc.)
+   - Logs all operations for audit
+
+6. **Thread Management**
+
+   - `.ai/threads/{id}.json`
+   - Track directive execution state
+   - Store conversation history
+   - Cleanup policy (24h retention)
+
+7. **Cost Tracking**
    - Token counting per execution
-   - Budget limits
+   - Budget limits per directive
+   - Cost estimation based on model pricing
 
 ### Files Changed/Created
 
 ```
-kiwi_mcp/runtime/
-├── executor.py      # DirectiveExecutor
-├── builder.py       # ExecutorBuilder
-├── session.py       # SessionManager
-└── cost.py          # CostTracker
+kiwi_mcp/primitives/
+└── http_client.py     # MODIFIED:
+                        # - Detect LLM requests (check for providers in config)
+                        # - Build LLM-specific request bodies from params
+                        # - Parse LLM responses (tool calls, tokens)
+                        # - Add stream() method for SSE streaming
 
-kiwi_mcp/handlers/directive/handler.py  # Modified _run_directive
+kiwi_mcp/runtime/
+├── proxy.py          # ToolProxy (already exists - permission enforcement)
+├── thread.py         # NEW: ThreadManager (state tracking, streaming updates)
+└── cost.py           # NEW: CostTracker (token counting, budgets)
+
+kiwi_mcp/handlers/directive/handler.py  # MODIFIED:
+                                        # - Add orchestrator logic in _run_directive()
+                                        # - Build LLM conversation from directive
+                                        # - Manage LLM loop with tool calls
+                                        # - Integrate with existing PrimitiveExecutor
+
+.ai/tools/runtime/
+└── llm_runtime.yaml   # NEW: Tool manifest for llm_runtime (stored in registry)
+```
+
+### Execution Flow
+
+```
+1. Agent: execute(item_type="directive", action="run", item_id="deploy_feature")
+   │
+   ▼
+2. DirectiveHandler resolves directive
+   │
+   ▼
+3. DirectiveOrchestrator created:
+   - Extracts directive content, inputs, tools, permissions
+   - Builds system prompt from directive
+   - Builds tool schemas from <tools>
+   - Creates ToolProxy with permission context
+   │
+   ▼
+4. LLM Loop (orchestrated by DirectiveOrchestrator):
+   │
+   ├─► 4a. Build LLM request:
+   │      - System prompt (directive content)
+   │      - Messages (conversation history)
+   │      - Tool schemas
+   │
+   ├─► 4b. Call llm_runtime tool (via existing PrimitiveExecutor):
+   │      - PrimitiveExecutor.resolve("llm_runtime") → chain: [llm_runtime, http_client]
+   │      - PrimitiveExecutor merges configs from chain
+   │      - PrimitiveExecutor.execute() routes to http_client primitive
+   │      - http_client.execute() receives merged config + params
+   │      - http_client detects LLM request (providers in config)
+   │      - http_client builds LLM-specific HTTP request from params
+   │      - http_client makes request to LLM API
+   │      - http_client parses response (tokens, tool calls)
+   │      - Returns HttpResult with parsed LLM response
+   │
+   ├─► 4c. LLM responds (with tool calls if needed)
+   │
+   ├─► 4d. If tool calls present:
+   │      - Extract tool calls from LLM response
+   │      - Route each through ToolProxy (permission check)
+   │      - Execute tools via ToolProxy
+   │      - Collect tool results
+   │      - Add tool results to conversation
+   │      - Loop back to 4a
+   │
+   └─► 4e. If no tool calls (final response):
+          - Directive complete
+          - Return final result
+   │
+   ▼
+5. Return final result to caller
 ```
 
 ### Success Criteria
 
-- [ ] Directive spawns executor with only declared tools
-- [ ] Executor completes directive and returns result
-- [ ] Token usage tracked
-- [ ] Session persisted and retrievable
+- [ ] `llm_runtime` tool manifest created and registered in registry
+- [ ] **http_client primitive:** Handles LLM request formats (Anthropic/OpenAI)
+- [ ] **http_client primitive:** Builds requests from `llm_runtime` tool config
+- [ ] **http_client primitive:** `stream()` method handles SSE responses
+- [ ] **http_client primitive:** Parses LLM responses (tokens, tool calls)
+- [ ] **DirectiveOrchestrator:** Manages LLM conversation loop
+- [ ] **DirectiveOrchestrator:** Routes tool calls through ToolProxy
+- [ ] **Streaming support:** Thread file updated in real-time as tokens arrive
+- [ ] Directive execution spawns LLM thread with scoped tools
+- [ ] Tool calls routed through ToolProxy with permission enforcement
+- [ ] Token usage tracked per execution
+- [ ] Thread persisted and retrievable
+- [ ] Directives can execute end-to-end via tool chain (directive → llm_runtime → http_client)
+- [ ] Both streaming and non-streaming modes work correctly
 
 ### Effort: 8 days
 

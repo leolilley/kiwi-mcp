@@ -24,13 +24,13 @@ Complete API documentation for all 4 tools and 3 item types.
 ```json
 {
   "name": "search",
-  "description": "Search for directives, scripts, or knowledge entries",
+  "description": "Search for directives, tools, or knowledge entries",
   "inputSchema": {
     "type": "object",
     "properties": {
       "item_type": {
         "type": "string",
-        "enum": ["directive", "script", "knowledge"],
+        "enum": ["directive", "tool", "knowledge"],
         "description": "Type of item to search for"
       },
       "query": {
@@ -58,7 +58,7 @@ Complete API documentation for all 4 tools and 3 item types.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `item_type` | string | ✓ | - | `directive`, `script`, or `knowledge` |
+| `item_type` | string | ✓ | - | `directive`, `tool`, or `knowledge` |
 | `query` | string | ✓ | - | Natural language search query |
 | `source` | string | | `local` | `local`, `registry`, or `all` |
 | `limit` | integer | | `10` | Max results (1-100) |
@@ -87,7 +87,7 @@ Complete API documentation for all 4 tools and 3 item types.
 ```json
 {
   "error": "Error description",
-  "supported_types": ["directive", "script", "knowledge"]
+  "supported_types": ["directive", "tool", "knowledge"]
 }
 ```
 
@@ -133,13 +133,13 @@ curl -X POST http://localhost:3000/tools/search \
 }
 ```
 
-#### Search Scripts Locally
+#### Search Tools Locally
 
 ```bash
 curl -X POST http://localhost:3000/tools/search \
   -H "Content-Type: application/json" \
   -d '{
-    "item_type": "script",
+    "item_type": "tool",
     "query": "scrape web data",
     "source": "local"
   }'
@@ -175,7 +175,7 @@ curl -X POST http://localhost:3000/tools/search \
     "properties": {
       "item_type": {
         "type": "string",
-        "enum": ["directive", "script", "knowledge"],
+        "enum": ["directive", "tool", "knowledge"],
         "description": "Type of item"
       },
       "item_id": {
@@ -206,7 +206,7 @@ curl -X POST http://localhost:3000/tools/search \
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `item_type` | string | ✓ | - | `directive`, `script`, or `knowledge` |
+| `item_type` | string | ✓ | - | `directive`, `tool`, or `knowledge` |
 | `item_id` | string | ✓ | - | Item identifier |
 | `destination` | string | | `project` | `project` or `user` |
 | `project_path` | string | ✓* | - | Required if `destination=project` |
@@ -262,13 +262,13 @@ curl -X POST http://localhost:3000/tools/load \
 }
 ```
 
-#### Load Script to User Space
+#### Load Tool to User Space
 
 ```bash
 curl -X POST http://localhost:3000/tools/load \
   -H "Content-Type: application/json" \
   -d '{
-    "item_type": "script",
+    "item_type": "tool",
     "item_id": "google_maps_scraper",
     "destination": "user"
   }'
@@ -304,7 +304,7 @@ curl -X POST http://localhost:3000/tools/load \
     "properties": {
       "item_type": {
         "type": "string",
-        "enum": ["directive", "script", "knowledge"],
+        "enum": ["directive", "tool", "knowledge"],
         "description": "Type of item"
       },
       "action": {
@@ -341,7 +341,7 @@ curl -X POST http://localhost:3000/tools/load \
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `item_type` | string | ✓ | `directive`, `script`, or `knowledge` |
+| `item_type` | string | ✓ | `directive`, `tool`, or `knowledge` |
 | `action` | string | ✓ | Operation: `run`, `publish`, `delete`, `create`, `update`, `link` |
 | `item_id` | string | ✓ | Item identifier |
 | `parameters` | object | | Action-specific params |
@@ -360,7 +360,7 @@ curl -X POST http://localhost:3000/tools/load \
 | `create` | Create new | `content`, `category`, `version` |
 | `update` | Modify | `content`, `version`, `category` |
 
-#### script
+#### tool
 
 | Action | Description | Parameters |
 |--------|-------------|-----------|
@@ -531,7 +531,7 @@ curl -X POST http://localhost:3000/tools/execute \
     "properties": {
       "topic": {
         "type": "string",
-        "description": "Help topic (search, load, execute, directive, script, knowledge)"
+        "description": "Help topic (search, load, execute, directive, tool, knowledge)"
       }
     },
     "required": []
@@ -625,28 +625,28 @@ Steps and instructions...
 
 ---
 
-### script
+### tool
 
 **Storage:**
-- Project: `.ai/scripts/{category}/{name}.py`
-- User: `~/.script-kiwi/scripts/{category}/{name}.py`
+- Project: `.ai/tools/{category}/{tool_id}/`
+- User: `~/.ai/tools/{category}/{tool_id}/`
 
-**Format:** Python with inline metadata
+**Format:** YAML manifest + source files
+```yaml
+# manifest.yaml
+tool_id: my_tool
+tool_type: script
+executor_id: python_runtime
+version: 1.0.0
+category: scraping
+description: What this tool does
+manifest:
+  entrypoint: main.py
+  language: python
+```
+
 ```python
-"""
-Script: script_name
-Version: 1.0.0
-Category: scraping
-Description: What this script does
-
-Parameters:
-  - param1 (str): Description
-  - param2 (int): Description
-
-Returns:
-  Dict with results
-"""
-
+# main.py
 def main(**kwargs):
     # Implementation
     pass
@@ -656,14 +656,16 @@ if __name__ == "__main__":
 ```
 
 **Operations:**
-- `search` - Find scripts
+- `search` - Find tools
 - `load` - Download from registry
-- `run` - Execute with parameters
+- `run` - Execute with parameters (via chain resolution)
 - `publish` - Publish to registry
 - `delete` - Remove locally or from registry
 
 **Metadata:**
-- `name` - Script identifier (required)
+- `tool_id` - Tool identifier (required)
+- `tool_type` - Type of tool (script, mcp_server, runtime, etc.)
+- `executor_id` - References another tool that executes this one
 - `version` - Semantic version (required)
 - `category` - Organization category (optional)
 - `description` - What it does (optional)

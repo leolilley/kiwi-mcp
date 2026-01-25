@@ -9,11 +9,11 @@ A unified MCP (Model Context Protocol) server consolidating **directives**, **sc
 
 ## Overview
 
-Kiwi MCP reduces 17 tools from three separate MCPs into 4 unified tools with consistent interfaces:
+Kiwi MCP provides 4 unified tools with consistent interfaces for managing directives, tools, and knowledge:
 
 | Tool        | Purpose                                                            |
 | ----------- | ------------------------------------------------------------------ |
-| **search**  | Find directives, scripts, or knowledge entries (local or registry) |
+| **search**  | Find directives, tools, or knowledge entries (local or registry) |
 | **load**    | Download items from registry to local storage                      |
 | **execute** | Run operations: publish, delete, create, update, run               |
 | **help**    | Get usage guidance and troubleshooting                             |
@@ -21,7 +21,7 @@ Kiwi MCP reduces 17 tools from three separate MCPs into 4 unified tools with con
 **Supported Types:**
 
 - `directive` - Workflow guides and configurations
-- `script` - Python execution scripts
+- `tool` - Executable scripts and programs (Python, Bash, etc.)
 - `knowledge` - Zettelkasten knowledge entries
 
 ---
@@ -96,7 +96,7 @@ python -m kiwi_mcp.server
 }
 ```
 
-#### Load a Script
+#### Load a Tool
 
 ```json
 {
@@ -118,7 +118,7 @@ python -m kiwi_mcp.server
   "name": "google_maps_scraper",
   "version": "2.1.0",
   "destination": "project",
-  "path": "/home/user/myproject/.ai/scripts/scraping/google_maps_scraper.py"
+  "path": "/home/user/myproject/.ai/tools/scraping/google_maps_scraper"
 }
 ```
 
@@ -199,7 +199,7 @@ search(
     project_path="/home/user/myproject"
 )
 
-# Search local scripts
+# Search local tools
 search(
     item_type="tool",
     query="scrape Google Maps",
@@ -273,10 +273,10 @@ All item types support the same 6 actions for consistency:
 
 **Type-Specific Behavior:**
 
-| Action    | Directive                         | Script                         | Knowledge             |
+| Action    | Directive                         | Tool                           | Knowledge             |
 | --------- | --------------------------------- | ------------------------------ | --------------------- |
 | `run`     | Returns parsed XML content        | Executes in venv with params   | Returns entry content |
-| `publish` | Creates version with content_hash | Uploads .py file with metadata | Publishes with tags   |
+| `publish` | Creates version with content_hash | Uploads files with metadata    | Publishes with tags   |
 
 **Examples:**
 
@@ -290,7 +290,7 @@ execute(
     project_path="/home/user/myproject"
 )
 
-# Publish script to registry
+# Publish tool to registry
 execute(
     item_type="tool",
     action="publish",
@@ -368,18 +368,18 @@ Environment variables can be loaded from hierarchical `.env` files:
 .ai/.env
 ```
 
-Scripts automatically load both files in order (userspace → project → runtime).
+Tools automatically load both files in order (userspace → project → runtime).
 
 ---
 
-## Script Execution Features
+## Tool Execution Features
 
 ### Virtual Environment Isolation
 
-Scripts run in isolated virtual environments:
+Tools run in isolated virtual environments:
 
-- **Script from userspace** (`~/.ai/scripts/`): always uses `~/.ai/.venv/`
-- **Script from project** (`.ai/scripts/`): uses `.ai/scripts/.venv/` if it exists; otherwise falls back to `~/.ai/.venv/`
+- **Tool from userspace** (`~/.ai/tools/`): always uses `~/.ai/.venv/`
+- **Tool from project** (`.ai/tools/`): uses `.ai/tools/.venv/` if it exists; otherwise falls back to `~/.ai/.venv/`
 
 The userspace venv is created on first use if missing. The project venv is not auto-created; if absent, execution uses the userspace venv.
 
@@ -387,12 +387,12 @@ The userspace venv is created on first use if missing. The project venv is not a
 
 Dependencies are automatically detected and installed:
 
-- From script `import` statements
+- From tool `import` statements
 - From lib module imports
 - Supports version constraints
 
 ```python
-# Script automatically installs: requests, beautifulsoup4
+# Tool automatically installs: requests, beautifulsoup4
 import requests
 from bs4 import BeautifulSoup
 from lib.http_session import get_session  # Also installs lib dependencies
@@ -400,7 +400,7 @@ from lib.http_session import get_session  # Also installs lib dependencies
 
 ### Shared Libraries
 
-Scripts can import from shared library modules:
+Tools can import from shared library modules:
 
 ```python
 # Project lib (priority)
@@ -413,16 +413,16 @@ from lib.youtube_utils import extract_video_id
 
 Library locations:
 
-- `.ai/scripts/lib/` (project)
-- `~/.ai/scripts/lib/` (userspace)
+- `.ai/tools/lib/` (project)
+- `~/.ai/tools/lib/` (userspace)
 
 ### Output Management
 
-Large script outputs are automatically saved:
+Large tool outputs are automatically saved:
 
-- **Project**: `.ai/outputs/scripts/{script_name}/`
-- **Userspace**: `~/.ai/outputs/scripts/{script_name}/`
-- Keeps last 10 outputs per script
+- **Project**: `.ai/outputs/tools/{tool_name}/`
+- **Userspace**: `~/.ai/outputs/tools/{tool_name}/`
+- Keeps last 10 outputs per tool
 - Auto-truncates MCP responses >1MB
 
 ---
@@ -463,11 +463,11 @@ kiwi-mcp/
 │   ├── handlers/                # Type-specific handlers
 │   │   ├── registry.py          # TypeHandlerRegistry
 │   │   ├── directive/           # Directive handlers
-│   │   ├── script/              # Script handlers
+│   │   ├── tool/                # Tool handlers
 │   │   └── knowledge/           # Knowledge handlers
 │   ├── api/                     # Registry clients
 │   │   ├── directive_registry.py
-│   │   ├── script_registry.py
+│   │   ├── tool_registry.py
 │   │   └── knowledge_registry.py
 │   └── utils/                   # Shared utilities
 ├── tests/
@@ -554,12 +554,12 @@ pytest-watch tests/
 - Format: Markdown with YAML frontmatter
 - Operations: search, load, run, publish, delete, create, update
 
-**script**
+**tool**
 
-- Location: `.ai/scripts/` (project) or `~/.ai/scripts/` (user)
-- Format: Python (.py)
+- Location: `.ai/tools/` (project) or `~/.ai/tools/` (user)
+- Format: YAML manifest + source files (Python, Bash, etc.)
 - Operations: search, load, run, publish, delete
-- Features: venv isolation, auto-install dependencies, lib imports, .env loading
+- Features: venv isolation, auto-install dependencies, lib imports, .env loading, chain resolution
 
 **knowledge**
 

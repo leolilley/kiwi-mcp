@@ -7,7 +7,7 @@
 
 ## System Overview
 
-Kiwi MCP is a unified server that consolidates three MCPs (Context Kiwi, Script Kiwi, Knowledge Kiwi) into a single interface with 4 tools and a type-aware registry pattern.
+Kiwi MCP is a unified MCP server that provides a single interface with 4 tools and a type-aware registry pattern for managing directives, tools, and knowledge.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -30,14 +30,14 @@ Kiwi MCP is a unified server that consolidates three MCPs (Context Kiwi, Script 
                  └───┬────────────┬───┬────┘
                      │            │   │
             ┌────────▼──┐  ┌──────▼┐ │
-            │ Directive │  │Script │ │  Knowledge
+            │ Directive │  │ Tool  │ │  Knowledge
             │ Handler   │  │Handler│ │  Handler
             └────┬──────┘  └──┬────┘ │
                  │            │      └─────┬─────┐
         ┌────────▼──────────┬─▼──────┐     │     │
         │   Local Storage   │        │     │     │
         │ .ai/directives/   │Registry│     │     │
-        │ .ai/scripts/      │(Supa..)│     │     │
+        │ .ai/tools/         │(Supa..)│     │     │
         │ .ai/knowledge/    │        │     │     │
         └───────────────────┴────────┘     │     │
                                   Local    │     Registry
@@ -125,12 +125,12 @@ Central routing component that dispatches operations to type-specific handlers.
 class TypeHandlerRegistry:
     def __init__(self, project_path=None):
         self.directive_handler = DirectiveHandler(project_path)
-        self.script_handler = ScriptHandler(project_path)
+        self.tool_handler = ToolHandler(project_path)
         self.knowledge_handler = KnowledgeHandler(project_path)
         
         self.handlers = {
             "directive": self.directive_handler,
-            "script": self.script_handler,
+            "tool": self.tool_handler,
             "knowledge": self.knowledge_handler,
         }
     
@@ -143,8 +143,8 @@ class TypeHandlerRegistry:
         # Map item_id to type-specific param name
         if item_type == "directive":
             return await handler.load(directive_name=item_id, **kwargs)
-        elif item_type == "script":
-            return await handler.load(script_name=item_id, **kwargs)
+        elif item_type == "tool":
+            return await handler.load(tool_id=item_id, **kwargs)
         elif item_type == "knowledge":
             return await handler.load(zettel_id=item_id, **kwargs)
     
@@ -158,7 +158,7 @@ class TypeHandlerRegistry:
 - **Routing:** Maps `item_type` to appropriate handler
 - **Parameter Mapping:** Normalizes `item_id` to handler-specific names
   - `directive` → `directive_name`
-  - `script` → `script_name`
+  - `tool` → `tool_id`
   - `knowledge` → `zettel_id`
 - **Error Handling:** Catches exceptions, returns error dicts
 - **Logging:** Info and error logs for debugging
@@ -185,25 +185,25 @@ class DirectiveHandler:
 - User: `~/.ai/directives/`
 - Format: Markdown with YAML frontmatter
 
-#### ScriptHandler (kiwi_mcp/handlers/script/handler.py)
-Handles script operations (search, load, run, publish, delete).
+#### ToolHandler (kiwi_mcp/handlers/tool/handler.py)
+Handles tool operations (search, load, run, publish, delete).
 
 ```python
-class ScriptHandler:
+class ToolHandler:
     async def search(self, query, source="local", **kwargs):
-        # Search local .ai/scripts/ or registry
+        # Search local .ai/tools/ or registry
     
-    async def load(self, script_name, destination, **kwargs):
+    async def load(self, tool_id, destination, **kwargs):
         # Download from registry
     
-    async def execute(self, action, script_name, parameters, **kwargs):
-        # Route to _run_script, _publish, _delete, etc.
+    async def execute(self, action, tool_id, parameters, **kwargs):
+        # Route to _run_tool, _publish, _delete, etc.
 ```
 
 **Storage:**
-- Project: `.ai/scripts/`
-- User: `~/.script-kiwi/scripts/`
-- Format: Python (.py)
+- Project: `.ai/tools/`
+- User: `~/.ai/tools/`
+- Format: YAML manifest + source files
 
 #### KnowledgeHandler (kiwi_mcp/handlers/knowledge/handler.py)
 Handles knowledge operations (search, load, create, update, delete, link, publish).
@@ -249,7 +249,7 @@ class BaseRegistry:
         # Insert/update in registry
 ```
 
-#### DirectiveRegistry, ScriptRegistry, KnowledgeRegistry
+#### DirectiveRegistry, ToolRegistry, KnowledgeRegistry
 Extend `BaseRegistry` with table-specific methods.
 
 ### 6. Utilities (kiwi_mcp/utils/)
@@ -344,11 +344,15 @@ Flow:
 │   │   └── bootstrap.md
 │   └── auth/
 │       └── oauth_setup.md
-├── scripts/
+├── tools/
 │   ├── scraping/
-│   │   └── google_maps_leads.py
+│   │   └── google_maps_leads/
+│   │       ├── manifest.yaml
+│   │       └── main.py
 │   └── enrichment/
-│       └── email_validator.py
+│       └── email_validator/
+│           ├── manifest.yaml
+│           └── main.py
 └── knowledge/
     ├── email-infrastructure/
     │   └── 001-deliverability.md
@@ -357,7 +361,7 @@ Flow:
 
 .ai/                                    # Project space
 ├── directives/                         # Same structure as ~/.ai/
-├── scripts/
+├── tools/
 └── knowledge/
 ```
 
@@ -377,19 +381,29 @@ Flow:
 - updated_at
 ```
 
-**Table: scripts**
+**Table: tools**
 ```sql
 - id (pk)
-- name (unique)
+- tool_id (unique)
+- tool_type (script, mcp_server, runtime, etc.)
+- executor_id (references another tool)
 - version
 - category
 - subcategory
 - description
-- content (python code)
-- dependencies (json)
-- success_rate (float)
+- manifest (json)
 - created_at
 - updated_at
+```
+
+**Table: tool_version_files**
+```sql
+- id (pk)
+- tool_version_id (fk)
+- file_path
+- content
+- content_hash
+- created_at
 ```
 
 **Table: knowledge**
@@ -475,7 +489,7 @@ Route operations through `item_type` to specific handler implementations. Enable
 ### 2. Parameter Normalization
 Tools use `item_id` universally, registry maps to type-specific names:
 - Directive: `directive_name`
-- Script: `script_name`
+- Tool: `tool_id`
 - Knowledge: `zettel_id`
 
 Enables uniform tool interface across different types.
@@ -496,7 +510,7 @@ Support both local development and centralized registry:
 ### 5. Markdown + Metadata
 Store items with content + structured metadata:
 - Directives/Knowledge: Markdown content + YAML frontmatter
-- Scripts: Python code + inline metadata
+- Tools: YAML manifest + source files
 - Enables human-readable storage + structured queries
 
 ---
