@@ -26,13 +26,13 @@ class TestHashUtilities:
 
     @pytest.mark.unit
     @pytest.mark.utils
-    def test_compute_content_hash_returns_12_chars(self):
-        """Should return first 12 hex characters of SHA256 hash."""
+    def test_compute_content_hash_returns_full_hash(self):
+        """Should return full 64-character SHA256 hex hash."""
         content = "test content"
         hash_result = compute_content_hash(content)
 
         assert isinstance(hash_result, str)
-        assert len(hash_result) == 12
+        assert len(hash_result) == 64
         assert all(c in '0123456789abcdef' for c in hash_result)
 
     @pytest.mark.unit
@@ -56,10 +56,10 @@ class TestHashUtilities:
 
     @pytest.mark.unit
     @pytest.mark.utils
-    def test_compute_content_hash_matches_sha256_first_12(self):
-        """Should match first 12 chars of SHA256 hex digest."""
+    def test_compute_content_hash_matches_sha256_full(self):
+        """Should match full SHA256 hex digest."""
         content = "test content"
-        expected = hashlib.sha256(content.encode()).hexdigest()[:12]
+        expected = hashlib.sha256(content.encode()).hexdigest()
         actual = compute_content_hash(content)
 
         assert actual == expected
@@ -138,7 +138,7 @@ class TestDirectiveMetadataStrategy:
     def test_format_signature_creates_html_comment(self, strategy):
         """Should format signature as HTML comment."""
         timestamp = "2024-01-01T12:00:00Z"
-        hash_value = "abc123def456"
+        hash_value = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
         signature = strategy.format_signature(timestamp, hash_value)
 
@@ -153,7 +153,7 @@ class TestDirectiveMetadataStrategy:
     def test_extract_signature_with_valid_signature(self, strategy):
         """Should extract signature from HTML comment."""
         timestamp = "2024-01-01T12:00:00Z"
-        hash_value = "abc123def456"
+        hash_value = "a" * 64
         content = f"<!-- kiwi-mcp:validated:{timestamp}:{hash_value} -->\n# Content"
 
         result = strategy.extract_signature(content)
@@ -186,7 +186,7 @@ class TestDirectiveMetadataStrategy:
     @pytest.mark.metadata
     def test_insert_signature_at_start(self, strategy, sample_directive_markdown):
         """Should insert signature at beginning of content."""
-        signature = "<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456 -->\n"
+        signature = "<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n"
 
         result = strategy.insert_signature(sample_directive_markdown, signature)
 
@@ -211,7 +211,7 @@ class TestDirectiveMetadataStrategy:
     @pytest.mark.metadata
     def test_remove_signature_removes_html_comment(self, strategy, sample_directive_markdown):
         """Should remove signature HTML comment."""
-        signature = "<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456 -->\n"
+        signature = "<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n"
         content_with_sig = signature + sample_directive_markdown
 
         result = strategy.remove_signature(content_with_sig)
@@ -245,7 +245,7 @@ class TestToolMetadataStrategy:
     @pytest.mark.metadata
     def test_extract_content_for_hash_removes_signature(self, strategy, sample_tool_content):
         """Should extract content without signature for hashing."""
-        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
+        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
         content_with_sig = signature + sample_tool_content
 
         result = strategy.extract_content_for_hash(content_with_sig)
@@ -267,7 +267,7 @@ class TestToolMetadataStrategy:
     def test_format_signature_creates_python_comment(self, strategy):
         """Should format signature as Python comment."""
         timestamp = "2024-01-01T12:00:00Z"
-        hash_value = "abc123def456"
+        hash_value = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
         signature = strategy.format_signature(timestamp, hash_value)
 
@@ -280,20 +280,20 @@ class TestToolMetadataStrategy:
     @pytest.mark.metadata
     def test_extract_signature_after_shebang(self, strategy, sample_tool_with_shebang):
         """Should extract signature after shebang."""
-        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
+        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
         content = f"#!/usr/bin/env python3\n{signature}{sample_tool_with_shebang.split(chr(10), 1)[1]}"
 
         result = strategy.extract_signature(content)
 
         assert result is not None
         assert result["timestamp"] == "2024-01-01T12:00:00Z"
-        assert result["hash"] == "abc123def456"
+        assert result["hash"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
     @pytest.mark.unit
     @pytest.mark.metadata
     def test_extract_signature_without_shebang(self, strategy, sample_tool_content):
         """Should extract signature when no shebang."""
-        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
+        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
         content = signature + sample_tool_content
 
         result = strategy.extract_signature(content)
@@ -305,7 +305,7 @@ class TestToolMetadataStrategy:
     @pytest.mark.metadata
     def test_insert_signature_after_shebang(self, strategy, sample_tool_with_shebang):
         """Should insert signature after shebang if present."""
-        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
+        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
 
         result = strategy.insert_signature(sample_tool_with_shebang, signature)
 
@@ -317,7 +317,7 @@ class TestToolMetadataStrategy:
     @pytest.mark.metadata
     def test_insert_signature_at_start_without_shebang(self, strategy, sample_tool_content):
         """Should insert signature at start when no shebang."""
-        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
+        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
 
         result = strategy.insert_signature(sample_tool_content, signature)
 
@@ -327,7 +327,7 @@ class TestToolMetadataStrategy:
     @pytest.mark.metadata
     def test_remove_signature_preserves_shebang(self, strategy, sample_tool_with_shebang):
         """Should preserve shebang when removing signature."""
-        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456\n"
+        signature = "# kiwi-mcp:validated:2024-01-01T12:00:00Z:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
         content = f"#!/usr/bin/env python3\n{signature}{sample_tool_with_shebang.split(chr(10), 1)[1]}"
 
         result = strategy.remove_signature(content)
@@ -378,27 +378,26 @@ tags: []
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_format_signature_creates_yaml_fields(self, strategy):
-        """Should format signature as YAML frontmatter fields."""
+    def test_format_signature_creates_html_comment(self, strategy):
+        """Should format signature as HTML comment at top."""
         timestamp = "2024-01-01T12:00:00Z"
-        hash_value = "abc123def456"
+        hash_value = "a" * 64
 
         signature = strategy.format_signature(timestamp, hash_value)
 
-        assert "validated_at:" in signature
-        assert "content_hash:" in signature
+        assert "<!-- kiwi-mcp:validated:" in signature
         assert timestamp in signature
         assert hash_value in signature
+        assert "-->" in signature
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_extract_signature_from_frontmatter(self, strategy):
-        """Should extract signature from YAML frontmatter."""
-        content = """---
+    def test_extract_signature_from_html_comment(self, strategy):
+        """Should extract signature from HTML comment at start."""
+        content = """<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:""" + "a" * 64 + """ -->
+---
 zettel_id: 001-test
 title: Test
-validated_at: 2024-01-01T12:00:00Z
-content_hash: abc123def456
 ---
 
 Content here
@@ -407,12 +406,12 @@ Content here
 
         assert result is not None
         assert result["timestamp"] == "2024-01-01T12:00:00Z"
-        assert result["hash"] == "abc123def456"
+        assert result["hash"] == "a" * 64
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_extract_signature_missing_fields(self, strategy):
-        """Should return None when signature fields missing."""
+    def test_extract_signature_missing_comment(self, strategy):
+        """Should return None when signature comment missing."""
         content = """---
 zettel_id: 001-test
 title: Test
@@ -426,33 +425,30 @@ Content here
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_insert_signature_updates_frontmatter(self, strategy, sample_knowledge_with_frontmatter):
-        """Should update frontmatter with signature fields."""
-        signature = "validated_at: 2024-01-01T12:00:00Z\ncontent_hash: abc123def456"
+    def test_insert_signature_at_top(self, strategy, sample_knowledge_with_frontmatter):
+        """Should insert signature at beginning of content."""
+        signature = "<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:" + "a" * 64 + " -->\n"
 
         result = strategy.insert_signature(sample_knowledge_with_frontmatter, signature)
 
-        assert "validated_at: 2024-01-01T12:00:00Z" in result
-        assert "content_hash: abc123def456" in result
+        assert result.startswith("<!-- kiwi-mcp:validated:")
         assert "zettel_id: 001-test" in result  # Preserves other fields
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_remove_signature_removes_fields(self, strategy):
-        """Should remove signature fields from frontmatter."""
-        content = """---
+    def test_remove_signature_removes_comment(self, strategy):
+        """Should remove signature HTML comment from start."""
+        content = """<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:""" + "a" * 64 + """ -->
+---
 zettel_id: 001-test
 title: Test
-validated_at: 2024-01-01T12:00:00Z
-content_hash: abc123def456
 ---
 
 Content here
 """
         result = strategy.remove_signature(content)
 
-        assert "validated_at:" not in result
-        assert "content_hash:" not in result
+        assert not result.startswith("<!-- kiwi-mcp:validated:")
         assert "zettel_id: 001-test" in result  # Preserves other fields
         assert "Content here" in result
 
@@ -528,7 +524,7 @@ class TestMetadataManager:
         hash_result = MetadataManager.compute_hash("directive", file_content)
 
         assert isinstance(hash_result, str)
-        assert len(hash_result) == 12
+        assert len(hash_result) == 64
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -538,7 +534,7 @@ class TestMetadataManager:
         hash_result = MetadataManager.compute_hash("tool", file_content)
 
         assert isinstance(hash_result, str)
-        assert len(hash_result) == 12
+        assert len(hash_result) == 64
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -548,7 +544,7 @@ class TestMetadataManager:
         hash_result = MetadataManager.compute_hash("knowledge", file_content)
 
         assert isinstance(hash_result, str)
-        assert len(hash_result) == 12
+        assert len(hash_result) == 64
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -564,8 +560,8 @@ class TestMetadataManager:
         inner = signature.replace("<!-- ", "").replace(" -->\n", "").strip()
         # Should have kiwi-mcp:validated: prefix
         assert inner.startswith("kiwi-mcp:validated:")
-        # Should end with 12-char hash
-        assert len(inner.split(":")[-1]) == 12
+        # Should end with 64-char hash
+        assert len(inner.split(":")[-1]) == 64
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -580,48 +576,6 @@ class TestMetadataManager:
         assert len(parts) >= 3  # kiwi-mcp, validated, TIMESTAMP (which has colons), HASH
         assert parts[0] == "kiwi-mcp"
         assert parts[1] == "validated"
-
-    @pytest.mark.unit
-    @pytest.mark.metadata
-    def test_verify_signature_valid(self, sample_directive_file):
-        """Should verify valid signature."""
-        file_content = sample_directive_file.read_text()
-        # Add signature first
-        signed_content = MetadataManager.sign_content("directive", file_content)
-
-        result = MetadataManager.verify_signature("directive", signed_content)
-
-        assert result is not None
-        assert result["status"] == "valid"
-        assert "hash" in result
-        assert "validated_at" in result
-
-    @pytest.mark.unit
-    @pytest.mark.metadata
-    def test_verify_signature_modified(self, sample_directive_file):
-        """Should detect modified content."""
-        file_content = sample_directive_file.read_text()
-        signed_content = MetadataManager.sign_content("directive", file_content)
-
-        # Modify content
-        modified_content = signed_content.replace("Test directive", "Modified directive")
-
-        result = MetadataManager.verify_signature("directive", modified_content)
-
-        assert result is not None
-        assert result["status"] == "modified"
-        assert "original_hash" in result
-        assert "current_hash" in result
-
-    @pytest.mark.unit
-    @pytest.mark.metadata
-    def test_verify_signature_missing(self, sample_directive_file):
-        """Should return None when no signature."""
-        file_content = sample_directive_file.read_text()
-
-        result = MetadataManager.verify_signature("directive", file_content)
-
-        assert result is None
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -663,18 +617,6 @@ class TestMetadataManagerEdgeCases:
 
     @pytest.mark.unit
     @pytest.mark.metadata
-    def test_verify_signature_invalid_xml_directive(self):
-        """Should handle invalid XML gracefully."""
-        invalid_content = "<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:abc123def456 -->\n# No XML"
-
-        result = MetadataManager.verify_signature("directive", invalid_content)
-
-        assert result is not None
-        assert result["status"] == "invalid"
-        assert "reason" in result
-
-    @pytest.mark.unit
-    @pytest.mark.metadata
     def test_sign_content_replaces_existing_signature(self, sample_directive_file):
         """Should replace existing signature when signing."""
         file_content = sample_directive_file.read_text()
@@ -693,7 +635,7 @@ class TestMetadataManagerEdgeCases:
         hash_result = MetadataManager.compute_hash("tool", "")
 
         assert isinstance(hash_result, str)
-        assert len(hash_result) == 12
+        assert len(hash_result) == 64
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -702,7 +644,7 @@ class TestMetadataManagerEdgeCases:
         hash_result = MetadataManager.compute_hash("knowledge", "")
 
         assert isinstance(hash_result, str)
-        assert len(hash_result) == 12
+        assert len(hash_result) == 64
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -711,13 +653,4 @@ class TestMetadataManagerEdgeCases:
         with pytest.raises(ValueError, match="No XML directive found"):
             MetadataManager.compute_hash("directive", "")
 
-    @pytest.mark.unit
-    @pytest.mark.metadata
-    def test_verify_signature_malformed_timestamp(self):
-        """Should handle malformed timestamp in signature."""
-        content = "<!-- kiwi-mcp:validated:invalid-timestamp:abc123def456 -->\n# Content"
 
-        result = MetadataManager.verify_signature("directive", content)
-
-        # Should still extract and verify hash
-        assert result is not None

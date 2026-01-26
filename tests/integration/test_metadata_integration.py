@@ -155,55 +155,29 @@ class TestMetadataValidationIntegration:
         )
         assert validation_result["valid"] is True
 
-        # For knowledge, use MetadataManager to sign properly
-        # Build frontmatter with signature fields (they'll be included in hash)
-        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, generate_timestamp
-        
-        # First compute hash without signature (for initial signing)
-        temp_frontmatter = f"""---
-version: "{parsed_data.get('version', '1.0.0')}"
-zettel_id: {parsed_data["zettel_id"]}
-title: {parsed_data["title"]}
-entry_type: {parsed_data["entry_type"]}
-category: {parsed_data["category"]}
-tags: {json.dumps(parsed_data.get("tags", []))}
----
-
-"""
-        temp_content = temp_frontmatter + parsed_data["content"]
-        
-        # Compute initial hash (without signature fields)
+        # For knowledge, use MetadataManager to sign properly (signature at top, like directives)
+        file_content = sample_knowledge_file.read_text()
+        # Compute hash first (without signature)
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
         initial_hash = compute_unified_integrity(
             item_type="knowledge",
             item_id=parsed_data["zettel_id"],
             version=parsed_data.get("version", "1.0.0"),
-            file_content=temp_content,
+            file_content=file_content,
             file_path=sample_knowledge_file
         )
-        timestamp = generate_timestamp()
-
-        # Build final content with signature fields
-        frontmatter = f"""---
-version: "{parsed_data.get('version', '1.0.0')}"
-zettel_id: {parsed_data["zettel_id"]}
-title: {parsed_data["title"]}
-entry_type: {parsed_data["entry_type"]}
-category: {parsed_data["category"]}
-tags: {json.dumps(parsed_data.get("tags", []))}
-validated_at: {timestamp}
-content_hash: {initial_hash}
----
-
-"""
-        signed_content = frontmatter + parsed_data["content"]
+        # Sign with the hash
+        signed_content = MetadataManager.sign_content_with_hash("knowledge", file_content, initial_hash, file_path=sample_knowledge_file)
         
-        # Now compute hash WITH signature fields (for chain validation)
-        # This simulates what happens on re-signing
+        # Write signed content to file for verification
+        sample_knowledge_file.write_text(signed_content)
+        
+        # Now compute hash WITH signature (for chain validation)
         final_hash = compute_unified_integrity(
             item_type="knowledge",
             item_id=parsed_data["zettel_id"],
             version=parsed_data.get("version", "1.0.0"),
-            file_content=signed_content,  # Includes signature fields
+            file_content=signed_content,  # Includes signature
             file_path=sample_knowledge_file
         )
 
@@ -212,18 +186,17 @@ content_hash: {initial_hash}
         
         stored_hash = MetadataManager.get_signature_hash("knowledge", signed_content, file_path=sample_knowledge_file)
         assert stored_hash is not None
-        # The stored hash should be the initial_hash (what's in content_hash field)
-        # But verification should use final_hash (includes signature in chain)
-        assert stored_hash == initial_hash
+        assert stored_hash == initial_hash  # Stored hash is the initial one
         
         verifier = IntegrityVerifier()
-        # Verify with the hash that includes signature (chain validation)
+        # Verify with hash that includes signature (chain validation)
         verify_result = verifier.verify_single_file(
             item_type="knowledge",
             item_id=parsed_data["zettel_id"],
             version=parsed_data.get("version", "1.0.0"),
             file_path=sample_knowledge_file,
-            stored_hash=final_hash  # Use hash that includes signature
+            stored_hash=final_hash,  # Use hash that includes signature
+            project_path=sample_knowledge_file.parent
         )
         assert verify_result.success is True
 

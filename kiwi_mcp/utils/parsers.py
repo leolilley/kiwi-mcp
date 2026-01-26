@@ -434,12 +434,15 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
     """
     content = file_path.read_text()
 
+    # Skip signature line at top if present (HTML comment format)
+    content_without_sig = re.sub(r"^<!-- kiwi-mcp:validated:[^>]+-->\n", "", content)
+
     # Parse YAML frontmatter
-    frontmatter = _extract_yaml_frontmatter(content)
+    frontmatter = _extract_yaml_frontmatter(content_without_sig)
 
     # Extract content (after frontmatter)
-    content_start = content.find("---", 3) + 3 if content.startswith("---") else 0
-    entry_content = content[content_start:].strip()
+    content_start = content_without_sig.find("---", 3) + 3 if content_without_sig.startswith("---") else 0
+    entry_content = content_without_sig[content_start:].strip()
 
     # Get zettel_id from frontmatter (fallback to filename stem if not present)
     zettel_id = frontmatter.get("zettel_id", file_path.stem)

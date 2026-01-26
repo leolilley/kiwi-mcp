@@ -83,12 +83,9 @@ class KnowledgeHandler:
         Returns:
             SHA256 hex digest (64 characters)
         """
-        # Build frontmatter dict (excluding validation fields)
-        frontmatter = {
-            "zettel_id": entry_data.get("zettel_id"),
-            "title": entry_data.get("title"),
-            "entry_type": entry_data.get("entry_type"),
+        metadata = {
             "category": entry_data.get("category"),
+            "entry_type": entry_data.get("entry_type"),
             "tags": entry_data.get("tags", []),
         }
         
@@ -96,7 +93,7 @@ class KnowledgeHandler:
             zettel_id=entry_data.get("zettel_id", ""),
             version=entry_data.get("version", "1.0.0"),
             content=entry_data.get("content", ""),
-            frontmatter=frontmatter,
+            metadata=metadata,
         )
     
     def _verify_knowledge_integrity(
@@ -937,9 +934,9 @@ class KnowledgeHandler:
             file_path=file_path
         )
         
-        # Sign the validated content with unified integrity hash (updates signature fields in frontmatter)
+        # Sign the validated content with unified integrity hash (adds signature at top, removes old signature fields)
         signed_content = MetadataManager.sign_content_with_hash(
-            "knowledge", current_content, content_hash, file_path=file_path, project_path=self.project_path
+            "knowledge", content_without_sig, content_hash, file_path=file_path, project_path=self.project_path
         )
         file_path.write_text(signed_content)
 

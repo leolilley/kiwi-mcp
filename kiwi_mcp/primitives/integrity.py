@@ -183,7 +183,7 @@ def compute_knowledge_integrity(
     zettel_id: str,
     version: str,
     content: str,
-    frontmatter: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Compute deterministic integrity hash for a knowledge entry version.
@@ -193,8 +193,8 @@ def compute_knowledge_integrity(
     Args:
         zettel_id: Zettel identifier (e.g., "20260124-api-patterns")
         version: Semver version string
-        content: The markdown content (after frontmatter)
-        frontmatter: Frontmatter dict (excluding validation fields)
+        content: The markdown content (after signature and frontmatter)
+        metadata: Optional metadata dict (category, entry_type, etc.)
         
     Returns:
         SHA256 hex digest (64 characters)
@@ -202,16 +202,12 @@ def compute_knowledge_integrity(
     # Compute hash of content for determinism
     content_hash = hashlib.sha256(content.encode()).hexdigest()
     
-    # Include ALL frontmatter fields (including signature fields) to create validation chain
-    # This ensures each signature includes the previous one in the hash
-    clean_frontmatter = frontmatter or {}
-    
     # Build canonical payload
     payload = {
         "zettel_id": zettel_id,
         "version": version,
         "content_hash": content_hash,
-        "frontmatter": clean_frontmatter,
+        "metadata": metadata or {},
     }
     
     # Canonical JSON: sorted keys, no extra whitespace
@@ -225,7 +221,7 @@ def verify_knowledge_integrity(
     version: str,
     content: str,
     stored_hash: str,
-    frontmatter: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
     Verify knowledge entry content matches stored integrity hash.
@@ -235,10 +231,10 @@ def verify_knowledge_integrity(
         version: Version string
         content: The markdown content
         stored_hash: Expected integrity hash
-        frontmatter: Frontmatter dict
+        metadata: Optional metadata dict
         
     Returns:
         True if computed hash matches stored hash
     """
-    computed = compute_knowledge_integrity(zettel_id, version, content, frontmatter)
+    computed = compute_knowledge_integrity(zettel_id, version, content, metadata)
     return computed == stored_hash

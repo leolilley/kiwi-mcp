@@ -74,8 +74,13 @@ def compute_unified_integrity(
     
     elif item_type == "knowledge":
         parsed = parse_knowledge_entry(file_path)
+        metadata = {
+            "category": parsed.get("category"),
+            "entry_type": parsed.get("entry_type"),
+            "tags": parsed.get("tags", []),
+        }
         return compute_knowledge_integrity(
-            item_id, version, parsed.get("content", ""), parsed.get("frontmatter")
+            item_id, version, parsed.get("content", ""), metadata
         )
     
     else:
@@ -257,135 +262,47 @@ class ToolMetadataStrategy(MetadataStrategy):
 
 
 class KnowledgeMetadataStrategy(MetadataStrategy):
-    """Strategy for knowledge metadata operations (YAML frontmatter in markdown)."""
+    """Strategy for knowledge metadata operations (signature at top like directives)."""
 
     def extract_content_for_hash(self, file_content: str) -> str:
-        """Extract content portion (after frontmatter) for hashing."""
-        if not file_content.startswith("---"):
-            return file_content
-
-        end_idx = file_content.find("---", 3)
-        if end_idx == -1:
-            return file_content
-
+        """Extract content portion (after signature and frontmatter) for hashing."""
+        # Remove signature line if present
+        content_without_sig = self.remove_signature(file_content)
+        
         # Extract content after frontmatter
-        entry_content = file_content[end_idx + 3:].strip()
+        if not content_without_sig.startswith("---"):
+            return content_without_sig
+
+        end_idx = content_without_sig.find("---", 3)
+        if end_idx == -1:
+            return content_without_sig
+
+        entry_content = content_without_sig[end_idx + 3:].strip()
         return entry_content
 
     def format_signature(self, timestamp: str, hash: str) -> str:
-        """Format signature as YAML frontmatter fields (not standalone)."""
-        # This is used when creating/updating frontmatter
-        # The full frontmatter is created in the handler
-        return f"validated_at: {timestamp}\ncontent_hash: {hash}"
+        """Format signature as HTML comment at top of file."""
+        return f"<!-- kiwi-mcp:validated:{timestamp}:{hash} -->\n"
 
     def extract_signature(self, file_content: str) -> Optional[Dict[str, str]]:
-        """Extract signature from YAML frontmatter."""
-        if not file_content.startswith("---"):
-            return None
-
-        end_idx = file_content.find("---", 3)
-        if end_idx == -1:
-            return None
-
-        yaml_content = file_content[3:end_idx].strip()
-
-        # Parse frontmatter for signature fields
-        stored_timestamp = None
-        stored_hash = None
-
-        for line in yaml_content.split("\n"):
-            if ":" in line:
-                key, value = line.split(":", 1)
-                key = key.strip()
-                value = value.strip()
-                if key == "validated_at":
-                    stored_timestamp = value
-                elif key == "content_hash":
-                    stored_hash = value
-
-        if not stored_timestamp or not stored_hash:
+        """Extract signature from HTML comment at start of file."""
+        sig_match = re.match(r"^<!-- kiwi-mcp:validated:(.*?):([a-f0-9]{64}) -->", file_content)
+        if not sig_match:
             return None
 
         return {
-            "timestamp": stored_timestamp,
-            "hash": stored_hash,
+            "timestamp": sig_match.group(1),
+            "hash": sig_match.group(2),
         }
 
     def insert_signature(self, content: str, signature: str) -> str:
-        """Insert or update signature fields in YAML frontmatter."""
-        # For knowledge entries, signature fields (validated_at, content_hash) are part of frontmatter
-        # This method updates those fields while preserving all other frontmatter fields
-        if not content.startswith("---"):
-            # No frontmatter, create one
-            return f"---\n{signature}\n---\n\n{content}"
-
-        # Update existing frontmatter
-        end_idx = content.find("---", 3)
-        if end_idx == -1:
-            return content
-
-        yaml_content = content[3:end_idx].strip()
-        entry_content = content[end_idx + 3:].strip()
-
-        # Parse signature to extract validated_at and content_hash values
-        sig_lines = signature.strip().split("\n")
-        new_validated_at = None
-        new_content_hash = None
-        for sig_line in sig_lines:
-            if sig_line.startswith("validated_at:"):
-                new_validated_at = sig_line.split(":", 1)[1].strip()
-            elif sig_line.startswith("content_hash:"):
-                new_content_hash = sig_line.split(":", 1)[1].strip()
-
-        # Update or add signature fields in existing frontmatter
-        lines = yaml_content.split("\n")
-        updated_lines = []
-        has_validated_at = False
-        has_content_hash = False
-
-        for line in lines:
-            if line.strip().startswith("validated_at:"):
-                # Replace existing validated_at with new value
-                if new_validated_at is not None:
-                    updated_lines.append(f"validated_at: {new_validated_at}")
-                    has_validated_at = True
-            elif line.strip().startswith("content_hash:"):
-                # Replace existing content_hash with new value
-                if new_content_hash is not None:
-                    updated_lines.append(f"content_hash: {new_content_hash}")
-                    has_content_hash = True
-            else:
-                # Keep all other frontmatter fields
-                updated_lines.append(line)
-
-        # Add missing signature fields if they weren't in the original frontmatter
-        if new_validated_at is not None and not has_validated_at:
-            updated_lines.append(f"validated_at: {new_validated_at}")
-        if new_content_hash is not None and not has_content_hash:
-            updated_lines.append(f"content_hash: {new_content_hash}")
-
-        updated_yaml = "\n".join(updated_lines)
-        return f"---\n{updated_yaml}\n---\n\n{entry_content}"
+        """Insert signature at the beginning of content."""
+        content_clean = self.remove_signature(content)
+        return signature + content_clean
 
     def remove_signature(self, content: str) -> str:
-        """Remove signature fields from YAML frontmatter."""
-        if not content.startswith("---"):
-            return content
-
-        end_idx = content.find("---", 3)
-        if end_idx == -1:
-            return content
-
-        yaml_content = content[3:end_idx].strip()
-        entry_content = content[end_idx + 3:].strip()
-
-        # Remove signature fields
-        lines = [line for line in yaml_content.split("\n") 
-                 if not line.strip().startswith("validated_at:") 
-                 and not line.strip().startswith("content_hash:")]
-
-        updated_yaml = "\n".join(lines)
-        return f"---\n{updated_yaml}\n---\n\n{entry_content}"
+        """Remove signature HTML comment from start of file."""
+        return re.sub(r"^<!-- kiwi-mcp:validated:[^>]+-->\n", "", content)
 
 
 class MetadataManager:
