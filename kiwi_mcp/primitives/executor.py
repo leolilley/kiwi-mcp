@@ -724,12 +724,22 @@ class PrimitiveExecutor:
         # Convert user params to CLI args (--key value)
         for key, value in params.items():
             if key.startswith("_"):
-                continue  # Skip internal params
+                # Special handling for _project_path - convert to --project-path
+                if key == "_project_path" and value:
+                    args.append("--project-path")
+                    args.append(str(value))
+                # Skip other internal params
+                continue
             if value is None:
                 continue
             if isinstance(value, bool):
                 if value:
                     args.append(f"--{key}")
+            elif isinstance(value, (dict, list)):
+                # Serialize complex types as JSON
+                import json
+                args.append(f"--{key}")
+                args.append(json.dumps(value))
             else:
                 args.append(f"--{key}")
                 args.append(str(value))

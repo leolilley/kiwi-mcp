@@ -471,9 +471,10 @@ class ToolHandler:
 
         # Execute using PrimitiveExecutor with chain resolution
         try:
-            # Inject file path for subprocess execution
+            # Inject file path and project path for subprocess execution
             exec_params = params.copy()
             exec_params["_file_path"] = str(file_path)
+            exec_params["_project_path"] = str(self.project_path)
             result = await self.primitive_executor.execute(tool_meta["name"], exec_params)
 
             if result.success:

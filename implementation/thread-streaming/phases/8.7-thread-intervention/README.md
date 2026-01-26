@@ -17,16 +17,22 @@ Enable thread-to-thread intervention for annealing. Tools for reading transcript
 
 ## Files to Create
 
-- `kiwi_mcp/tools/thread_control.py` (new)
-- `tests/tools/test_thread_intervention.py` (new)
+- `.ai/tools/threads/read_transcript.py` (new - Python-only runtime tool)
+- `.ai/tools/threads/inject_message.py` (new - Python-only runtime tool)
+- `.ai/tools/threads/pause_thread.py` (new - Python-only runtime tool)
+- `.ai/tools/threads/resume_thread.py` (new - Python-only runtime tool)
+- `tests/runtime/test_thread_intervention.py` (new)
+
+**Note:** Thread intervention tools are runtime tools (Python-only, no YAML) following the same pattern as sink tools. All implementation is contained within each tool file. Metadata is declared at the top using module-level variables. This keeps the core kernel "dumb" - intervention tools are just data-driven tools, not hardcoded infrastructure.
 
 ## Task Breakdown
 
-1. Implement read_transcript tool
-2. Implement inject_message tool
-3. Implement pause/resume tools
-4. Add permission checks
-5. Write comprehensive tests
+1. Create `.ai/tools/threads/read_transcript.py` with metadata at top
+2. Create `.ai/tools/threads/inject_message.py` with metadata at top
+3. Create `.ai/tools/threads/pause_thread.py` with metadata at top
+4. Create `.ai/tools/threads/resume_thread.py` with metadata at top
+5. Implement permission checks in each tool (validate capability tokens)
+6. Write comprehensive tests
 
 ## Success Criteria
 

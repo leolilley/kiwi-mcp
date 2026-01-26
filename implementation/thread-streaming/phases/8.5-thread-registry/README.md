@@ -19,22 +19,19 @@ Implement SQLite-based thread registry for tracking thread state, events, and me
 
 ## Files to Create
 
-- `kiwi_mcp/runtime/thread_registry.py` (new - implementation module)
-- `kiwi_mcp/runtime/transcript_writer.py` (new - implementation module)
 - `.ai/tools/threads/thread_registry.py` (new - Python-only runtime tool, no YAML)
 - `tests/runtime/test_thread_registry.py` (new)
 
-**Note:** `thread_registry` is a runtime tool (Python-only, no YAML). Metadata is declared at the top of the Python file. The implementation modules (`kiwi_mcp/runtime/thread_registry.py`) contain the actual logic, while the tool file (`.ai/tools/threads/thread_registry.py`) is the discoverable tool entry point.
+**Note:** `thread_registry` is a runtime tool (Python-only, no YAML) following the same pattern as sink tools. All implementation (SQLite registry, transcript writer) is contained within the single Python file. Metadata is declared at the top of the file using module-level variables (`__tool_type__`, `__version__`, `__executor_id__`, `__category__`). This keeps the core kernel "dumb" - thread registry is just another data-driven tool, not hardcoded infrastructure.
 
 ## Task Breakdown
 
-1. Create SQLite schema (threads, thread_events tables)
-2. Implement thread registration
-3. Implement status updates
-4. Implement query operations
-5. Create transcript writer
-6. Create thread_registry tool (Python-only runtime tool with metadata at top)
-7. Write comprehensive tests
+1. Create `.ai/tools/threads/thread_registry.py` with metadata at top
+2. Implement SQLite schema (threads, thread_events tables) - all in the tool file
+3. Implement ThreadRegistry class (registration, status updates, queries)
+4. Implement TranscriptWriter class (JSONL append-only writer) - helper in same file
+5. Implement tool entry point function that handles actions (register, update_status, query, get_status, log_event)
+6. Write comprehensive tests
 
 ## Success Criteria
 

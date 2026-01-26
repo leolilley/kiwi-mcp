@@ -18,19 +18,19 @@ Implement the MCP connector pattern that discovers external MCP tools and genera
 
 ## Files to Create
 
-- `.ai/tools/mcp/supabase_connector.yaml` (new - example connector)
-- `kiwi_mcp/primitives/mcp_connector.py` (new)
-- `tests/primitives/test_mcp_connector.py` (new)
+- `.ai/tools/mcp/supabase_connector.py` (new - Python-only runtime tool, example connector)
+- `tests/runtime/test_mcp_connector.py` (new)
+
+**Note:** MCP connector tools are runtime tools (Python-only, no YAML) following the same pattern as sink tools. The connector tool discovers external MCP tools and generates child tool YAML files. All connector logic is contained within the tool file. Metadata is declared at the top using module-level variables. This keeps the core kernel "dumb" - connectors are just data-driven tools, not hardcoded infrastructure.
 
 ## Task Breakdown
 
-1. Implement mcp_connector tool type
-2. Create connector discovery logic
-3. Implement tool schema generation
-4. Add capability requirements to generated tools
-5. Implement auto-signing
-6. Create example Supabase connector
-7. Write comprehensive tests
+1. Create `.ai/tools/mcp/supabase_connector.py` with metadata at top
+2. Implement connector discovery logic (connect to MCP, call tools/list)
+3. Implement tool schema generation (create YAML files for discovered tools)
+4. Add capability requirements to generated tools (from connector config)
+5. Implement auto-signing of generated tools
+6. Write comprehensive tests
 
 ## Success Criteria
 

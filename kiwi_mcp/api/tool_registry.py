@@ -342,11 +342,15 @@ class ToolRegistry(BaseRegistry):
             
             # Compute canonical integrity hash (includes manifest + file hashes)
             from kiwi_mcp.primitives.integrity import compute_tool_integrity
+            # TODO: Extract location_path from tool data when available in registry
+            # For now, use empty string (registry needs to be updated to store location_path)
+            location_path = ""  # Registry should store this when publishing
             content_hash = compute_tool_integrity(
                 tool_id=tool_id,
                 version=version,
                 manifest=manifest,
-                files=file_entries
+                files=file_entries,
+                location_path=location_path
             )
 
             # Insert new version

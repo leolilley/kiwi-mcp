@@ -121,10 +121,13 @@ This enables:
 
 ### Search Types
 
+**Note:** RAG/vector search is handled server-side by Supabase. The registry tool only makes HTTP requests - it does NOT need to generate embeddings or handle RAG logic.
+
 1. **RAG Search** - Vector/semantic search using embeddings
 
    - Uses Supabase `search_embeddings` RPC function
-   - Requires embedding generation for query
+   - Supabase handles embedding generation and vector search server-side
+   - Registry tool just passes query and receives results
 
 2. **Keyword Search** - Traditional text matching
 
@@ -132,8 +135,10 @@ This enables:
    - Searches name, description, content
 
 3. **Hybrid Search** - Combines both (default)
+
    - Runs both RAG and keyword search
    - Merges and deduplicates results
+   - All handled server-side by Supabase
 
 ---
 
@@ -432,20 +437,23 @@ dependencies = [
 
 **Tool Structure:**
 
+**Format:** Python file with tool metadata (required for validation)
+
 ```python
-# .ai/tools/registry.py
+# .ai/tools/core/registry.py
+# kiwi-mcp:validated:2026-01-26T00:00:00Z:hash...
 """Registry tool - manage items in remote Supabase registry via HTTP.
 
 This tool uses the http_client primitive to communicate with Supabase REST API.
 Executed via: execute(item_type="tool", action="run", item_id="registry", parameters={...})
 """
 
-# Tool metadata (frontmatter or in tool.yaml)
-tool_id: registry
-tool_type: api
-executor_id: http_client
-version: "1.0.0"
-description: "Manage items in remote Supabase registry (upload, download, search, publish, etc.)"
+# Tool metadata (in frontmatter or __config__)
+__tool_id__ = "registry"
+__tool_type__ = "api"
+__executor_id__ = "http_client"
+__version__ = "1.0.0"
+__description__ = "Manage items in remote Supabase registry (upload, download, search, publish, etc.)"
 
 # Tool implementation
 import os
@@ -480,60 +488,7 @@ def execute(parameters: Dict[str, Any]) -> Dict[str, Any]:
     # And pass the HTTP config to http_client primitive
 ```
 
-**Tool Manifest (YAML format):**
-
-```yaml
-# .ai/tools/registry.yaml
-tool_id: registry
-tool_type: api
-executor_id: http_client
-version: "1.0.0"
-description: "Manage items in remote Supabase registry"
-
-parameters:
-  - name: action
-    type: string
-    required: true
-    enum:
-      [
-        upload,
-        download,
-        search,
-        publish,
-        private,
-        unlist,
-        get,
-        list,
-        update,
-        delete,
-        versions,
-        stats,
-      ]
-  - name: item_type
-    type: string
-    required: true
-    enum: [directive, tool, knowledge]
-  - name: item_id
-    type: string
-    required: false
-  # ... other parameters
-
-config:
-  # HTTP client config for Supabase REST API
-  base_url: "${SUPABASE_URL}/rest/v1"
-  headers:
-    apikey: "${SUPABASE_KEY}"
-    Authorization: "Bearer ${SUPABASE_KEY}"
-    Content-Type: "application/json"
-    Prefer: "return=representation"
-```
-
-**Note:** The tool uses the `http_client` primitive via the executor chain. The tool executor will:
-
-1. Load the registry tool manifest
-2. Resolve executor chain: `registry → http_client`
-3. Build HTTP config from tool config + parameters
-4. Execute via `HttpClientPrimitive`
+**Note:** Tool must be a Python file with metadata for validation. The executor chain (`registry → http_client`) is resolved automatically by the tool executor.
 
 #### 2.2 Registry Tool Parameters
 
@@ -605,31 +560,109 @@ execute(
 )
 ```
 
-#### 2.3 Implement Action Handlers
+#### 2.3 Data Flow Summary
+
+**Upload Flow:**
+```
+Local file (.ai/directives/my_directive.md)
+  ↓
+Registry tool reads file content
+  ↓
+POST /rest/v1/directives (metadata)
+  ↓
+POST /rest/v1/directive_versions (content + version)
+  ↓
+Supabase creates embedding server-side (via trigger/RPC)
+  ↓
+Success response
+```
+
+**Download Flow:**
+```
+Registry tool receives download request
+  ↓
+GET /rest/v1/directives?name=eq.my_directive (metadata)
+  ↓
+GET /rest/v1/directive_versions?directive_id=eq.{id}&version=eq.1.0.0 (content)
+  ↓
+Registry tool writes to local (.ai/directives/my_directive.md)
+  ↓
+Success response
+```
+
+**Note:** All embedding operations happen server-side in Supabase. The registry tool only passes data through HTTP requests.
+
+#### 2.4 Implement Action Handlers
 
 **Key Implementation Details:**
 
 1. **Upload Handler:**
 
-   - Read local file using handler
-   - Validate and compute integrity hash
-   - POST to Supabase REST API (`/rest/v1/{table}`)
-   - Create version record (`/rest/v1/{table}_versions`)
-   - Create embedding if RAG enabled
-   - Handle multi-file tools (tool_version_files)
+   **Data Flow:** Local file → Registry tool → Supabase REST API
+   
+   **Implementation:**
+   ```python
+   # 1. Read local file
+   file_path = handler.resolve(item_id)  # From .ai/ or ~/.ai/
+   content = file_path.read_text()
+   
+   # 2. Validate and compute hash
+   integrity_hash = compute_integrity_hash(content)
+   
+   # 3. POST main record
+   POST /rest/v1/{table}
+   Body: {
+       "name": item_id,
+       "category": category,
+       "description": description,
+       "visibility": visibility,
+       ...
+   }
+   
+   # 4. POST version record
+   POST /rest/v1/{table}_versions
+   Body: {
+       "{table}_id": main_record_id,
+       "version": version,
+       "content": content,
+       "content_hash": integrity_hash,
+       ...
+   }
+   
+   # 5. For tools: POST file records
+   POST /rest/v1/tool_version_files
+   Body: [{"path": "main.py", "content_text": "...", ...}, ...]
+   
+   # Note: Supabase creates embeddings server-side (via database triggers/RPC)
+   ```
 
 2. **Download Handler:**
 
-   - GET from Supabase (`/rest/v1/{table}?name=eq.{name}`)
-   - Get version content
-   - Write to local storage using handler
-   - Handle multi-file tools
+   **Data Flow:** Supabase REST API → Registry tool → Local file
+   
+   **Implementation:**
+   ```python
+   # 1. GET main record
+   GET /rest/v1/{table}?name=eq.{item_id}
+   Response: {id, name, category, description, ...}
+   
+   # 2. GET version content
+   GET /rest/v1/{table}_versions?{table}_id=eq.{id}&version=eq.{version}
+   Response: {content, content_hash, version, ...}
+   
+   # 3. For tools: GET all files
+   GET /rest/v1/tool_version_files?tool_version_id=eq.{version_id}
+   Response: [{path, content_text, ...}, ...]
+   
+   # 4. Write to local storage
+   handler.write(item_id, content, destination)  # To .ai/ or ~/.ai/
+   ```
 
 3. **Search Handler:**
 
-   - **RAG Search:** POST to `/rest/v1/rpc/search_embeddings`
+   - **RAG Search:** POST to `/rest/v1/rpc/search_embeddings` (Supabase handles embeddings server-side)
    - **Keyword Search:** GET with `ilike` filters
-   - **Hybrid:** Run both, merge results
+   - **Hybrid:** Run both, merge results (all server-side)
 
 4. **Visibility Handlers:**
 
@@ -675,10 +708,13 @@ execute(
 | Operation         | Method | Endpoint                                         | Notes                       |
 | ----------------- | ------ | ------------------------------------------------ | --------------------------- |
 | Search (keyword)  | GET    | `/rest/v1/{table}?select=*&name=ilike.*{query}*` | Use ilike for text search   |
-| Search (RAG)      | POST   | `/rest/v1/rpc/search_embeddings`                 | RPC function with embedding |
-| Get               | GET    | `/rest/v1/{table}?name=eq.{name}`                | Single item                 |
-| Upload            | POST   | `/rest/v1/{table}`                               | Create main record          |
-| Upload Version    | POST   | `/rest/v1/{table}_versions`                      | Create version              |
+| Search (RAG)      | POST   | `/rest/v1/rpc/search_embeddings`                 | RPC function - pass `query_text`, Supabase generates embedding |
+| Get               | GET    | `/rest/v1/{table}?name=eq.{name}`                | Get main record (metadata) |
+| Get Version       | GET    | `/rest/v1/{table}_versions?{table}_id=eq.{id}`   | Get version content |
+| Get Files         | GET    | `/rest/v1/tool_version_files?tool_version_id=eq.{id}` | Get all files for tool version |
+| Upload            | POST   | `/rest/v1/{table}`                               | Create/update main record (metadata) |
+| Upload Version    | POST   | `/rest/v1/{table}_versions`                      | Create version record (content) |
+| Upload Files      | POST   | `/rest/v1/tool_version_files`                    | Create file records (for tools only) |
 | Update            | PATCH  | `/rest/v1/{table}?id=eq.{id}`                    | Update metadata             |
 | Update Visibility | PATCH  | `/rest/v1/{table}?id=eq.{id}`                    | `{"visibility": "public"}`  |
 | Delete            | DELETE | `/rest/v1/{table}?id=eq.{id}`                    | Delete item                 |
@@ -696,39 +732,36 @@ execute(
 }
 ```
 
-#### 2.5 Embedding Support
+#### 2.5 RAG Search Implementation
 
-**For RAG Search:**
+**Important:** RAG search is handled entirely server-side by Supabase. The registry tool does NOT need to:
+- Generate embeddings
+- Handle vector operations
+- Manage embedding services
 
-**Option A: Use existing EmbeddingService (if available)**
+**RAG Search Flow:**
+1. Registry tool sends query text to Supabase RPC endpoint: `POST /rest/v1/rpc/search_embeddings`
+2. Supabase RPC function receives `query_text` parameter
+3. Supabase generates embedding for query (server-side)
+4. Supabase performs vector search against `item_embeddings` table (server-side)
+5. Supabase returns results with similarity scores
+6. Registry tool passes through the results to caller
 
+**Implementation:**
 ```python
-from kiwi_mcp.storage.vector import EmbeddingService, load_vector_config
-
-config = load_vector_config()
-embedding_service = EmbeddingService(config)
-embedding = await embedding_service.embed(query)
-```
-
-**Option B: Call Supabase embedding function (if available)**
-
-```python
-# POST to Supabase embedding endpoint
+# RAG search - Supabase handles everything server-side
 config = {
     "method": "POST",
-    "url": f"{self.supabase_url}/rest/v1/rpc/generate_embedding",
-    "body": {"text": query}
+    "url": f"{self.supabase_url}/rest/v1/rpc/search_embeddings",
+    "body": {
+        "query_text": query,  # Just pass text, Supabase generates embedding
+        "item_type": item_type,
+        "match_count": limit
+    }
 }
 result = await self.http_client.execute(config, {})
-embedding = result.body["embedding"]
+# Results already include similarity scores from Supabase
 ```
-
-**Option C: Skip RAG if embeddings not available**
-
-- Fall back to keyword search only
-- Log warning
-
-**Recommendation:** Option A (use existing EmbeddingService if available, fallback to keyword-only)
 
 #### 2.6 Tool Location
 
@@ -870,11 +903,13 @@ Headers:
 ```
 POST /rest/v1/rpc/search_embeddings
 Body: {
-    "query_embedding": [0.1, 0.2, ...],
+    "query_text": "search query text",  # Pass text, Supabase generates embedding server-side
     "item_type": "directive",
     "match_count": 10
 }
 ```
+
+**Note:** The registry tool passes `query_text` (plain text), not `query_embedding` (vector array). Supabase's RPC function handles embedding generation server-side.
 
 ---
 
@@ -987,11 +1022,10 @@ Body: {
 
 ### Harder Parts (Higher Complexity)
 
-- RAG search implementation (embedding generation)
 - Multi-file tool uploads (tool_version_files)
-- Hybrid search result merging
 - Comprehensive error handling
 - Edge cases and race conditions
+- Tool validation and metadata management
 
 ---
 
@@ -1023,9 +1057,9 @@ Body: {
 
 5. **Dual Search Capabilities**
 
-   - RAG (vector/semantic) search
+   - RAG (vector/semantic) search (handled server-side by Supabase)
    - Keyword search
-   - Hybrid search combining both
+   - Hybrid search combining both (handled server-side)
 
 6. **Consistent Architecture**
    - Uses `HttpClientPrimitive` like other tools
@@ -1049,12 +1083,13 @@ Body: {
 
 ### Risk 2: RAG Search Complexity
 
-**Risk:** Embedding generation may be complex
+**Risk:** RAG search may not work if Supabase doesn't have embeddings configured
 **Mitigation:**
 
-- Fallback to keyword-only search
-- Use existing EmbeddingService if available
-- Document requirements
+- Registry tool just passes query to Supabase
+- Supabase handles RAG server-side (or returns empty if not configured)
+- Fallback to keyword-only search if RAG unavailable
+- Document that RAG requires Supabase-side configuration
 
 ### Risk 3: Network Failures
 
@@ -1093,8 +1128,9 @@ Body: {
 13. ✅ **NO deprecated warnings or migration comments in code**
 14. ✅ **NO stub methods or error messages about removed features**
 15. ✅ Registry tool supports all 12 actions
-16. ✅ RAG and keyword search both work
+16. ✅ RAG and keyword search both work (RAG handled server-side by Supabase)
 17. ✅ Visibility control works (public/private/unlisted)
+18. ✅ Registry tool is Python file with metadata (for validation)
 18. ✅ All tests pass
 19. ✅ Documentation updated
 20. ✅ **Codebase is clean with no legacy code or comments**
