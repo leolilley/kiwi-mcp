@@ -335,7 +335,7 @@ class ToolHandler:
         Execute a tool or perform tool operation.
 
         Args:
-            action: "run", "publish", "delete", "create", "update"
+            action: "run", "publish", "delete", "sign"
             tool_name: Name of tool to execute
             parameters: Tool parameters (for run action)
             dry_run: If True, validate without executing
@@ -358,15 +358,12 @@ class ToolHandler:
             elif action == "delete":
                 return await self._delete_tool(tool_name, params.get("confirm", False))
 
-            elif action == "create":
-                return await self._create_tool(
+            elif action == "sign":
+                return await self._sign_tool(
                     tool_name,
                     params.get("location", "project"),
                     params.get("category"),
                 )
-
-            elif action == "update":
-                return await self._update_tool(tool_name)
 
             else:
                 return {"error": f"Unknown action: {action}"}
@@ -401,12 +398,23 @@ class ToolHandler:
                 "path": str(file_path),
                 "hint": "Tool needs validation",
                 "solution": (
-                    f"Run: execute(item_type='tool', action='create', "
+                    f"Run: execute(item_type='tool', action='sign', "
                     f"item_id='{tool_name}', parameters={{'location': 'project'}}, "
                     f"project_path='{self.project_path}')"
                 ),
             }
 
+        # Get version - must be present
+        version = tool_meta.get("version")
+        if not version or version == "0.0.0":
+            return {
+                "status": "error",
+                "error": "Tool validation failed",
+                "details": ['Tool is missing required version. Add at module level: __version__ = "1.0.0"'],
+                "path": str(file_path),
+                "solution": "Add version metadata and retry",
+            }
+        
         # Verify integrity using IntegrityVerifier
         from kiwi_mcp.primitives.integrity_verifier import IntegrityVerifier
         verifier = IntegrityVerifier()
@@ -414,7 +422,7 @@ class ToolHandler:
         verification = verifier.verify_single_file(
             item_type="tool",
             item_id=tool_name,
-            version=tool_meta.get("version", "0.0.0"),
+            version=version,
             file_path=file_path,
             stored_hash=stored_hash,
             project_path=self.project_path
@@ -426,7 +434,7 @@ class ToolHandler:
                 "error": "Tool content has been modified since last validation",
                 "details": verification.error,
                 "path": str(file_path),
-                "solution": "Run execute(action='update', ...) to re-validate the tool",
+                "solution": "Run execute(action='sign', ...) to re-validate the tool",
             }
 
         # Validate using schema
@@ -536,7 +544,7 @@ class ToolHandler:
                 "path": str(file_path),
                 "hint": "Tools must be validated before publishing",
                 "solution": (
-                    f"Run: execute(item_type='tool', action='update', "
+                    f"Run: execute(item_type='tool', action='sign', "
                     f"item_id='{tool_name}', parameters={{'location': 'project'}}, "
                     f"project_path='{self.project_path}')"
                 ),
@@ -545,13 +553,23 @@ class ToolHandler:
         # Verify integrity using IntegrityVerifier
         tool_meta = extract_tool_metadata(file_path, self.project_path)
         
+        # Get version - must be present
+        version = tool_meta.get("version")
+        if not version or version == "0.0.0":
+            return {
+                "error": "Cannot publish: tool validation failed",
+                "details": ['Tool is missing required version. Add at module level: __version__ = "1.0.0"'],
+                "path": str(file_path),
+                "solution": "Add version metadata and retry",
+            }
+        
         from kiwi_mcp.primitives.integrity_verifier import IntegrityVerifier
         verifier = IntegrityVerifier()
         
         verification = verifier.verify_single_file(
             item_type="tool",
             item_id=tool_name,
-            version=tool_meta.get("version", "0.0.0"),
+            version=version,
             file_path=file_path,
             stored_hash=stored_hash,
             project_path=self.project_path
@@ -562,7 +580,7 @@ class ToolHandler:
                 "error": "Tool content has been modified since last validation",
                 "details": verification.error,
                 "path": str(file_path),
-                "solution": "Run execute(action='update', ...) to re-validate before publishing",
+                "solution": "Run execute(action='sign', ...) to re-validate before publishing",
             }
         
         # Validate using schema
@@ -640,19 +658,15 @@ class ToolHandler:
         
         return {"status": "deleted", "tool_id": tool_name, "deleted_from": deleted}
 
-    async def _create_tool(
-        self, tool_name: str, location: str, category: Optional[str]
+    async def _sign_tool(
+        self, tool_name: str, location: str = "project", category: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Validate and register an existing tool file.
+        Validate and sign an existing tool file.
 
         Expects the tool file to already exist on disk.
-        This action validates the script, checks metadata, and adds a signature.
-        
-        Args:
-            tool_name: Name of the tool (snake_case)
-            location: "project" or "user"
-            category: Optional category subdirectory (for search hint)
+        This action validates the Python/metadata and signs the file.
+        Always allows re-signing - signatures are included in the validation chain.
         """
         if location not in ("project", "user"):
             return {
@@ -660,36 +674,43 @@ class ToolHandler:
                 "valid_locations": ["project", "user"],
             }
         
-        if location == "project":
-            search_base = self.project_path / ".ai" / "tools"
-        else:
-            search_base = get_user_space() / "tools"
+        # Find the tool file - try resolver first, then search by location
+        file_path = self.resolver.resolve(tool_name)
         
-        # Search for the tool file (all supported extensions)
-        file_path = None
-        supported_extensions = get_tool_extensions(self.project_path)
-        if search_base.exists():
-            for ext in supported_extensions:
-                for candidate in Path(search_base).rglob(f"{tool_name}{ext}"):
-                    if candidate.stem == tool_name:
-                        file_path = candidate
+        if not file_path or not file_path.exists():
+            # Search by location if resolver didn't find it
+            if location == "project":
+                search_base = self.project_path / ".ai" / "tools"
+            else:
+                search_base = get_user_space() / "tools"
+            
+            # Search for the tool file (all supported extensions)
+            supported_extensions = get_tool_extensions(self.project_path)
+            if search_base.exists():
+                for ext in supported_extensions:
+                    for candidate in Path(search_base).rglob(f"{tool_name}{ext}"):
+                        if candidate.stem == tool_name:
+                            file_path = candidate
+                            break
+                    if file_path:
                         break
-                if file_path:
-                    break
         
         if not file_path or not file_path.exists():
             category_hint = category or "utility"
+            supported_extensions = get_tool_extensions(self.project_path)
             ext_list = ", ".join(supported_extensions)
+            search_base_ref = search_base if 'search_base' in locals() else self.project_path / ".ai" / "tools"
             return {
                 "error": f"Tool file not found: {tool_name}",
                 "hint": f"Create the file first at .ai/tools/{category_hint}/{tool_name}<ext> (supported: {ext_list})",
-                "searched_in": str(search_base),
+                "searched_in": str(search_base_ref),
             }
         
         # Validate path structure
         from kiwi_mcp.utils.paths import validate_path_structure
+        determined_location = "project" if str(file_path).startswith(str(self.project_path)) else "user"
         path_validation = validate_path_structure(
-            file_path, "tool", location, self.project_path
+            file_path, "tool", determined_location, self.project_path
         )
         if not path_validation["valid"]:
             return {
@@ -699,16 +720,8 @@ class ToolHandler:
                 "solution": "File must be under .ai/tools/ with correct structure",
             }
         
+        # Read file content (may include existing signature)
         file_content = file_path.read_text()
-        
-        # Check if signature already exists - create fails if signature exists
-        existing_signature = MetadataManager.get_signature_info("tool", file_content, file_path=file_path, project_path=self.project_path)
-        if existing_signature:
-            return {
-                "error": f"Tool '{tool_name}' already validated",
-                "suggestion": "Use 'update' action to re-validate",
-                "path": str(file_path),
-            }
         
         # Extract and validate using schema
         try:
@@ -720,7 +733,7 @@ class ToolHandler:
                     "details": validation_result["issues"],
                     "warnings": validation_result.get("warnings", []),
                     "path": str(file_path),
-                    "solution": "Fix validation issues and re-run create action",
+                    "solution": "Fix validation issues and re-run sign action",
                 }
         except Exception as e:
             return {
@@ -728,13 +741,29 @@ class ToolHandler:
                 "path": str(file_path),
             }
         
-        # Compute unified integrity hash
-        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
+        # Strict version requirement - fail if missing
+        version = tool_meta.get("version")
+        if not version or version == "0.0.0":
+            return {
+                "error": "Tool validation failed",
+                "details": ['Tool is missing required version. Add at module level: __version__ = "1.0.0"'],
+                "path": str(file_path),
+                "solution": "Add version metadata and re-run sign action",
+            }
+        
+        # Compute unified integrity hash on content WITHOUT signature
+        # This allows re-signing to produce consistent hashes
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, MetadataManager
+        
+        # Remove existing signature before hashing (chained validation)
+        strategy = MetadataManager.get_strategy("tool", file_path=file_path, project_path=self.project_path)
+        content_without_sig = strategy.remove_signature(file_content)
+        
         content_hash = compute_unified_integrity(
             item_type="tool",
             item_id=tool_name,
-            version=tool_meta.get("version", "0.0.0"),
-            file_content=file_content,
+            version=version,
+            file_content=content_without_sig,  # Hash only original content, not signature
             file_path=file_path
         )
         
@@ -748,88 +777,14 @@ class ToolHandler:
         signature_info = MetadataManager.get_signature_info("tool", signed_content, file_path=file_path, project_path=self.project_path)
         
         return {
-            "status": "created",
+            "status": "signed",
             "tool_id": tool_name,
             "path": str(file_path),
-            "location": location,
+            "location": determined_location,
             "category": tool_meta.get("category"),
             "signature": signature_info,
         }
 
-    async def _update_tool(self, tool_name: str) -> Dict[str, Any]:
-        """
-        Re-validate and re-sign existing tool file.
-        
-        Reads from file path only, validates, and updates signature.
-        
-        Args:
-            tool_name: Name of the tool to re-validate
-        """
-        # Find existing file
-        file_path = self.resolver.resolve(tool_name)
-        if not file_path:
-            return {
-                "error": f"Tool '{tool_name}' not found",
-                "suggestion": "Use 'create' action for new tools",
-            }
-        
-        # Get current content from file
-        current_content = file_path.read_text()
-        
-        # Check if signature exists - update fails if signature missing
-        existing_signature = MetadataManager.get_signature_info("tool", current_content, file_path=file_path, project_path=self.project_path)
-        if not existing_signature:
-            return {
-                "error": f"Tool '{tool_name}' not validated",
-                "suggestion": "Use 'create' action to validate",
-                "path": str(file_path),
-            }
-        
-        # Remove signature for re-validation (file content only, no parameter content)
-        new_content = MetadataManager.get_strategy("tool", file_path=file_path, project_path=self.project_path).remove_signature(current_content)
-        
-        try:
-            file_path.write_text(new_content)
-            
-            tool_meta = extract_tool_metadata(file_path, self.project_path)
-            validation_result = validate_tool_metadata(tool_meta)
-            if not validation_result["valid"]:
-                file_path.write_text(current_content)
-                return {
-                    "error": "Tool validation failed",
-                    "details": validation_result["issues"],
-                    "warnings": validation_result.get("warnings", []),
-                    "path": str(file_path),
-                }
-        except Exception as e:
-            file_path.write_text(current_content)
-            return {"error": f"Failed to validate tool: {e}"}
-        
-        # Compute unified integrity hash
-        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
-        content_hash = compute_unified_integrity(
-            item_type="tool",
-            item_id=tool_name,
-            version=tool_meta.get("version", "0.0.0"),
-            file_content=new_content,
-            file_path=file_path
-        )
-        
-        # Sign the validated content with unified integrity hash
-        signed_content = MetadataManager.sign_content_with_hash(
-            "tool", new_content, content_hash, file_path=file_path, project_path=self.project_path
-        )
-        file_path.write_text(signed_content)
-        
-        # Get signature info for response
-        signature_info = MetadataManager.get_signature_info("tool", signed_content, file_path=file_path, project_path=self.project_path)
-        
-        return {
-            "status": "updated",
-            "tool_id": tool_name,
-            "path": str(file_path),
-            "signature": signature_info,
-        }
 
     async def _check_for_newer_version(
         self,

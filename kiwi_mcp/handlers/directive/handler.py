@@ -432,7 +432,7 @@ class DirectiveHandler:
                 if not signature_info:
                     directive_data["warning"] = {
                         "message": "Registry directive has no signature - content may be corrupted",
-                        "solution": "Use execute action 'update' or 'create' to re-validate the directive",
+                        "solution": "Use execute action 'sign' to re-validate the directive",
                     }
                     self.logger.warning(
                         f"Registry directive '{directive_name}' has no signature"
@@ -458,7 +458,7 @@ class DirectiveHandler:
                         return {
                             "error": f"Directive has no signature",
                             "path": str(file_path),
-                            "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
+                            "solution": "Use execute action 'sign' to re-validate the directive before copying",
                         }
 
                     # Determine category from source path
@@ -486,7 +486,7 @@ class DirectiveHandler:
                     if not signature_info:
                         directive_data["warning"] = {
                             "message": "Directive has no signature",
-                            "solution": "Use execute action 'update' or 'create' to re-validate",
+                            "solution": "Use execute action 'sign' to re-validate",
                         }
 
                     return directive_data
@@ -508,7 +508,7 @@ class DirectiveHandler:
                     return {
                         "error": f"Directive has no signature",
                         "path": str(file_path),
-                        "solution": "Use execute action 'update' or 'create' to re-validate the directive before copying",
+                        "solution": "Use execute action 'sign' to re-validate the directive before copying",
                     }
 
                 # Determine category from source path
@@ -536,7 +536,7 @@ class DirectiveHandler:
                 if not signature_info:
                     directive_data["warning"] = {
                         "message": "Directive has no signature",
-                        "solution": "Use execute action 'update' or 'create' to re-validate",
+                        "solution": "Use execute action 'sign' to re-validate",
                     }
 
                 return directive_data
@@ -550,7 +550,7 @@ class DirectiveHandler:
         Execute a directive or perform directive operation.
 
         Args:
-            action: "run", "publish", "delete", "create", "update", "link"
+            action: "run", "publish", "delete", "sign", "link"
             directive_name: Name of directive
             parameters: Directive inputs/parameters
 
@@ -566,14 +566,12 @@ class DirectiveHandler:
                 return await self._publish_directive(directive_name, parameters or {})
             elif action == "delete":
                 return await self._delete_directive(directive_name, parameters or {})
-            elif action == "create":
-                return await self._create_directive(directive_name, parameters or {})
-            elif action == "update":
-                return await self._update_directive(directive_name, parameters or {})
+            elif action == "sign":
+                return await self._sign_directive(directive_name, parameters or {})
             else:
                 return {
                     "error": f"Unknown action: {action}",
-                    "supported_actions": ["run", "publish", "delete", "create", "update"],
+                    "supported_actions": ["run", "publish", "delete", "sign"],
                 }
         except Exception as e:
             return {
@@ -676,7 +674,7 @@ class DirectiveHandler:
                     error_response["solution"] = {
                         "message": "Remove any content after the closing ``` in the directive file",
                         "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
-                        "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
+                        "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'sign' action",
                         "example": '```xml\n<directive name="example" version="1.0.0">\n  ...\n</directive>\n```',
                     }
                 return error_response
@@ -686,16 +684,13 @@ class DirectiveHandler:
             stored_hash = MetadataManager.get_signature_hash("directive", file_content, file_path=file_path, project_path=self.project_path)
 
             if not stored_hash:
-                has_pending = "kiwi-mcp:pending-validation" in file_content
                 return {
                     "error": "Directive has no signature",
                     "status": "missing",
                     "path": str(file_path),
-                    "hint": "Directives must be created via create_directive, not create_file"
-                    if has_pending
-                    else "Directive needs validation",
+                    "hint": "Directive needs validation",
                     "solution": (
-                        f"Run: execute(item_type='directive', action='create', "
+                        f"Run: execute(item_type='directive', action='sign', "
                         f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
                         f"project_path='{self.project_path}')"
                     ),
@@ -717,7 +712,7 @@ class DirectiveHandler:
                     "error": "Directive content has been modified since last validation",
                     "details": f"Integrity mismatch for {directive_name}@{directive_data.get('version')}: computed={short_hash(computed_hash)}, stored={short_hash(stored_hash)}",
                     "path": str(file_path),
-                    "solution": "Run execute(action='update', ...) to re-validate the directive",
+                    "solution": "Run execute(action='sign', ...) to re-validate the directive",
                 }
 
             # Extract process steps and inputs for execution
@@ -1039,14 +1034,13 @@ class DirectiveHandler:
         stored_hash = MetadataManager.get_signature_hash("directive", file_content)
 
         if not stored_hash:
-            has_pending = "kiwi-mcp:pending-validation" in file_content
             return {
                 "error": "Cannot publish: directive has no signature",
                 "status": "missing",
                 "path": str(file_path),
                 "hint": "Directives must be validated before publishing",
                 "solution": (
-                    f"Run: execute(item_type='directive', action='update', "
+                    f"Run: execute(item_type='directive', action='sign', "
                     f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
                     f"project_path='{self.project_path}')"
                 ),
@@ -1149,14 +1143,15 @@ class DirectiveHandler:
 
         return {"status": "deleted", "name": directive_name, "deleted_from": deleted}
 
-    async def _create_directive(
+    async def _sign_directive(
         self, directive_name: str, params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Validate and register an existing directive file.
+        Validate and sign an existing directive file.
 
         Expects the directive file to already exist on disk.
-        This action validates the XML, checks permissions, and adds a signature.
+        This action validates the XML, checks permissions, and signs the file.
+        Always allows re-signing - signatures are included in the validation chain.
         """
         location = params.get("location", "project")
         if location not in ("project", "user"):
@@ -1165,24 +1160,26 @@ class DirectiveHandler:
                 "valid_locations": ["project", "user"],
             }
 
-        # Find the directive file
-        if location == "project":
-            # Search in project directives
-            file_path = None
-            for search_path in [self.resolver.project_directives]:
-                for candidate in Path(search_path).rglob(f"*{directive_name}.md"):
+        # Find the directive file - try resolver first, then search by location
+        file_path = self.resolver.resolve(directive_name)
+        
+        if not file_path or not file_path.exists():
+            # Search by location if resolver didn't find it
+            if location == "project":
+                file_path = None
+                for search_path in [self.resolver.project_directives]:
+                    for candidate in Path(search_path).rglob(f"*{directive_name}.md"):
+                        if candidate.stem == directive_name:
+                            file_path = candidate
+                            break
+                    if file_path:
+                        break
+            else:
+                file_path = None
+                for candidate in Path(self.resolver.user_directives).rglob(f"*{directive_name}.md"):
                     if candidate.stem == directive_name:
                         file_path = candidate
                         break
-                if file_path:
-                    break
-        else:
-            # Search in user directives
-            file_path = None
-            for candidate in Path(self.resolver.user_directives).rglob(f"*{directive_name}.md"):
-                if candidate.stem == directive_name:
-                    file_path = candidate
-                    break
 
         if not file_path or not file_path.exists():
             return {
@@ -1208,17 +1205,8 @@ class DirectiveHandler:
                 "solution": "File must be under .ai/directives/ with correct structure",
             }
 
-        # Read and validate the file
+        # Read the file (with existing signature if present - we include it in validation)
         content = file_path.read_text()
-
-        # Check if signature already exists - create fails if signature exists
-        existing_signature = MetadataManager.get_signature_info("directive", content)
-        if existing_signature:
-            return {
-                "error": f"Directive '{directive_name}' already validated",
-                "suggestion": "Use 'update' action to re-validate",
-                "path": str(file_path),
-            }
 
         # Validate XML can be parsed
         try:
@@ -1285,7 +1273,7 @@ class DirectiveHandler:
                 if filename_issue:
                     parsed_name = directive_data["name"]
                     expected_filename = f"{parsed_name}.md"
-                    error_response["error"] = "Cannot create: filename and directive name mismatch"
+                    error_response["error"] = "Cannot sign: filename and directive name mismatch"
                     error_response["problem"] = {
                         "expected": expected_filename,
                         "actual": file_path.name,
@@ -1322,7 +1310,7 @@ class DirectiveHandler:
                     error_response["solution"] = {
                         "message": "Remove any content after the closing ``` in the directive file",
                         "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
-                        "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
+                        "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'sign' action",
                         "example": '```xml\n<directive name="example" version="1.0.0">\n  ...\n</directive>\n```',
                     }
 
@@ -1330,7 +1318,7 @@ class DirectiveHandler:
         except ValueError as e:
             # Convert parse validation error to structured response
             return {
-                "error": "Cannot create: filename and directive name mismatch",
+                "error": "Cannot sign: filename and directive name mismatch",
                 "details": str(e),
                 "path": str(file_path),
             }
@@ -1341,222 +1329,38 @@ class DirectiveHandler:
                 "file": str(file_path),
             }
 
-        # Compute unified integrity hash
+        # Strict version requirement - fail if missing
+        version = directive_data.get("version")
+        if not version or version == "0.0.0":
+            return {
+                "error": "Directive validation failed",
+                "details": ["Directive is missing required 'version' attribute. "
+                            'Add version attribute to <directive> tag: <directive name="..." version="1.0.0">'],
+                "path": str(file_path),
+                "solution": "Add version metadata and re-run sign action",
+            }
+        
+        # Compute unified integrity hash on content WITHOUT signature
+        # This allows re-signing to produce consistent hashes
         from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
         
-        # Compute unified integrity hash
+        # Remove existing signature before hashing (chained validation)
+        strategy = MetadataManager.get_strategy("directive")
+        content_without_sig = strategy.remove_signature(content)
+        
         content_hash = compute_unified_integrity(
             item_type="directive",
             item_id=directive_name,
-            version=directive_data.get("version", "0.0.0"),
-            file_content=content,
+            version=version,
+            file_content=content_without_sig,  # Hash only original content, not signature
             file_path=file_path,
-            metadata=None  # Let compute_unified_integrity extract what it needs consistently
+            metadata=None
         )
         
         # Generate and add signature for validated content with unified integrity hash
         signed_content = MetadataManager.sign_content_with_hash("directive", content, content_hash)
 
         # Update file with signature
-        file_path.write_text(signed_content)
-
-        # Get signature info for response
-        signature_info = MetadataManager.get_signature_info("directive", signed_content)
-        timestamp = signature_info["timestamp"] if signature_info else None
-
-        try:
-            directive = parse_directive_file(file_path)
-            category = directive.get("category", "unknown")
-        except:
-            category = "unknown"
-
-        result = {
-            "status": "created",
-            "name": directive_name,
-            "path": str(file_path),
-            "location": location,
-            "category": category,
-            "validated": True,
-            "signature": {"hash": content_hash, "timestamp": timestamp},
-            "integrity": content_hash,
-            "integrity_short": content_hash[:12],
-            "message": f"Directive validated and signed. Ready to use.",
-        }
-
-
-        return result
-
-    async def _update_directive(
-        self, directive_name: str, params: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Validate and update an existing directive file.
-
-        Expects the directive file to already exist on disk.
-        This action validates the XML, checks permissions, and updates the signature.
-        Uses the same pattern as _create_directive: works with file paths, not content strings.
-        """
-        # Find existing file
-        file_path = self.resolver.resolve(directive_name)
-        if not file_path:
-            return {
-                "error": f"Directive '{directive_name}' not found",
-                "suggestion": "Use 'create' action for new directives",
-            }
-
-        if not file_path.exists():
-            return {"error": f"Directive file not found: {directive_name}", "path": str(file_path)}
-
-        # Read the existing file
-        content = file_path.read_text()
-
-        # Check if signature exists - update fails if signature missing
-        existing_signature = MetadataManager.get_signature_info("directive", content)
-        if not existing_signature:
-            return {
-                "error": f"Directive '{directive_name}' not validated",
-                "suggestion": "Use 'create' action to validate",
-                "path": str(file_path),
-            }
-
-        # Validate XML can be parsed
-        try:
-            strategy = MetadataManager.get_strategy("directive")
-            xml_content = strategy.extract_content_for_hash(content)
-            if not xml_content:
-                return {
-                    "error": "No XML directive found in content",
-                    "hint": "Content must contain <directive>...</directive> XML block",
-                    "file": str(file_path),
-                }
-
-            ET.fromstring(xml_content)  # Validate XML syntax
-
-        except ET.ParseError as e:
-            # Use enhanced error formatting with context and suggestions
-            enhanced_error = format_error_with_context(
-                str(e),
-                xml_content,
-                str(file_path)
-            )
-            return {
-                "error": "Invalid directive XML",
-                "parse_error": enhanced_error,
-                "hint": "See parse_error field for detailed error message with line numbers and suggestions.",
-                "file": str(file_path),
-            }
-        except Exception as e:
-            return {
-                "error": "Failed to validate directive",
-                "details": str(e),
-                "file": str(file_path),
-            }
-
-        # Parse and validate
-        try:
-            directive_data = parse_directive_file(file_path)
-
-            # Validate using centralized validator and embed if valid
-            validation_result = await ValidationManager.validate_and_embed(
-                "directive", 
-                file_path, 
-                directive_data,
-                vector_store=self._vector_store,
-                item_id=directive_data.get("name")
-            )
-            if not validation_result["valid"]:
-                # Format error response with helpful details
-                error_response = {
-                    "error": "Directive validation failed",
-                    "details": validation_result["issues"],
-                    "path": str(file_path),
-                }
-
-                # Add filename mismatch details if applicable
-                filename_issue = next(
-                    (
-                        issue
-                        for issue in validation_result["issues"]
-                        if "filename" in issue.lower() or "mismatch" in issue.lower()
-                    ),
-                    None,
-                )
-                if filename_issue:
-                    file_directive_name = directive_data["name"]
-                    expected_filename = f"{file_directive_name}.md"
-                    error_response["error"] = "Cannot update: filename and directive name mismatch"
-                    error_response["problem"] = {
-                        "expected": expected_filename,
-                        "actual": file_path.name,
-                        "directive_name": file_directive_name,
-                        "path": str(file_path),
-                    }
-                    error_response["solution"] = {
-                        "message": "Filename must match the directive name attribute in XML",
-                        "option_1": f"Rename file: mv '{file_path}' '{file_path.parent / expected_filename}'",
-                        "option_2": f'Update XML: Change <directive name="{file_path.stem}" ...> in {file_path}',
-                        "option_3": f"Use edit_directive directive to fix",
-                    }
-                elif any("permission" in issue.lower() for issue in validation_result["issues"]):
-                    error_response["error"] = "Directive permissions not satisfied"
-                    error_response["permissions_required"] = directive_data.get("permissions", [])
-                elif any("model" in issue.lower() for issue in validation_result["issues"]):
-                    error_response["error"] = "Directive model not valid"
-                    model_data = directive_data.get("model") or directive_data.get("model_class")
-                    error_response["model_found"] = model_data
-                    error_response["hint"] = (
-                        "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
-                    )
-                elif any(
-                    "code block" in issue.lower()
-                    or "closing" in issue.lower()
-                    or "must end" in issue.lower()
-                    or "unexpected content" in issue.lower()
-                    for issue in validation_result["issues"]
-                ):
-                    error_response["error"] = "Directive XML structure not valid"
-                    error_response["hint"] = (
-                        "The directive XML must end with </directive> tag followed immediately by the closing ```. No content should appear after the closing tag."
-                    )
-                    error_response["solution"] = {
-                        "message": "Remove any content after the closing ``` in the directive file",
-                        "option_1": f"Use edit_directive directive: Run directive 'edit_directive' with directive_name='{directive_name}' to fix the XML structure",
-                        "option_2": f"Edit the file directly: Remove lines after ``` in {file_path}. Then revalidate the directive with 'update' or 'create' action",
-                        "example": '```xml\n<directive name="example" version="1.0.0">\n  ...\n</directive>\n```',
-                    }
-
-                return error_response
-        except ValueError as e:
-            # Convert parse validation error to structured response
-            return {
-                "error": "Cannot update: filename and directive name mismatch",
-                "details": str(e),
-                "path": str(file_path),
-            }
-        except Exception as e:
-            return {
-                "error": "Failed to validate directive metadata",
-                "details": str(e),
-                "file": str(file_path),
-            }
-
-        # Compute unified integrity hash
-        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
-        
-        # Compute unified integrity hash
-        content_hash = compute_unified_integrity(
-            item_type="directive",
-            item_id=directive_name,
-            version=directive_data.get("version", "0.0.0"),
-            file_content=content,
-            file_path=file_path,
-            metadata=None  # Let compute_unified_integrity extract what it needs consistently
-        )
-        
-        # Generate and add signature for validated content with unified integrity hash
-        signed_content = MetadataManager.sign_content_with_hash("directive", content, content_hash)
-
-        # Update file
         file_path.write_text(signed_content)
 
         # Get signature info for response
@@ -1573,15 +1377,15 @@ class DirectiveHandler:
         from kiwi_mcp.utils.paths import extract_category_path
         
         # Determine location
-        location = "project" if str(file_path).startswith(str(self.project_path)) else "user"
-        current_category = extract_category_path(file_path, "directive", location, self.project_path)
+        determined_location = "project" if str(file_path).startswith(str(self.project_path)) else "user"
+        current_category = extract_category_path(file_path, "directive", determined_location, self.project_path)
 
         # Handle category change: move file if category changed
         moved = False
         final_path = file_path
         if new_category and new_category != current_category and new_category != "unknown":
             # Determine new path based on project or user space
-            if location == "project":
+            if determined_location == "project":
                 # Build path from slash-separated category
                 new_dir = self.project_path / ".ai" / "directives"
                 if new_category:
@@ -1615,9 +1419,10 @@ class DirectiveHandler:
                     pass  # Directory not empty or other error, ignore
 
         result = {
-            "status": "updated",
+            "status": "signed",
             "name": directive_name,
             "path": str(final_path),
+            "location": determined_location,
             "category": new_category or current_category or "unknown",
             "validated": True,
             "signature": {"hash": content_hash, "timestamp": timestamp},
@@ -1638,6 +1443,5 @@ class DirectiveHandler:
                 "republish it to sync the category: "
                 f"execute(action='publish', item_id='{directive_name}', parameters={{'version': '...'}})"
             )
-
 
         return result

@@ -15,7 +15,7 @@ This document defines how Kiwi MCP implements **Threads** (LLM agent conversatio
 
 **Key Architectural Clarifications:**
 
-1. **Thread ID Handling (Three Layers)** - Base `spawn_thread` requires thread_id, `kiwi_harness` auto-generates, `thread_directive` tool wraps it all
+1. **Thread ID Handling (Three Layers)** - Base `spawn_thread` requires thread_id, `safety_harness` auto-generates, `thread_directive` tool wraps it all
 2. **Harness Lives IN Thread** - spawn_thread tool instantiates the harness; harness then calls MCP tools to execute
 3. **Sink Instantiation** - Tool executor instantiates sinks at chain resolution time; http_client stays pure primitive
 4. **Cost Budget Termination** - ANY limit exceeded = terminate (OR logic across max_turns, tokens, USD, context)
@@ -110,7 +110,7 @@ Before diving in, let's define the core components:
 │  • Has NO thread logic - just loads and returns data                         │
 │  • Think: "dumb data router"                                                 │
 │                                                                              │
-│  Harness (kiwi_harness package)                                              │
+│  Harness (safety_harness package)                                              │
 │  • Python library that implements the agent loop                             │
 │  • Instantiated by spawn_thread tool                                         │
 │  • Lives IN a thread context (not outside it)                                │
@@ -146,7 +146,7 @@ Before diving in, let's define the core components:
 
 ### Key Architectural Principles
 
-1. **Kernel Stays Dumb**: 
+1. **Kernel Stays Dumb**:
    - MCP kernel has NO thread logic - it only loads and returns data
    - Thread spawning is a tool call, not kernel behavior
    - Kernel forwards capability tokens opaquely, never interprets them
@@ -220,7 +220,7 @@ This means:
 │  │  • Runs the agentic loop (call LLM → interpret → execute → repeat)      │ │
 │  │  • Philosophy-agnostic (can be nothing→something or everything→something)│ │
 │  │                                                                          │ │
-│  │  kiwi_harness (our implementation):                                      │ │
+│  │  safety_harness (our implementation):                                      │ │
 │  │  • Uses Kiwi's everything→something philosophy                          │ │
 │  │  • System prompt = AGENTS.md (universal)                                │ │
 │  │  • Permissions = from directive being executed                          │ │
@@ -329,7 +329,7 @@ The http_client receives pre-instantiated sink objects from the tool executor an
 ```python
 async def _execute_stream(self, config: Dict, params: Dict) -> HttpResult:
     """Execute streaming HTTP request with destination fan-out.
-    
+
     Sinks are pre-instantiated by the tool executor BEFORE http_client execution
     (during chain resolution). They are passed to http_client via __sinks parameter.
     See tool chain resolution section above for sink instantiation logic.
@@ -337,7 +337,7 @@ async def _execute_stream(self, config: Dict, params: Dict) -> HttpResult:
 
     # Extract pre-instantiated sinks from params (provided by tool executor)
     sinks = params.pop("__sinks", [])
-    
+
     # Determine if we should buffer for return
     should_buffer = any(isinstance(s, ReturnSink) for s in sinks)
     buffered_events = [] if should_buffer else None
@@ -375,6 +375,7 @@ async def _execute_stream(self, config: Dict, params: Dict) -> HttpResult:
 ```
 
 **Key points:**
+
 - http_client is a pure primitive - it receives sinks, doesn't load/instantiate them
 - Sinks passed via `__sinks` parameter from tool executor
 - EnvManager handles Python dependencies (websockets, etc.) at instantiation time
@@ -462,15 +463,15 @@ Sink instantiation happens **before http_client execution** by the tool executor
 # In tool executor during chain resolution
 async def resolve_tool_chain(self, tool_id: str, params: dict) -> Any:
     """Resolve and execute tool chain with sink instantiation."""
-    
+
     # Load the tool chain (e.g., anthropic_thread → anthropic_messages → http_client)
     tool_config = await self.load_tool(tool_id)
-    
+
     # If this tool uses streaming, instantiate sinks
     if tool_config.get("config", {}).get("stream"):
         destinations = tool_config["config"]["stream"]["destinations"]
         sinks = []
-        
+
         for dest in destinations:
             if dest["type"] == "return":
                 # Built-in sink (no tool loading needed)
@@ -484,10 +485,10 @@ async def resolve_tool_chain(self, tool_id: str, params: dict) -> Any:
                     dependencies=sink_tool.get("dependencies", [])
                 )
                 sinks.append(sink_instance)
-        
+
         # Add sinks to params for http_client
         params["__sinks"] = sinks
-    
+
     # Execute the tool chain
     return await self.execute_primitive(tool_config, params)
 ```
@@ -635,10 +636,10 @@ Thread tools add thread-specific concerns: transcript storage, thread IDs, defau
 **Thread ID Handling (Three Layers):** Thread ID handling has three distinct layers. See Appendix A.1 for details.
 
 - **Base spawn_thread tool**: Accepts `thread_id` as **required** parameter with permissive validation (alphanumeric, underscore, hyphen)
-- **kiwi_harness tool**: Kiwi harness implementation entry point, auto-generates structured IDs (`directive_name_YYYYMMDD_HHMMSS`), does NOT expose thread_id parameter
+- **safety_harness tool**: Safety harness implementation entry point, auto-generates structured IDs (`directive_name_YYYYMMDD_HHMMSS`), does NOT expose thread_id parameter
 - **thread_directive tool**: High-level directive→thread orchestrator that LLMs call, does NOT expose thread_id parameter
 
-This layering allows flexibility: other harnesses can use base spawn_thread with their own ID schemes, while kiwi_harness enforces structured IDs.
+This layering allows flexibility: other harnesses can use base spawn_thread with their own ID schemes, while safety_harness enforces structured IDs.
 
 ```yaml
 # .ai/tools/threads/anthropic_thread.yaml
@@ -662,7 +663,7 @@ parameters:
     type: string
     required: true
     description: "Unique thread identifier (permissive: alphanumeric, underscore, hyphen)"
-    # Note: kiwi_harness auto-generates this; base layer just validates format
+    # Note: safety_harness auto-generates this; base layer just validates format
   - name: model
     type: string
     default: "claude-sonnet-4-20250514"
@@ -704,14 +705,14 @@ The agent loop lives **outside MCP core**. The harness is a library/CLI that:
 4. Feeds results back into next LLM call
 5. Handles termination conditions
 
-### Generic Harness vs kiwi_harness
+### Generic Harness vs safety_harness
 
 **Generic harness**: Philosophy-agnostic. Can be configured either way:
 
 - **Nothing → something**: Provide explicit tool list, custom system prompt
 - **Everything → something**: Provide directive, inherit from Kiwi
 
-**kiwi_harness**: Our opinionated implementation using Kiwi philosophy:
+**safety_harness**: Our opinionated implementation using Kiwi philosophy:
 
 - System prompt: Always `AGENTS.md` (universal identity)
 - Tools exposed to LLM: Always 4 meta-tools (search, load, execute, help)
@@ -740,7 +741,7 @@ The user says "run directive X". The kernel **always returns the directive**. Th
 │  Option B: Spawn managed thread                                          │
 │    → LLM calls: execute(tool, run, thread_directive, {...})              │
 │    → Thread ID auto-generated: deploy_staging_20260125_103045            │
-│    → New thread spawns with full Kiwi harness                            │
+│    → New thread spawns with full Safety harness                            │
 │    → Capability tokens enforced (LLM runs inside MCP)                    │
 │    → Cost tracking, loop detection, intervention available               │
 │    → Caller can monitor/intervene via thread tools                       │
@@ -752,7 +753,7 @@ The user says "run directive X". The kernel **always returns the directive**. Th
 
 ### Thread ID: Auto-Generated by Harness
 
-**kiwi_harness auto-generates thread IDs.** The LLM does NOT provide thread IDs. This ensures:
+**safety_harness auto-generates thread IDs.** The LLM does NOT provide thread IDs. This ensures:
 
 - **Consistent naming**: All threads follow `directive_name_YYYYMMDD_HHMMSS` pattern
 - **Sortable by time**: Easy to find recent threads
@@ -760,7 +761,7 @@ The user says "run directive X". The kernel **always returns the directive**. Th
 - **No LLM input required**: Harness controls the ID, preventing collisions
 
 ```python
-# kiwi_harness generates thread IDs automatically
+# safety_harness generates thread IDs automatically
 def generate_thread_id(directive_name: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{directive_name}_{timestamp}"
@@ -779,27 +780,27 @@ parameters:
     type: string
     required: true
     description: "Thread identifier (alphanumeric, underscore, hyphen allowed)"
-    # kiwi_harness auto-generates this; other harnesses can provide their own
+    # safety_harness auto-generates this; other harnesses can provide their own
   - name: initial_message
     type: string
     required: true
 ```
 
-### kiwi_harness Implementation
+### safety_harness Implementation
 
 ```python
-# kiwi_harness/runner.py (EXTERNAL to MCP core)
+# safety_harness/runner.py (EXTERNAL to MCP core)
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import json
 
-from agent_harness.runner import BaseHarnessRunner, HarnessResult, TokenUsage
-from agent_harness.stream_parser import ContentBlock
-from kiwi_harness.capabilities import permissions_to_caps, mint_token, CapabilityDeniedError
-from kiwi_harness.cost import CostBudget, CostTracker
-from kiwi_harness.context import ThreadContext, ContextTracker
+from base_harness.runner import BaseHarnessRunner, HarnessResult, TokenUsage
+from base_harness.stream_parser import ContentBlock
+from safety_harness.capabilities import permissions_to_caps, mint_token, CapabilityDeniedError
+from safety_harness.cost import CostBudget, CostTracker
+from safety_harness.context import ThreadContext, ContextTracker
 
 
 # Response messages extracted for easier management
@@ -899,9 +900,9 @@ class ContextBudget:
         )
 
 
-class KiwiHarnessRunner(BaseHarnessRunner):
+class SafetyHarnessRunner(BaseHarnessRunner):
     """
-    Kiwi-specific harness using the "everything → something" philosophy.
+    Safety harness using the "everything → something" philosophy with guardrails.
 
     Features:
     - System prompt = AGENTS.md (universal)
@@ -911,7 +912,7 @@ class KiwiHarnessRunner(BaseHarnessRunner):
     - Context tracking to prevent exceeding model limits
     - Thread registry via data-driven tool (A.5)
     - Loop detection and intervention signals
-    
+
     Permissions are hierarchical:
     - Core system directives (thread_directive) have broad permissions
     - User directives run with their own (more limited) permissions
@@ -934,7 +935,7 @@ class KiwiHarnessRunner(BaseHarnessRunner):
         """
         Run a directive on a new thread.
 
-        This is the Kiwi-specific entry point that:
+        This is the safety harness entry point that:
         1. Auto-generates thread_id from directive_name + timestamp (A.1)
         2. Loads and parses the directive
         3. Mints capability token from <permissions> (A.2)
@@ -1363,6 +1364,7 @@ class ResponseMessages:
 2. **thread_directive tool** - `.ai/tools/orchestration/thread_directive.yaml` - Executable tool for spawning directives on managed threads
 
 **Critical distinction:**
+
 - `run_directive` is a DIRECTIVE that provides guidance to LLMs about directive execution patterns
 - `thread_directive` is the TOOL that LLMs actually call to spawn managed threads
 - There is NO tool named `run_directive` - this would cause confusion with the directive
@@ -1381,24 +1383,24 @@ The `run_directive` directive provides LLMs with detailed guidance on running di
     <description>Guide for running directives with execution mode selection</description>
     <category>core</category>
     <author>kiwi-mcp</author>
-    
+
     <model tier="general" fallback="reasoning" parallel="false">
       Directive execution orchestration with mode selection logic
     </model>
-    
+
     <cost>
       <max_turns>10</max_turns>
       <max_total_tokens>50000</max_total_tokens>
       <on_exceeded>stop</on_exceeded>
     </cost>
-    
+
     <permissions>
       <read resource="filesystem" path="**/*"/>
       <execute resource="kiwi-mcp" action="execute"/>
       <execute resource="kiwi-mcp" action="load"/>
       <execute resource="kiwi-mcp" action="search"/>
     </permissions>
-    
+
     <relationships>
       <suggests>thread_directive</suggests>
       <suggests>create_directive</suggests>
@@ -1426,15 +1428,15 @@ The `run_directive` directive provides LLMs with detailed guidance on running di
       <description>Decide execution mode based on directive complexity</description>
       <action>
         Analyze directive metadata:
-        
+
         For simple directives (1-3 steps, no orchestration):
           → Follow steps in current context (Pattern A)
           → No thread spawning needed
-          
+
         For complex directives (has &lt;cost&gt;, orchestrator tier):
           → Spawn managed thread using thread_directive tool (Pattern B)
           → Provides cost tracking, isolation, intervention
-          
+
         Required for spawning:
           • &lt;cost&gt; tag with max_turns and on_exceeded (REQUIRED)
           • &lt;permissions&gt; tag (REQUIRED)
@@ -1456,7 +1458,7 @@ The `run_directive` directive provides LLMs with detailed guidance on running di
                 "initial_message": "{initial_message}"
             }
         )
-        
+
         Returns: thread_id immediately (async execution)
         Monitor via: thread_registry tool or transcript file
       </action>
@@ -1498,6 +1500,7 @@ execute(directive, run, "deploy_staging", {
 ```
 
 **What happens:**
+
 - Kernel returns directive data immediately (process steps, permissions, etc.)
 - LLM follows steps in current context
 - No new thread spawned
@@ -1505,12 +1508,14 @@ execute(directive, run, "deploy_staging", {
 - No capability token enforcement (if LLM is already outside MCP)
 
 **Use when:**
+
 - Simple directives (1-3 steps)
 - Already in a managed thread context
 - No need for isolation or intervention
 - Directive doesn't have `<cost>` tag
 
 **Example:**
+
 ```python
 # Load and follow a simple formatting directive
 result = execute(directive, run, "format_code", {
@@ -1529,13 +1534,15 @@ execute(tool, run, "thread_directive", {
 ```
 
 **What happens:**
+
 - `thread_directive` tool validates directive has ALL required metadata
-- Spawns new managed thread with kiwi_harness
+- Spawns new managed thread with safety_harness
 - Full harness with cost tracking and capability tokens
 - Returns thread_id immediately (async execution)
 - Thread runs independently in background
 
 **Use when:**
+
 - Complex directives (orchestrators, multi-step workflows)
 - Need cost tracking and budget enforcement
 - Want isolation and permission enforcement
@@ -1543,6 +1550,7 @@ execute(tool, run, "thread_directive", {
 - Directive has `<cost>` tag (REQUIRED for spawning)
 
 **Example:**
+
 ```python
 # Spawn a long-running deployment on a managed thread
 result = execute(tool, run, "thread_directive", {
@@ -1555,16 +1563,16 @@ result = execute(tool, run, "thread_directive", {
 
 **Comparison:**
 
-| Aspect               | Pattern A (Direct)        | Pattern B (Managed Thread) |
-| -------------------- | ------------------------- | -------------------------- |
-| Execution            | Synchronous, inline       | Asynchronous, background   |
-| Cost tracking        | No                        | Yes (REQUIRED)             |
-| Capability tokens    | No enforcement            | Full enforcement           |
-| Isolation            | Shares caller context     | Isolated thread context    |
-| Intervention         | Not available             | Can pause/resume/monitor   |
-| Returns              | Directive data            | thread_id                  |
-| Use case             | Simple, quick tasks       | Complex, long-running      |
-| Directive `<cost>`   | Optional                  | REQUIRED                   |
+| Aspect             | Pattern A (Direct)    | Pattern B (Managed Thread) |
+| ------------------ | --------------------- | -------------------------- |
+| Execution          | Synchronous, inline   | Asynchronous, background   |
+| Cost tracking      | No                    | Yes (REQUIRED)             |
+| Capability tokens  | No enforcement        | Full enforcement           |
+| Isolation          | Shares caller context | Isolated thread context    |
+| Intervention       | Not available         | Can pause/resume/monitor   |
+| Returns            | Directive data        | thread_id                  |
+| Use case           | Simple, quick tasks   | Complex, long-running      |
+| Directive `<cost>` | Optional              | REQUIRED                   |
 
 ---
 
@@ -1573,7 +1581,7 @@ result = execute(tool, run, "thread_directive", {
 Thread spawning has three tool layers (see Appendix A.1 for full details):
 
 1. **Base spawn_thread** - Primitive tool requiring `thread_id` parameter
-2. **kiwi_harness** - Kiwi harness implementation entry point that auto-generates thread IDs
+2. **safety_harness** - Safety harness implementation entry point that auto-generates thread IDs
 3. **thread_directive** - High-level directive→thread orchestrator (what LLMs call)
 
 #### Base spawn_thread Tool
@@ -1589,7 +1597,7 @@ description: "Spawn a new managed thread to execute a directive"
 executor_id: python
 
 config:
-  module: "kiwi_harness.spawn"
+  module: "safety_harness.spawn"
   function: "spawn_thread_base"
   timeout: 3600 # 1 hour max
   background: true # Don't block caller
@@ -1635,21 +1643,21 @@ parameters:
 # }
 ```
 
-#### kiwi_harness Tool (Kiwi Harness Implementation Layer)
+#### safety_harness Tool (Safety Harness Implementation Layer)
 
-The `kiwi_harness` tool is the entry point for the Kiwi harness implementation. It auto-generates thread IDs and instantiates KiwiHarnessRunner:
+The `safety_harness` tool is the entry point for the Safety harness implementation. It auto-generates thread IDs and instantiates SafetyHarnessRunner:
 
 ```yaml
-# kiwi_harness/tools/kiwi_harness.yaml (or included in harness package)
-tool_id: kiwi_harness
+# safety_harness/tools/safety_harness.yaml (or included in harness package)
+tool_id: safety_harness
 tool_type: runtime
 version: "1.0.0"
-description: "Kiwi harness implementation - spawns directive on managed thread"
+description: "Safety harness implementation - spawns directive on managed thread"
 executor_id: python
 
 config:
-  module: "kiwi_harness.spawn"
-  function: "spawn_with_kiwi_harness"
+  module: "safety_harness.spawn"
+  function: "spawn_with_safety_harness"
 
 parameters:
   - name: directive_name
@@ -1684,9 +1692,9 @@ parameters:
 # }
 ```
 
-When LLMs use kiwi_harness, they typically call `thread_directive` (Layer 3), which validates and calls `kiwi_harness`.
+When LLMs use safety_harness, they typically call `thread_directive` (Layer 3), which validates and calls `safety_harness`.
 
-**Important:** Both `spawn_thread` and `kiwi_harness` are **async spawn operations**. They return immediately after starting the thread in the background. The spawned thread runs independently, and the caller gets a thread_id for monitoring/intervention.
+**Important:** Both `spawn_thread` and `safety_harness` are **async spawn operations**. They return immediately after starting the thread in the background. The spawned thread runs independently, and the caller gets a thread_id for monitoring/intervention.
 
 To wait for thread completion, use thread monitoring tools or check the thread registry for status updates (see Layer 8.5).
 
@@ -1718,10 +1726,10 @@ To wait for thread completion, use thread monitoring tools or check the thread r
 │                                      │                                       │
 │                                      ▼                                       │
 │  ┌─────────────────────────────────────────────────────────────────────────┐ │
-│  │  kiwi_harness.spawn.spawn_with_kiwi_harness():                           │ │
+│  │  safety_harness.spawn.spawn_with_safety_harness():                           │ │
 │  │                                                                           │ │
 │  │  1. Generate thread_id = "deploy_staging_20260125_103045"                │ │
-│  │  2. Instantiate KiwiHarnessRunner(project_path, mcp_client)              │ │
+│  │  2. Instantiate SafetyHarnessRunner(project_path, mcp_client)              │ │
 │  │  3. Call spawn_thread tool with runner_instance                          │ │
 │  │  4. Return {"thread_id": "...", "status": "spawned"}                     │ │
 │  └───────────────────────────────────┬─────────────────────────────────────┘ │
@@ -1752,10 +1760,10 @@ execute(tool, run, thread_directive, {...})  ← LLM makes this call explicitly
 spawn_thread.yaml (data-driven config)
     │
     ▼
-python primitive (kiwi_harness.spawn)
+python primitive (safety_harness.spawn)
     │
     ▼
-kiwi_harness.runner (agent loop)
+safety_harness.runner (agent loop)
     │
     ├──► anthropic_thread.yaml (LLM calls)
     │        │
@@ -1915,7 +1923,7 @@ The harness architecture has two layers:
 │                         HARNESS HIERARCHY                                    │
 │                                                                              │
 │  ┌────────────────────────────────────────────────────────────────────────┐ │
-│  │                    Generic Agent Harness (Base)                         │ │
+│  │                    Generic Base Harness (Base)                         │ │
 │  │                                                                          │ │
 │  │  • Stream parsing (SSE events → structured data)                        │ │
 │  │  • Tool call detection and accumulation                                  │ │
@@ -1923,14 +1931,14 @@ The harness architecture has two layers:
 │  │  • Agent loop mechanics (call LLM → execute tools → repeat)             │ │
 │  │  • Philosophy-agnostic (works with any tool set)                        │ │
 │  │                                                                          │ │
-│  │  Package: agent_harness/                                                │ │
+│  │  Package: base_harness/                                                │ │
 │  │  Anyone can use this to build their own agent                           │ │
 │  └────────────────────────────────────────────────────────────────────────┘ │
 │                                  │                                           │
 │                                  │ extends                                   │
 │                                  ▼                                           │
 │  ┌────────────────────────────────────────────────────────────────────────┐ │
-│  │                    Kiwi Harness (Our Implementation)                    │ │
+│  │                    Safety Harness (Our Implementation)                    │ │
 │  │                                                                          │ │
 │  │  • Uses Kiwi's "everything → something" philosophy                      │ │
 │  │  • System prompt = AGENTS.md (universal)                                │ │
@@ -1940,8 +1948,8 @@ The harness architecture has two layers:
 │  │  • Loop detection and intervention signals                              │ │
 │  │  • Annealing integration                                                │ │
 │  │                                                                          │ │
-│  │  Package: kiwi_harness/                                                 │ │
-│  │  Built on top of agent_harness for Kiwi-specific behavior              │ │
+│  │  Package: safety_harness/                                                 │ │
+│  │  Built on top of base_harness for safety features (cost, permissions) │ │
 │  └────────────────────────────────────────────────────────────────────────┘ │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -1950,7 +1958,7 @@ The harness architecture has two layers:
 **Why this separation?**
 
 - The generic harness is useful for anyone building agents with streaming LLMs
-- The Kiwi harness adds our philosophy without polluting the base
+- The Safety harness adds our philosophy without polluting the base
 - Others can build their own harness implementations on top of the generic base
 - Testing is easier (test base mechanics separately from Kiwi logic)
 
@@ -2021,8 +2029,8 @@ When any harness calls the LLM, the response is **streamed via SSE**. This creat
 The generic harness provides stream parsing that works with any LLM provider. This is **not Kiwi-specific**:
 
 ```python
-# agent_harness/stream_parser.py
-# GENERIC - Can be used by anyone building an agent harness
+# base_harness/stream_parser.py
+# GENERIC - Can be used by anyone building an base harness
 
 from dataclasses import dataclass, field
 from typing import Optional, List, Protocol
@@ -2203,8 +2211,8 @@ class StreamParser:
 The base harness runner provides the agent loop mechanics without any specific tool philosophy:
 
 ```python
-# agent_harness/runner.py
-# GENERIC - Base class for building agent harnesses
+# base_harness/runner.py
+# GENERIC - Base class for building base harnesses
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -2237,7 +2245,7 @@ class ToolExecutor(Protocol):
 
 class BaseHarnessRunner(ABC):
     """
-    Base agent harness runner.
+    Base base harness runner.
 
     GENERIC: Provides the agent loop mechanics.
     Subclass this to add your specific tool set and philosophy.
@@ -2365,11 +2373,11 @@ class BaseHarnessRunner(ABC):
         return ""
 ```
 
-### Kiwi Harness Runner (Our Implementation)
+### Safety Harness Runner (Our Implementation)
 
-The Kiwi harness extends the generic base with our "everything → something" philosophy.
+The Safety harness extends the generic base with our "everything → something" philosophy.
 
-**See Layer 4 above for the canonical `KiwiHarnessRunner` implementation**, which includes:
+**See Layer 4 above for the canonical `SafetyHarnessRunner` implementation**, which includes:
 
 - Full `run_directive()` method with cost and context tracking
 - All abstract method implementations (`_get_tools`, `_execute_tool_calls`, `_should_terminate`, `_call_llm`)
@@ -2377,7 +2385,7 @@ The Kiwi harness extends the generic base with our "everything → something" ph
 
 The key differences from `BaseHarnessRunner`:
 
-| Method                  | Base Harness | Kiwi Harness                      |
+| Method                  | Base Harness | Safety Harness                      |
 | ----------------------- | ------------ | --------------------------------- |
 | `_get_tools()`          | Abstract     | Returns 4 Kiwi meta-tools         |
 | `_execute_tool_calls()` | Abstract     | Adds `__auth` capability token    |
@@ -2396,7 +2404,7 @@ Both harness packages live in the **kiwi-mcp repository** and are bootstrapped t
 │  In kiwi-mcp repo (source of truth):                                         │
 │  ────────────────────────────────────                                        │
 │                                                                              │
-│  agent_harness/                  # GENERIC - Anyone can use this            │
+│  base_harness/                  # GENERIC - Anyone can use this            │
 │  ├── __init__.py                                                            │
 │  ├── stream_parser.py            # SSE parsing, tool call accumulation      │
 │  │   ├── ContentBlock            # Single content block from stream         │
@@ -2415,12 +2423,12 @@ Both harness packages live in the **kiwi-mcp repository** and are bootstrapped t
 │          ├── _should_terminate() # Abstract: termination check              │
 │          └── _call_llm()         # Abstract: call LLM provider              │
 │                                                                              │
-│  kiwi_harness/                   # KIWI-SPECIFIC - Our philosophy           │
+│  safety_harness/                   # SAFETY - Adds guardrails and enforcement │
 │  ├── __init__.py                                                            │
-│  ├── runner.py                   # KiwiHarnessRunner (extends base)         │
-│  │   └── KiwiHarnessRunner                                                  │
-│  │       ├── run_directive()     # Kiwi entry point (loads directive)      │
-│  │       ├── _get_tools()        # Returns 4 Kiwi meta-tools               │
+│  ├── runner.py                   # SafetyHarnessRunner (extends base)         │
+│  │   └── SafetyHarnessRunner                                                  │
+│  │       ├── run_directive()     # Safety harness entry point (loads directive) │
+│  │       ├── _get_tools()        # Returns 4 Kiwi meta-tools (via base)    │
 │  │       ├── _execute_tool_calls()  # Permission-checked execution         │
 │  │       ├── _should_terminate() # Checks cost budget                       │
 │  │       └── _call_llm()         # Uses anthropic_thread tool              │
@@ -2434,8 +2442,8 @@ Both harness packages live in the **kiwi-mcp repository** and are bootstrapped t
 │                                                                              │
 │  ~/.ai/                                                                      │
 │  ├── harness/                    # Harness packages installed here          │
-│  │   ├── agent_harness/          # Generic base harness                     │
-│  │   └── kiwi_harness/           # Kiwi-specific harness                    │
+│  │   ├── base_harness/          # Generic base harness                     │
+│  │   └── safety_harness/           # Safety harness (adds guardrails)         │
 │  ├── tools/                      # Core tools (sinks, threads, etc.)        │
 │  ├── directives/                 # User-level directives                    │
 │  └── ...                                                                     │
@@ -2450,9 +2458,9 @@ Both harness packages live in the **kiwi-mcp repository** and are bootstrapped t
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Directive Context Extraction (Kiwi-Specific)
+### Directive Context Extraction (Safety-Specific)
 
-The Kiwi harness maintains a `ThreadContext` that holds the directive being executed. This is critical for:
+The Safety harness maintains a `ThreadContext` that holds the directive being executed. This is critical for:
 
 1. **Capability tokens (A.2)** - Minted from directive's `<permissions>`, attached to all tool calls
 2. **Cost tracking (A.4)** - Token usage is tracked against the directive's cost budget (REQUIRED)
@@ -2460,7 +2468,7 @@ The Kiwi harness maintains a `ThreadContext` that holds the directive being exec
 4. **Annealing** - Failures are attributed to the specific directive
 
 ```python
-# kiwi_harness/context.py
+# safety_harness/context.py
 
 @dataclass
 class ThreadContext:
@@ -2574,11 +2582,11 @@ See **Appendix A.4** for validation details and error message patterns.
 </directive>
 ```
 
-### Cost Budget Implementation (Kiwi-Specific)
+### Cost Budget Implementation (Safety-Specific)
 
 ```python
-# kiwi_harness/cost.py
-# KIWI-SPECIFIC - Cost tracking for directive budgets
+# safety_harness/cost.py
+# SAFETY-SPECIFIC - Cost tracking for directive budgets
 
 from dataclasses import dataclass
 from typing import Optional
@@ -2728,7 +2736,7 @@ class CostTracker:
         }
 ```
 
-### The Complete Data Flow (Kiwi Harness)
+### The Complete Data Flow (Safety Harness)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -2831,6 +2839,7 @@ Key insight: **The LLM doesn't wait for us.** It streams its entire response. We
 See **[PERMISSION_MODEL.md](./PERMISSION_MODEL.md)** for complete token lifecycle and enforcement details.
 
 **Complete documentation includes:**
+
 - Token lifecycle and structure
 - Thread-scoped vs nested directive execution
 - Path-based permission scoping
@@ -2925,8 +2934,8 @@ Understanding where the LLM runs is critical for permission enforcement:
 │     ├── Still useful for thread management, cost tracking                    │
 │     └── Permission enforcement is OPTIONAL (not recommended)                 │
 │                                                                              │
-│  3. LLM INSIDE MCP - Kiwi Harness (our opinionated implementation)           │
-│     ├── LLM runs INSIDE MCP via kiwi_harness                                 │
+│  3. LLM INSIDE MCP - Safety Harness (our opinionated implementation)           │
+│     ├── LLM runs INSIDE MCP via safety_harness                                 │
 │     ├── Capability tokens REQUIRED                                           │
 │     ├── Tool-layer validation of tokens                                      │
 │     ├── Cost tracking, loop detection, intervention                          │
@@ -3268,10 +3277,10 @@ async def spawn_thread_base(
     project_path: Optional[str] = None
 ) -> dict:
     """Spawn a new managed thread (base implementation).
-    
+
     Returns immediately with thread_id. Thread runs in background.
     """
-    
+
     # 1. Validate thread_id doesn't exist
     existing = await thread_registry.get(thread_id)
     if existing:
@@ -3281,7 +3290,7 @@ async def spawn_thread_base(
             "code": "THREAD_ID_COLLISION",
             "thread_id": thread_id
         }
-    
+
     # 2. Register thread immediately (status: spawning)
     registry_id = await thread_registry.register({
         "thread_id": thread_id,
@@ -3290,12 +3299,12 @@ async def spawn_thread_base(
         "created_at": datetime.now().isoformat(),
         "project_path": project_path
     })
-    
+
     # 3. Start thread in background (asyncio.create_task or subprocess)
     asyncio.create_task(
         _run_thread_async(thread_id, directive_name, initial_message, project_path)
     )
-    
+
     # 4. Return immediately to caller
     return {
         "success": True,
@@ -3310,7 +3319,7 @@ async def spawn_thread_base(
 
 async def _run_thread_async(
     thread_id: str,
-    directive_name: str, 
+    directive_name: str,
     initial_message: str,
     project_path: Optional[str]
 ):
@@ -3318,24 +3327,24 @@ async def _run_thread_async(
     try:
         # Update status to running
         await thread_registry.update_status(thread_id, "running")
-        
+
         # Instantiate and run harness
-        harness = KiwiHarnessRunner(
+        harness = SafetyHarnessRunner(
             mcp_executor=get_mcp_client(),
             project_path=project_path
         )
-        
+
         result = await harness.run_directive(
             directive_name=directive_name,
             initial_message=initial_message
         )
-        
+
         # Update status to completed
         await thread_registry.update_status(thread_id, "completed", {
             "usage": result.total_usage.__dict__,
             "turn_count": result.turn_count
         })
-        
+
     except Exception as e:
         # Update status to error
         await thread_registry.update_status(thread_id, "error", {
@@ -3369,6 +3378,7 @@ events = await thread_registry.get_events(thread_id, limit=50)
 ```
 
 **Tool Configuration:**
+
 ```yaml
 # .ai/tools/threads/thread_registry.yaml
 tool_id: thread_registry
@@ -3382,7 +3392,7 @@ description: "Query and manage thread registry (privileged harness tool)"
 
 config:
   db_path: ".ai/threads/registry.db"
-  
+
 actions:
   - name: get_status
     description: "Get current status of a thread"
@@ -3390,7 +3400,7 @@ actions:
       - name: thread_id
         type: string
         required: true
-    
+
   - name: query
     description: "Query threads by criteria"
     parameters:
@@ -3403,7 +3413,7 @@ actions:
       - name: limit
         type: integer
         default: 10
-        
+
   - name: get_events
     description: "Get thread events (tool calls, errors, etc.)"
     parameters:
@@ -3427,15 +3437,15 @@ from pathlib import Path
 def read_transcript(thread_id: str):
     """Read thread transcript (works while thread is running)."""
     transcript_path = Path(f".ai/threads/{thread_id}/transcript.jsonl")
-    
+
     if not transcript_path.exists():
         return []
-    
+
     events = []
     with open(transcript_path, "r") as f:
         for line in f:
             events.append(json.loads(line))
-    
+
     return events
 
 # Get latest events
@@ -3445,6 +3455,7 @@ print(f"Thread is on turn {latest_turn}")
 ```
 
 Example transcript format:
+
 ```jsonl
 {"ts":"2026-01-25T10:00:00Z","type":"turn_start","turn":1}
 {"ts":"2026-01-25T10:00:01Z","type":"user_message","content":"Deploy v1.2.3 to staging"}
@@ -3472,21 +3483,21 @@ async def monitor_thread(thread_id: str, ws_url: str):
             "action": "subscribe",
             "thread_id": thread_id
         }))
-        
+
         # Receive events in real-time
         async for message in ws:
             event = json.loads(message)
-            
+
             if event["type"] == "tool_call":
                 print(f"Thread calling: {event['tool']} with {event['args_hash']}")
-            
+
             elif event["type"] == "cost_update":
                 print(f"Cost: {event['input_tokens']} in, {event['output_tokens']} out")
-            
+
             elif event["type"] == "error":
                 print(f"ERROR: {event['error']}")
                 break
-            
+
             elif event["type"] == "completed":
                 print(f"Thread completed in {event['turn_count']} turns")
                 break
@@ -3505,8 +3516,8 @@ config:
       - type: file_sink
         path: ".ai/threads/{thread_id}/transcript.jsonl"
       - type: websocket_sink
-        url: "ws://localhost:8765/{thread_id}"  # WebSocket server
-      - type: return  # Still buffer for harness
+        url: "ws://localhost:8765/{thread_id}" # WebSocket server
+      - type: return # Still buffer for harness
 ```
 
 #### 4. Intervention Signals
@@ -3530,16 +3541,16 @@ await thread_registry.update_status(thread_id, "killed")
 The harness checks for intervention signals at each turn:
 
 ```python
-# In KiwiHarnessRunner._should_terminate()
+# In SafetyHarnessRunner._should_terminate()
 def _should_terminate(self) -> bool:
     """Check if agent should stop (cost + context + intervention)."""
-    
+
     # Check for intervention signal
     status = await self.thread_registry.get_status(self.thread_id)
     if status["status"] in ["terminating", "paused", "killed"]:
         self._termination_reason = f"intervention: {status['status']}"
         return True
-    
+
     # ... existing cost/context checks ...
 ```
 
@@ -3550,7 +3561,7 @@ Here's how a parent thread or CLI tool can spawn and monitor a child thread:
 ```python
 async def spawn_and_monitor(directive_name: str, message: str):
     """Spawn a thread and monitor until completion."""
-    
+
     # 1. Spawn thread (returns immediately)
     result = await mcp.execute(
         item_type="tool",
@@ -3561,14 +3572,14 @@ async def spawn_and_monitor(directive_name: str, message: str):
             "initial_message": message
         }
     )
-    
+
     thread_id = result["thread_id"]
     print(f"Spawned thread: {thread_id}")
-    
+
     # 2. Monitor via registry polling
     while True:
         await asyncio.sleep(2)  # Poll every 2 seconds
-        
+
         status = await mcp.execute(
             item_type="tool",
             action="run",
@@ -3578,16 +3589,16 @@ async def spawn_and_monitor(directive_name: str, message: str):
                 "thread_id": thread_id
             }
         )
-        
+
         print(f"Status: {status['status']}, Turn: {status.get('turn_count', 0)}")
-        
+
         if status["status"] in ["completed", "error", "terminated"]:
             break
-    
+
     # 3. Get final result
     transcript = read_transcript(thread_id)
     print(f"Thread completed with {len(transcript)} events")
-    
+
     return status
 
 # Usage
@@ -3920,7 +3931,7 @@ kiwi_mcp/mcp/
 **Files:**
 
 - `.ai/tools/capabilities/*.py` (new - fs, net, db, git, process, mcp)
-- `kiwi_harness/capabilities.py` (new)
+- `safety_harness/capabilities.py` (new)
 - `kiwi_mcp/utils/parsers.py` (extend for orchestration tag)
 - `tests/harness/test_capability_tokens.py` (new)
 
@@ -4019,16 +4030,16 @@ kiwi_mcp/mcp/
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Full Thread Loop (kiwi_harness)
+### Full Thread Loop (safety_harness)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  kiwi_harness.run(directive="deploy_staging")                        │
+│  safety_harness.run(directive="deploy_staging")                        │
 │  # Thread ID auto-generated: deploy_staging_20260125_103045 (A.1)    │
 └───────────────────────────────────┬──────────────────────────────────┘
                                     ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Inside spawned thread: KiwiHarnessRunner.run()                      │
+│  Inside spawned thread: SafetyHarnessRunner.run()                      │
 │    1. Load directive via MCP                                         │
 │    2. Extract <permissions> and mint capability token (A.2)          │
 │    3. Extract cost budget from <cost> (REQUIRED - A.4)               │
@@ -4098,7 +4109,7 @@ kiwi_mcp/mcp/
 - [ ] http_client supports SSE streaming with return (built-in) + 3 data-driven sink tools (file_sink, null_sink, websocket_sink)
 - [ ] LLM endpoint tools work with Anthropic and OpenAI
 - [ ] Thread tools store transcripts correctly (.ai/threads/{id}/transcript.jsonl)
-- [ ] kiwi_harness completes 10-turn conversation
+- [ ] safety_harness completes 10-turn conversation
 - [ ] Thread IDs auto-generated by harness (A.1)
 - [ ] Capability tokens minted and validated (A.2)
 - [ ] Category-based permissions for knowledge and directives (A.2)
@@ -4119,7 +4130,7 @@ kiwi_mcp/mcp/
 
 ### A.1: Thread ID Handling (Three Layers)
 
-Thread ID handling has three distinct layers to provide flexibility while maintaining structure for kiwi_harness.
+Thread ID handling has three distinct layers to provide flexibility while maintaining structure for safety_harness.
 
 #### Layer 1: Base spawn_thread Tool (Harness-Agnostic OS Primitive)
 
@@ -4132,7 +4143,7 @@ executor_id: python
 config:
   module: "kiwi_mcp.runtime.thread_spawner"
   function: "spawn_thread"
-  background: true  # CRITICAL: Returns immediately, thread runs async
+  background: true # CRITICAL: Returns immediately, thread runs async
 
 parameters:
   - name: thread_id
@@ -4158,23 +4169,23 @@ import multiprocessing
 
 async def spawn_thread(
     thread_id: str,
-    runner_instance: Any,  # Pre-instantiated runner (KiwiHarnessRunner, CustomHarness, etc.)
+    runner_instance: Any,  # Pre-instantiated runner (SafetyHarnessRunner, CustomHarness, etc.)
     directive_name: str,
     initial_message: str = "",
     **kwargs
 ) -> dict:
     """Spawn OS-level thread/process with given runner.
-    
+
     This is harness-agnostic. The runner is already instantiated
-    by the caller (kiwi_harness, custom_harness, etc.).
+    by the caller (safety_harness, custom_harness, etc.).
     """
     # Validate thread_id
     thread_id = sanitize_thread_id(thread_id)
-    
+
     # Check uniqueness in registry
     if await thread_exists(thread_id):
         return {"error": f"Thread {thread_id} already exists"}
-    
+
     # Spawn the thread/process
     # The runner already knows what to do (agent loop, etc.)
     thread = threading.Thread(
@@ -4183,7 +4194,7 @@ async def spawn_thread(
         daemon=True
     )
     thread.start()
-    
+
     return {
         "success": True,
         "thread_id": thread_id,
@@ -4194,26 +4205,26 @@ async def spawn_thread(
 
 **Key insight:** The base `spawn_thread` tool is like `execve()` — it takes a runnable object and spawns it. It doesn't care what the object does.
 
-|| Sanitization     | Rule                                     |
+|| Sanitization | Rule |
 || ---------------- | ---------------------------------------- |
-|| Trim whitespace  | Strip leading/trailing spaces            |
-|| No spaces        | Replace internal spaces with underscores |
-|| No special chars | Allow only `[a-zA-Z0-9_-]`               |
-|| Non-empty        | Minimum 1 character after sanitization   |
-|| Uniqueness       | Must not exist in registry               |
+|| Trim whitespace | Strip leading/trailing spaces |
+|| No spaces | Replace internal spaces with underscores |
+|| No special chars | Allow only `[a-zA-Z0-9_-]` |
+|| Non-empty | Minimum 1 character after sanitization |
+|| Uniqueness | Must not exist in registry |
 
-#### Layer 2: kiwi_harness Tool (Kiwi Harness Implementation)
+#### Layer 2: safety_harness Tool (Safety Harness Implementation)
 
-The `kiwi_harness` tool is the entry point for the Kiwi harness implementation. It **auto-generates** thread IDs and does NOT expose the `thread_id` parameter:
+The `safety_harness` tool is the entry point for the Safety harness implementation. It **auto-generates** thread IDs and does NOT expose the `thread_id` parameter:
 
 ```yaml
-# kiwi_harness/tools/kiwi_harness.yaml
-tool_id: kiwi_harness
+# safety_harness/tools/safety_harness.yaml
+tool_id: safety_harness
 executor_id: python
 config:
-  module: "kiwi_harness.spawn"
-  function: "spawn_with_kiwi_harness"
-  background: true  # CRITICAL: Returns immediately, thread runs async
+  module: "safety_harness.spawn"
+  function: "spawn_with_safety_harness"
+  background: true # CRITICAL: Returns immediately, thread runs async
 
 parameters:
   - name: directive_name
@@ -4226,36 +4237,36 @@ parameters:
 ```
 
 ```python
-# kiwi_harness/spawn.py
+# safety_harness/spawn.py
 def generate_thread_id(directive_name: str) -> str:
     """Generate structured thread ID from directive name + timestamp.
-    
+
     Format: directive_name_YYYYMMDD_HHMMSS
     Example: "deploy_staging_20260125_103045"
-    
+
     Note: This format is used consistently throughout documentation examples.
     Any format changes should update all references (Lines 760, 1712, 4027, etc.)
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{directive_name}_{timestamp}"
 
-async def spawn_with_kiwi_harness(directive_name: str, initial_message: str, **kwargs) -> dict:
-    """Spawn thread with kiwi_harness - entry point for Kiwi harness implementation.
-    
-    This function IS the Kiwi-specific layer. When spawn_thread is called FROM HERE,
-    it knows to instantiate KiwiHarnessRunner because this code imports and uses it.
+async def spawn_with_safety_harness(directive_name: str, initial_message: str, **kwargs) -> dict:
+    """Spawn thread with safety_harness - entry point for Safety harness implementation.
+
+    This function IS the safety harness layer. When spawn_thread is called FROM HERE,
+    it knows to instantiate SafetyHarnessRunner because this code imports and uses it.
     """
     thread_id = generate_thread_id(directive_name)
-    
-    # Import and instantiate KiwiHarnessRunner directly
-    from kiwi_harness.runner import KiwiHarnessRunner
-    
+
+    # Import and instantiate SafetyHarnessRunner directly
+    from safety_harness.runner import SafetyHarnessRunner
+
     # Create the runner
-    runner = KiwiHarnessRunner(
+    runner = SafetyHarnessRunner(
         project_path=kwargs.get("project_path"),
         mcp_client=kwargs.get("mcp_client"),  # MCP client for calling back
     )
-    
+
     # Spawn thread/process with the runner
     # The spawn_thread tool is just the OS-level thread/process spawner
     return await execute_tool("spawn_thread", {
@@ -4276,14 +4287,14 @@ This gives us:
 
 #### Layer 3: thread_directive Tool (Directive→Thread Orchestrator)
 
-The `thread_directive` tool is the high-level orchestrator that LLMs call. It validates directive metadata and calls `kiwi_harness`. It does NOT expose `thread_id`:
+The `thread_directive` tool is the high-level orchestrator that LLMs call. It validates directive metadata and calls `safety_harness`. It does NOT expose `thread_id`:
 
 ```yaml
 # .ai/tools/orchestration/thread_directive.yaml
 tool_id: thread_directive
 executor_id: python
 config:
-  module: "kiwi_harness.orchestration"
+  module: "safety_harness.orchestration"
   function: "thread_directive_orchestrator"
 
 parameters:
@@ -4293,39 +4304,39 @@ parameters:
   - name: initial_message
     type: string
     required: false
-  # Note: NO thread_id parameter - delegated to kiwi_harness
+  # Note: NO thread_id parameter - delegated to safety_harness
   # Note: NO spawn_thread boolean - this tool ALWAYS spawns
 ```
 
 ```python
-# kiwi_harness/orchestration.py
+# safety_harness/orchestration.py
 async def thread_directive_orchestrator(
     directive_name: str,
     initial_message: str,
     **kwargs
 ) -> dict:
     """Validate directive and spawn on managed thread.
-    
+
     This is what LLMs call when they want to run a directive on a thread.
     """
     # Load directive to validate metadata
     directive_data = await load_directive(directive_name)
-    
+
     # Validate ALL required metadata
     validation_errors = []
-    
+
     if not directive_data.get("cost"):
         validation_errors.append("Missing <cost> tag (REQUIRED for spawning)")
-    
+
     if not directive_data.get("permissions"):
         validation_errors.append("Missing <permissions> tag (REQUIRED)")
-    
+
     if not directive_data.get("model"):
         validation_errors.append("Missing <model> tier (REQUIRED)")
-    
+
     if not directive_data.get("version"):
         validation_errors.append("Missing version (REQUIRED)")
-    
+
     if validation_errors:
         return {
             "success": false,
@@ -4333,9 +4344,9 @@ async def thread_directive_orchestrator(
             "validation_errors": validation_errors,
             "directive_name": directive_name
         }
-    
-    # Validation passed - call kiwi_harness to spawn
-    return await execute_tool("kiwi_harness", {
+
+    # Validation passed - call safety_harness to spawn
+    return await execute_tool("safety_harness", {
         "directive_name": directive_name,
         "initial_message": initial_message,
         **kwargs
@@ -4354,10 +4365,10 @@ async def thread_directive_orchestrator(
 │    • Directive→Thread orchestrator (what LLMs call)                 │
 │    • Validates ALL required metadata (cost, perms, model, version)  │
 │    • NO thread_id parameter                                         │
-│    • Calls → kiwi_harness (Layer 2)                                 │
+│    • Calls → safety_harness (Layer 2)                                 │
 │                                                                      │
-│  Layer 2: kiwi_harness tool                                         │
-│    • Kiwi harness implementation entry point                        │
+│  Layer 2: safety_harness tool                                         │
+│    • Safety harness implementation entry point                        │
 │    • Auto-generates: directive_name_YYYYMMDD_HHMMSS                 │
 │    • NO thread_id parameter                                         │
 │    • Calls → spawn_thread (Layer 1)                                 │
@@ -4386,18 +4397,18 @@ Layer 3: thread_directive tool
   │ ├── Load directive metadata via MCP
   │ ├── Validate <cost>, <permissions>, <model>, version tags
   │ ├── If validation fails → return error
-  │ └── If validation passes → call kiwi_harness tool
+  │ └── If validation passes → call safety_harness tool
   ▼
-Layer 2: kiwi_harness tool
+Layer 2: safety_harness tool
   │ ├── Generate thread_id = f"{directive_name}_{timestamp}"
   │ │   Example: "deploy_20260125_103045"
-  │ ├── Instantiate: runner = KiwiHarnessRunner(
+  │ ├── Instantiate: runner = SafetyHarnessRunner(
   │ │                         project_path=...,
   │ │                         mcp_client=...
   │ │                       )
   │ └── Call spawn_thread tool with:
   │     • thread_id (generated)
-  │     • runner_instance (instantiated KiwiHarnessRunner)
+  │     • runner_instance (instantiated SafetyHarnessRunner)
   │     • directive_name
   │     • initial_message
   ▼
@@ -4455,7 +4466,7 @@ Thread completes
 
 **Key Observations:**
 
-1. **Instantiation happens at Layer 2** - `kiwi_harness` creates the runner
+1. **Instantiation happens at Layer 2** - `safety_harness` creates the runner
 2. **Layer 1 is harness-agnostic** - Accepts any runner, just spawns it
 3. **Token minting happens INSIDE spawned thread** - Not before spawning
 4. **Async spawn** - Caller gets thread_id immediately, thread runs independently
@@ -4493,7 +4504,7 @@ The kernel just forwards opaque metadata. **Enforcement happens at the tool laye
 
 #### Key Architecture: spawn_thread Tool Instantiates Harness
 
-The relationship between spawn_thread tool and kiwi_harness:
+The relationship between spawn_thread tool and safety_harness:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -4506,11 +4517,11 @@ The relationship between spawn_thread tool and kiwi_harness:
 │                                                                      │
 │  2. thread_directive tool (Layer 3):                                │
 │     ├── Validates directive metadata (cost, perms, model, version)  │
-│     └── Calls → kiwi_harness (Layer 2)                              │
+│     └── Calls → safety_harness (Layer 2)                              │
 │                                                                      │
-│  3. kiwi_harness tool (Layer 2):                                    │
+│  3. safety_harness tool (Layer 2):                                    │
 │     ├── Auto-generates thread_id                                    │
-│     ├── Instantiates KiwiHarnessRunner(project_path, mcp_client)   │
+│     ├── Instantiates SafetyHarnessRunner(project_path, mcp_client)   │
 │     └── Calls → spawn_thread with runner_instance (Layer 1)        │
 │                                                                      │
 │  4. spawn_thread tool (Layer 1 - Base OS primitive):                │
@@ -4519,7 +4530,7 @@ The relationship between spawn_thread tool and kiwi_harness:
 │     ├── Starts new thread/process with runner.run()                 │
 │     └── Returns thread_id to caller                                 │
 │                                                                      │
-│  5. Inside the new thread, KiwiHarnessRunner:                       │
+│  5. Inside the new thread, SafetyHarnessRunner:                       │
 │     ├── Loads directive from MCP                                    │
 │     ├── Mints capability token from <permissions>                   │
 │     ├── Runs agent loop (call LLM → execute tools → repeat)         │
@@ -4533,13 +4544,13 @@ The relationship between spawn_thread tool and kiwi_harness:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key insight:** The `kiwi_harness` tool (Layer 2) instantiates KiwiHarnessRunner and passes it to `spawn_thread` (Layer 1). The spawn_thread tool is harness-agnostic - it just receives a runner and spawns it. The harness lives INSIDE the thread context and calls MCP kernel to execute tools.
+**Key insight:** The `safety_harness` tool (Layer 2) instantiates SafetyHarnessRunner and passes it to `spawn_thread` (Layer 1). The spawn_thread tool is harness-agnostic - it just receives a runner and spawns it. The harness lives INSIDE the thread context and calls MCP kernel to execute tools.
 
 This means:
 
 1. **spawn_thread is a base OS primitive** - Harness-agnostic, accepts any runner
-2. **kiwi_harness is the Kiwi implementation layer** - Instantiates KiwiHarnessRunner, passes to spawn_thread
-3. **KiwiHarnessRunner is a Python class** - Provides the agent loop logic
+2. **safety_harness is the safety implementation layer** - Instantiates SafetyHarnessRunner, passes to spawn_thread
+3. **SafetyHarnessRunner is a Python class** - Provides the agent loop logic
 4. **Harness calls MCP kernel** - Uses MCP client to execute tools with capability tokens
 5. **Both layers validate** - Harness pre-validates, tools validate independently (defense in depth)
 
@@ -4550,6 +4561,7 @@ This means:
 Infrastructure tools like `thread_registry` are **regular MCP tools** that require capabilities. They follow the same enforcement model as all other tools.
 
 **See [PERMISSION_MODEL.md](./PERMISSION_MODEL.md) for complete details on:**
+
 - Hierarchical permissions (core vs user directives)
 - System-only capabilities
 - Path-based permission scoping
@@ -4570,42 +4582,43 @@ Infrastructure tools like `thread_registry` are **regular MCP tools** that requi
   <metadata>
     <description>Spawn directive on managed thread with validation</description>
     <category>core</category>
-    
+
     <permissions>
       <!-- Core system capabilities (SYSTEM_ONLY) -->
       <execute resource="registry" action="write"/>
       <execute resource="registry" action="read"/>
       <execute resource="spawn" action="thread"/>
-      
+
       <!-- MCP operations -->
       <execute resource="kiwi-mcp" action="execute"/>
       <execute resource="kiwi-mcp" action="load"/>
-      
+
       <!-- Filesystem for validation (project-scoped) -->
       <read resource="filesystem" path=".ai/directives/**"/>
     </permissions>
-    
+
     <cost>
       <max_turns>5</max_turns>
       <max_total_tokens>10000</max_total_tokens>
     </cost>
   </metadata>
-  
+
   <process>
     <step name="validate_directive">
       <description>Load and validate directive metadata</description>
       <action>execute(directive, run, {directive_name})</action>
     </step>
-    
+
     <step name="spawn_thread">
-      <description>Call kiwi_harness to spawn managed thread</description>
-      <action>execute(tool, run, kiwi_harness, {...})</action>
+      <description>Call safety_harness to spawn managed thread</description>
+      <action>execute(tool, run, safety_harness, {...})</action>
     </step>
   </process>
 </directive>
 ```
 
 **When `thread_directive` runs:**
+
 - Token minted with `[{cap: "registry.write", scope: {}}, {cap: "registry.read", scope: {}}, {cap: "spawn.thread", scope: {}}, ...]`
 - Can call `thread_registry` tool ✅ (has `registry.write`)
 - Can spawn threads ✅ (has `spawn.thread`)
@@ -4622,10 +4635,10 @@ Infrastructure tools like `thread_registry` are **regular MCP tools** that requi
       <!-- Project-scoped filesystem access -->
       <read resource="filesystem" path="src/**"/>
       <write resource="filesystem" path="dist/**"/>
-      
+
       <!-- Scoped tool access -->
       <execute resource="tool" id="bash"/>
-      
+
       <!-- MCP operations -->
       <execute resource="kiwi-mcp" action="execute"/>
     </permissions>
@@ -4634,6 +4647,7 @@ Infrastructure tools like `thread_registry` are **regular MCP tools** that requi
 ```
 
 **When `deploy_staging` runs:**
+
 - Token minted with `[{cap: "fs.read", scope: {path: "src/**"}}, {cap: "fs.write", scope: {path: "dist/**"}}, {cap: "tool.execute", scope: {id: "bash"}}, ...]`
 - **Can** read files in `src/**` ✅ (project-scoped)
 - **Can** write files in `dist/**` ✅ (project-scoped)
@@ -4653,12 +4667,12 @@ version: "1.0.0"
 description: "Query and manage thread registry"
 
 requires:
-  - registry.write  # For register, update_status
-  - registry.read   # For get_status, query
+  - registry.write # For register, update_status
+  - registry.read # For get_status, query
 
 config:
   db_path: ".ai/threads/registry.db"
-  
+
 actions:
   - name: register
     description: "Register new thread"
@@ -4676,11 +4690,11 @@ actions:
 # thread_registry tool implementation
 async def register_thread(params: dict) -> dict:
     token = params.get("__auth")
-    
+
     # Validate token has required capabilities (same as ANY tool)
     if not validate_token(token, required_caps=["registry.write"]):
         return {"error": "Missing required capability: registry.write"}
-    
+
     # Token is valid - proceed
     # ...
 ```
@@ -4701,10 +4715,10 @@ async def register_thread(params: dict) -> dict:
 │  3. thread_directive validates deploy_staging directive:            │
 │     execute(directive, run, deploy_staging)  ✅                      │
 │                                                                      │
-│  4. thread_directive calls kiwi_harness:                            │
-│     execute(tool, run, kiwi_harness, {...})  ✅                      │
+│  4. thread_directive calls safety_harness:                            │
+│     execute(tool, run, safety_harness, {...})  ✅                      │
 │                                                                      │
-│  5. kiwi_harness spawns thread, calls thread_registry:              │
+│  5. safety_harness spawns thread, calls thread_registry:              │
 │     execute(tool, run, thread_registry, {                           │
 │       action: "register",                                            │
 │       __auth: thread_directive's token  ← Has registry.write ✅      │
@@ -4720,8 +4734,9 @@ async def register_thread(params: dict) -> dict:
 #### Summary: Clean Hierarchical Model
 
 **See [PERMISSION_MODEL.md](./PERMISSION_MODEL.md) for complete documentation including:**
+
 - System vs user capability validation
-- Path-based permission scoping  
+- Path-based permission scoping
 - Project sandboxing (relative vs absolute paths)
 - Extractor modification security
 - Token attenuation for spawned threads
@@ -4745,7 +4760,7 @@ async def register_thread(params: dict) -> dict:
 ┌─────────────────────────────────────────────────────────────────────┐
 │                  PERMISSION ENFORCEMENT FLOW                         │
 │                                                                      │
-│  1. KiwiHarnessRunner instance (spawned thread) mints token         │
+│  1. SafetyHarnessRunner instance (spawned thread) mints token         │
 │     └── After directive is loaded from MCP                          │
 │     └── Token contains: caps[], directive_id, thread_id, exp        │
 │                                                                      │
@@ -4766,9 +4781,9 @@ async def register_thread(params: dict) -> dict:
 **Clarification on token minting:**
 
 - **thread_directive tool** (Layer 3) does NOT mint tokens - it just validates and orchestrates
-- **kiwi_harness tool** (Layer 2) does NOT mint tokens - it just spawns the thread
-- **spawn_thread tool** (Layer 1) instantiates KiwiHarnessRunner class
-- **KiwiHarnessRunner.run_directive()** method is what actually:
+- **safety_harness tool** (Layer 2) does NOT mint tokens - it just spawns the thread
+- **spawn_thread tool** (Layer 1) instantiates SafetyHarnessRunner class
+- **SafetyHarnessRunner.run_directive()** method is what actually:
   1. Loads the directive via MCP
   2. Extracts `<permissions>` from directive
   3. Mints the capability token
@@ -4855,7 +4870,7 @@ This means:
 tool_id: write_file
 executor_id: python
 requires:
-  - fs.write  # Tool declares what it needs
+  - fs.write # Tool declares what it needs
 
 parameters:
   - name: path
@@ -4869,28 +4884,28 @@ parameters:
 ```python
 async def write_file(path: str, content: str, __auth: str, __project_path: str) -> dict:
     token = verify_token(__auth)
-    
+
     # 1. Check has fs.write capability
     fs_write_grants = [c for c in token.caps if c["cap"] == "fs.write"]
     if not fs_write_grants:
         return {"error": "Missing capability: fs.write"}
-    
+
     # 2. Resolve path relative to project (with escape protection)
     project_root = Path(__project_path)
     full_path = (project_root / path).resolve()
-    
+
     if not full_path.is_relative_to(project_root):
         return {"error": "Path outside project"}
-    
+
     relative_path = str(full_path.relative_to(project_root))
-    
+
     # 3. Check path matches granted scope
     for grant in fs_write_grants:
         if fnmatch.fnmatch(relative_path, grant["scope"]["path"]):
             with open(full_path, 'w') as f:
                 f.write(content)
             return {"success": True}
-    
+
     return {"error": f"Path not in granted scope: {relative_path}"}
 ```
 
@@ -4993,16 +5008,19 @@ def attenuate_token(parent_token: CapabilityToken, child_directive: dict) -> Cap
 **Key Principles:**
 
 1. **Token is thread-scoped, not directive-scoped**
+
    - Token is minted ONCE when thread spawns (from directive A)
    - Token persists for entire thread lifetime
    - Nested directives use the SAME token
 
 2. **No privilege escalation**
+
    - directive B can only do what directive A's token allows
    - directive B's declared permissions are IGNORED for enforcement
    - Only directive A's permissions matter
 
 3. **Permission check for `execute(directive, run, ...)`**
+
    - Requires: `<execute resource="kiwi-mcp" action="execute"/>`
    - This allows calling the MCP execute action
    - Without this, directive A cannot call other directives
@@ -5057,6 +5075,7 @@ def attenuate_token(parent_token: CapabilityToken, child_directive: dict) -> Cap
 ```
 
 **What happens:**
+
 1. Thread spawned with directive_A's token: `[fs.read, kiwi-mcp.execute, tool.bash]`
 2. directive_A calls `execute(directive, run, run_tests)` ✅ (has `kiwi-mcp.execute`)
 3. Kernel returns directive_B's data ✅
@@ -5109,11 +5128,11 @@ Permission enforcement depends on **where the LLM runs**:
 | --------------------------------- | --------------------------------------- | -------------------------------------- |
 | **LLM Outside MCP**               | Claude Code, Amp, Cursor call MCP tools | None - frontend handles permissions    |
 | **LLM Inside MCP (Base Harness)** | Custom harness without token minting    | Optional - not recommended             |
-| **LLM Inside MCP (Kiwi Harness)** | Our opinionated harness                 | Full enforcement via capability tokens |
+| **LLM Inside MCP (Safety Harness)** | Our opinionated harness                 | Full enforcement via capability tokens |
 
 When using MCP as a tool provider for external LLMs (Claude Code, Amp), the LLM runs **outside** the MCP. We cannot enforce capability tokens because we don't control the LLM execution loop.
 
-The kiwi_harness is the **primary enforcement mechanism** for LLMs running inside our control. It's not an "additional layer" - it IS the enforcement layer for Kiwi-managed threads.
+The safety_harness is the **primary enforcement mechanism** for LLMs running inside our control. It's not an "additional layer" - it IS the enforcement layer for Kiwi-managed threads.
 
 #### Directive Run Location
 
@@ -5212,7 +5231,7 @@ The combination of **integrity hashing** and **signature validation** provides p
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SIGNATURE PROTECTION MODEL                                │
 │                                                                              │
-│  When LLM runs INSIDE kiwi_harness:                                          │
+│  When LLM runs INSIDE safety_harness:                                          │
 │                                                                              │
 │  1. LLM requests: execute(directive, create, item_id="evil_directive")       │
 │                                                                              │
@@ -5236,14 +5255,14 @@ The combination of **integrity hashing** and **signature validation** provides p
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key insight:** Because we control the LLM execution loop (kiwi_harness), we can enforce that:
+**Key insight:** Because we control the LLM execution loop (safety_harness), we can enforce that:
 
 1. All create/update/delete operations go through our validation pipeline
 2. Signatures are required for execution
 3. Category restrictions can block access to sensitive items
 4. Core system items can be protected from modification
 
-This protection only applies when the LLM runs **inside** the kiwi_harness. External frontends (Claude Code, Amp) calling MCP directly have their own permission systems.
+This protection only applies when the LLM runs **inside** the safety_harness. External frontends (Claude Code, Amp) calling MCP directly have their own permission systems.
 
 ---
 
@@ -5464,7 +5483,7 @@ Cost and context enforcement runs in the harness after each LLM turn:
 6. **On exceeded**: Take action per `on_exceeded` setting
 
 ```python
-# In kiwi_harness after each LLM turn
+# In safety_harness after each LLM turn
 usage = parser.get_usage()
 
 # Check cost budget (tokens, USD, turns)
@@ -5533,7 +5552,7 @@ config:
   db_path: ".ai/threads/registry.db"
   transcript_dir: ".ai/threads/transcripts"
 # Note: This is a privileged harness tool
-# Directives cannot call it directly; only kiwi_harness can
+# Directives cannot call it directly; only safety_harness can
 ```
 
 #### Why SQLite Over JSON Files
@@ -5808,6 +5827,7 @@ class ReturnSink:
 Appends streaming events to disk in JSONL format. Used for transcript storage and audit logs.
 
 **Tool Configuration:**
+
 ```yaml
 # .ai/tools/sinks/file_sink.yaml
 tool_id: file_sink
@@ -5819,7 +5839,7 @@ description: "Append streaming events to file in JSONL format"
 config:
   module: "sinks.file_sink"
   format: jsonl
-  flush_every: 10  # Flush after N events
+  flush_every: 10 # Flush after N events
 
 parameters:
   - name: path
@@ -5829,6 +5849,7 @@ parameters:
 ```
 
 **Python Implementation:**
+
 ```python
 # .ai/tools/sinks/file_sink.py
 __tool_type__ = "runtime"
@@ -5842,22 +5863,22 @@ from typing import Optional
 
 class FileSink:
     """Append streaming events to file."""
-    
+
     def __init__(self, path: str, format: str = "jsonl", flush_every: int = 10):
         self.path = Path(path)
         self.format = format
         self.flush_every = flush_every
         self.event_count = 0
         self.file_handle: Optional[io.TextIOWrapper] = None
-        
+
         # Ensure parent directory exists
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        
+
     async def write(self, event: str) -> None:
         """Write event to file."""
         if not self.file_handle:
             self.file_handle = open(self.path, "a", encoding="utf-8")
-        
+
         if self.format == "jsonl":
             # Parse SSE event and write as JSONL
             try:
@@ -5869,13 +5890,13 @@ class FileSink:
         else:
             # Raw format
             self.file_handle.write(event + "\n")
-        
+
         self.event_count += 1
-        
+
         # Periodic flush for safety
         if self.event_count % self.flush_every == 0:
             self.file_handle.flush()
-    
+
     async def close(self) -> None:
         """Close file handle."""
         if self.file_handle:
@@ -5889,6 +5910,7 @@ class FileSink:
 Discards all events. Used for fire-and-forget streaming or performance testing.
 
 **Tool Configuration:**
+
 ```yaml
 # .ai/tools/sinks/null_sink.yaml
 tool_id: null_sink
@@ -5902,6 +5924,7 @@ config:
 ```
 
 **Python Implementation:**
+
 ```python
 # .ai/tools/sinks/null_sink.py
 __tool_type__ = "runtime"
@@ -5911,11 +5934,11 @@ __category__ = "sinks"
 
 class NullSink:
     """Discard all events."""
-    
+
     async def write(self, event: str) -> None:
         """Discard event."""
         pass
-    
+
     async def close(self) -> None:
         """No-op close."""
         pass
@@ -5926,6 +5949,7 @@ class NullSink:
 Forwards streaming events to a WebSocket endpoint in real-time. Used for thread intervention, live monitoring, and CLI streaming.
 
 **Tool Configuration:**
+
 ```yaml
 # .ai/tools/sinks/websocket_sink.yaml
 tool_id: websocket_sink
@@ -5933,7 +5957,7 @@ tool_type: runtime
 executor_id: python
 version: "1.0.0"
 description: "Forward streaming events to WebSocket endpoint"
-dependencies: ["websockets"]  # Managed by EnvManager
+dependencies: ["websockets"] # Managed by EnvManager
 
 config:
   module: "sinks.websocket_sink"
@@ -5949,6 +5973,7 @@ parameters:
 ```
 
 **Python Implementation:**
+
 ```python
 # .ai/tools/sinks/websocket_sink.py
 __tool_type__ = "runtime"
@@ -5966,9 +5991,9 @@ import websockets
 
 class WebSocketSink:
     """Forward events to WebSocket endpoint with reconnection support."""
-    
+
     def __init__(
-        self, 
+        self,
         url: str,
         reconnect_attempts: int = 3,
         buffer_on_disconnect: bool = True,
@@ -5978,32 +6003,32 @@ class WebSocketSink:
         self.reconnect_attempts = reconnect_attempts
         self.buffer_on_disconnect = buffer_on_disconnect
         self.buffer_max_size = buffer_max_size
-        
+
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.buffer: List[str] = []
         self.connected = False
-    
+
     async def _connect(self) -> bool:
         """Establish WebSocket connection with retry."""
         for attempt in range(self.reconnect_attempts):
             try:
                 self.ws = await websockets.connect(self.url)
                 self.connected = True
-                
+
                 # Flush buffer if we have events
                 if self.buffer:
                     for event in self.buffer:
                         await self.ws.send(event)
                     self.buffer.clear()
-                
+
                 return True
             except Exception as e:
                 if attempt < self.reconnect_attempts - 1:
                     await asyncio.sleep(0.5 * (2 ** attempt))  # Exponential backoff
                 continue
-        
+
         return False
-    
+
     async def write(self, event: str) -> None:
         """Write event to WebSocket."""
         # Ensure connection
@@ -6013,7 +6038,7 @@ class WebSocketSink:
                     if len(self.buffer) < self.buffer_max_size:
                         self.buffer.append(event)
                 return
-        
+
         try:
             await self.ws.send(event)
         except websockets.ConnectionClosed:
@@ -6021,7 +6046,7 @@ class WebSocketSink:
             if self.buffer_on_disconnect:
                 if len(self.buffer) < self.buffer_max_size:
                     self.buffer.append(event)
-    
+
     async def close(self) -> None:
         """Close WebSocket connection."""
         if self.ws:
@@ -6165,4 +6190,4 @@ This avoids confusing runtime failures mid-thread.
 
 - `RUNTIME_PERMISSION_DESIGN.md` - Permission enforcement architecture
 - `KNOWLEDGE_SYSTEM_DESIGN.md` - RAG-based knowledge and help system (TODO)
-- `KIWI_HARNESS_ROADMAP.md` - Harness implementation details
+- `SAFETY_HARNESS_ROADMAP.md` - Harness implementation details

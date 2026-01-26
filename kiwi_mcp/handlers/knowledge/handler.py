@@ -393,7 +393,7 @@ class KnowledgeHandler:
                 if not signature_info:
                     entry_data["warning"] = {
                         "message": "Registry knowledge entry has no signature - content may be corrupted",
-                        "solution": "Use execute action 'update' or 'create' to re-validate the entry",
+                        "solution": "Use execute action 'sign' to re-validate the entry",
                     }
                     self.logger.warning(f"Registry knowledge entry '{zettel_id}' has no signature")
 
@@ -420,7 +420,7 @@ class KnowledgeHandler:
                         return {
                             "error": f"Knowledge entry has no signature",
                             "path": str(file_path),
-                            "solution": "Use execute action 'update' or 'create' to re-validate the entry before copying",
+                            "solution": "Use execute action 'sign' to re-validate the entry before copying",
                         }
                     
                     content = file_path.read_text()
@@ -449,7 +449,7 @@ class KnowledgeHandler:
                     if not signature_info:
                         entry_data["warning"] = {
                             "message": "Knowledge entry has no signature",
-                            "solution": "Use execute action 'update' or 'create' to re-validate",
+                            "solution": "Use execute action 'sign' to re-validate",
                         }
                     
                     return entry_data
@@ -470,7 +470,7 @@ class KnowledgeHandler:
                     return {
                         "error": f"Knowledge entry has no signature",
                         "path": str(file_path),
-                        "solution": "Use execute action 'update' or 'create' to re-validate the entry before copying",
+                        "solution": "Use execute action 'sign' to re-validate the entry before copying",
                     }
                 
                 # Determine category from source path
@@ -498,7 +498,7 @@ class KnowledgeHandler:
                 if not signature_info:
                     entry_data["warning"] = {
                         "message": "Knowledge entry has no signature",
-                        "solution": "Use execute action 'update' or 'create' to re-validate",
+                        "solution": "Use execute action 'sign' to re-validate",
                     }
                 
                 return entry_data
@@ -587,7 +587,7 @@ class KnowledgeHandler:
         Execute a knowledge operation.
 
         Args:
-            action: "run", "create", "update", "delete", "link", "publish"
+            action: "run", "sign", "delete", "link", "publish"
             zettel_id: Entry ID
             parameters: Action parameters (title, content, etc.)
 
@@ -599,10 +599,8 @@ class KnowledgeHandler:
 
             if action == "run":
                 return await self._run_knowledge(zettel_id, params)
-            elif action == "create":
-                return await self._create_knowledge(zettel_id, params)
-            elif action == "update":
-                return await self._update_knowledge(zettel_id, params)
+            elif action == "sign":
+                return await self._sign_knowledge(zettel_id, params)
             elif action == "delete":
                 return await self._delete_knowledge(zettel_id, params)
             elif action == "publish":
@@ -610,7 +608,7 @@ class KnowledgeHandler:
             else:
                 return {
                     "error": f"Unknown action: {action}",
-                    "supported_actions": ["run", "create", "update", "delete", "publish"],
+                    "supported_actions": ["run", "sign", "delete", "publish"],
                 }
         except Exception as e:
             return {
@@ -683,7 +681,7 @@ class KnowledgeHandler:
                 "path": str(file_path),
                 "hint": "Knowledge entry needs validation",
                 "solution": (
-                    f"Run: execute(item_type='knowledge', action='create', "
+                    f"Run: execute(item_type='knowledge', action='sign', "
                     f"item_id='{zettel_id}', parameters={{'location': 'project'}}, "
                     f"project_path='{self.project_path}')"
                 ),
@@ -716,7 +714,7 @@ class KnowledgeHandler:
                 "error": "Knowledge entry content has been modified since last validation",
                 "details": f"Integrity mismatch for {zettel_id}@{entry_data.get('version')}: computed={short_hash(computed_hash)}, stored={short_hash(stored_hash)}",
                 "path": str(file_path),
-                "solution": "Run execute(action='update', ...) to re-validate the entry",
+                "solution": "Run execute(action='sign', ...) to re-validate the entry",
             }
 
         # Parse entry file and validate
@@ -799,12 +797,13 @@ class KnowledgeHandler:
         except Exception as e:
             return {"error": f"Failed to parse knowledge entry: {str(e)}", "path": str(file_path)}
 
-    async def _create_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _sign_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate and register an existing knowledge entry file.
+        Validate and sign an existing knowledge entry file.
 
         Expects the knowledge entry file to already exist on disk.
-        This action validates the frontmatter, content, and adds a signature.
+        This action validates the frontmatter, content, and signs the file.
+        Always allows re-signing - signatures are included in the validation chain.
         """
         location = params.get("location", "project")
         if location not in ("project", "user"):
@@ -813,26 +812,31 @@ class KnowledgeHandler:
                 "valid_locations": ["project", "user"],
             }
 
-        # Find the knowledge entry file
-        if location == "project":
-            search_base = self.project_path / ".ai" / "knowledge"
-        else:
-            search_base = get_user_space() / "knowledge"
-
-        file_path = self._find_entry_in_path(zettel_id, search_base)
+        # Find the knowledge entry file - try resolver first, then search by location
+        file_path = self.resolver.resolve(zettel_id)
+        
+        if not file_path or not file_path.exists():
+            # Search by location if resolver didn't find it
+            if location == "project":
+                search_base = self.project_path / ".ai" / "knowledge"
+            else:
+                search_base = get_user_space() / "knowledge"
+            
+            file_path = self._find_entry_in_path(zettel_id, search_base)
 
         if not file_path or not file_path.exists():
             category_hint = params.get("category", "learnings")  # Default category hint
             return {
                 "error": f"Knowledge entry file not found: {zettel_id}",
                 "hint": f"Create the file first at .ai/knowledge/{category_hint}/{zettel_id}.md",
-                "searched_in": str(search_base),
+                "searched_in": str(search_base if 'search_base' in locals() else self.project_path / ".ai" / "knowledge"),
             }
 
         # Validate path structure
         from kiwi_mcp.utils.paths import validate_path_structure
+        determined_location = "project" if str(file_path).startswith(str(self.project_path)) else "user"
         path_validation = validate_path_structure(
-            file_path, "knowledge", location, self.project_path
+            file_path, "knowledge", determined_location, self.project_path
         )
         if not path_validation["valid"]:
             return {
@@ -842,118 +846,8 @@ class KnowledgeHandler:
                 "solution": "File must be under .ai/knowledge/ with correct structure",
             }
 
-        # Read and validate the file
-        content = file_path.read_text()
-
-        # Check if signature already exists - create fails if signature exists
-        existing_signature = MetadataManager.get_signature_info("knowledge", content, file_path=file_path, project_path=self.project_path)
-        if existing_signature:
-            return {
-                "error": f"Knowledge entry '{zettel_id}' already validated",
-                "suggestion": "Use 'update' action to re-validate",
-                "path": str(file_path),
-            }
-
-        # Parse and validate
-        try:
-            entry_data = parse_knowledge_entry(file_path)
-            validation_result = await ValidationManager.validate_and_embed(
-                "knowledge", 
-                file_path, 
-                entry_data,
-                vector_store=self._vector_store,
-                item_id=entry_data.get("zettel_id")
-            )
-            if not validation_result["valid"]:
-                return {
-                    "error": "Knowledge entry validation failed",
-                    "details": validation_result["issues"],
-                    "path": str(file_path),
-                    "solution": "Fix validation issues and re-run create action",
-                }
-        except Exception as e:
-            return {
-                "error": "Failed to validate knowledge entry",
-                "details": str(e),
-                "path": str(file_path),
-            }
-        
-        # Compute unified integrity hash
-        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, generate_timestamp
-        
-        content_hash = compute_unified_integrity(
-            item_type="knowledge",
-            item_id=zettel_id,
-            version=entry_data.get("version", "1.0.0"),
-            file_content=content,
-            file_path=file_path
-        )
-        timestamp = generate_timestamp()
-
-        # Get existing frontmatter fields from parsed data
-        existing_frontmatter = {
-            "zettel_id": entry_data.get("zettel_id"),
-            "title": entry_data.get("title"),
-            "entry_type": entry_data.get("entry_type"),
-            "category": entry_data.get("category"),
-            "tags": entry_data.get("tags", []),
-            "version": entry_data.get("version", "1.0.0"),
-        }
-
-        # Create final content with signature in frontmatter
-        frontmatter = f"""---
-zettel_id: {existing_frontmatter['zettel_id']}
-title: {existing_frontmatter['title']}
-entry_type: {existing_frontmatter['entry_type']}
-category: {existing_frontmatter['category']}
-tags: {json.dumps(existing_frontmatter['tags'])}
-version: "{existing_frontmatter['version']}"
-validated_at: {timestamp}
-content_hash: {content_hash}
----
-
-"""
-        # Extract content part (everything after frontmatter)
-        content_body = entry_data.get("content", "")
-        full_content = frontmatter + content_body
-        file_path.write_text(full_content)
-
-        # Extract category from parsed entry data (validated by parser to match path)
-        category = entry_data.get("category", "")
-
-        return {
-            "status": "created",
-            "zettel_id": entry_data.get("zettel_id"),
-            "path": str(file_path),
-            "location": location,
-            "category": category,
-            "entry_type": existing_frontmatter["entry_type"],
-            "signature": {"hash": content_hash, "timestamp": timestamp},
-            "integrity": content_hash,
-            "integrity_short": content_hash[:12],
-        }
-
-    async def _update_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Update existing knowledge entry."""
-        # Find existing file
-        file_path = self.resolver.resolve(zettel_id)
-        if not file_path:
-            return {
-                "error": f"Knowledge entry '{zettel_id}' not found",
-                "suggestion": "Use 'create' action for new entries",
-            }
-
-        # Read current content
+        # Read file content (with existing signature if present - we include it in validation)
         current_content = file_path.read_text()
-        
-        # Check if signature exists - update fails if signature missing
-        existing_signature = MetadataManager.get_signature_info("knowledge", current_content, file_path=file_path, project_path=self.project_path)
-        if not existing_signature:
-            return {
-                "error": f"Knowledge entry '{zettel_id}' not validated",
-                "suggestion": "Use 'create' action to validate",
-                "path": str(file_path),
-            }
 
         # Parse existing entry
         try:
@@ -961,35 +855,20 @@ content_hash: {content_hash}
         except Exception as e:
             return {"error": f"Failed to parse existing entry: {str(e)}", "path": str(file_path)}
 
-        # Re-validate existing content (file path only, no parameter content)
-        # Use existing fields from file
-        title = entry_data.get("title")
-        content = entry_data.get("content")
-        entry_type = entry_data.get("entry_type")
-        category = entry_data.get("category")
-        tags = entry_data.get("tags", [])
-        
-        # Validate updated entry
-        updated_entry_data = {
-            "zettel_id": entry_data.get("zettel_id"),
-            "title": title,
-            "content": content,
-            "entry_type": entry_type,
-            "category": category,
-            "tags": tags,
-        }
+        # Validate entry
         validation_result = await ValidationManager.validate_and_embed(
             "knowledge", 
             file_path, 
-            updated_entry_data,
+            entry_data,
             vector_store=self._vector_store,
-            item_id=updated_entry_data.get("zettel_id")
+            item_id=entry_data.get("zettel_id")
         )
         if not validation_result["valid"]:
             return {
                 "error": "Knowledge entry validation failed",
                 "details": validation_result["issues"],
                 "path": str(file_path),
+                "solution": "Fix validation issues and re-run sign action",
             }
 
         # Use zettel_id from file's frontmatter (not parameter) - parse_knowledge_entry() already validated match
@@ -999,7 +878,7 @@ content_hash: {content_hash}
         expected_filename = f"{file_zettel_id}.md"
         if file_path.stem != file_zettel_id:
             return {
-                "error": "Cannot update: filename and zettel_id mismatch",
+                "error": "Cannot sign: filename and zettel_id mismatch",
                 "problem": {
                     "filename": file_path.name,
                     "frontmatter_zettel_id": file_zettel_id,
@@ -1010,14 +889,14 @@ content_hash: {content_hash}
                     "option_1": {
                         "action": "Rename file to match frontmatter zettel_id",
                         "command": f"mv '{file_path}' '{file_path.parent / expected_filename}'",
-                        "then": f"Re-run update action with item_id='{file_zettel_id}'"
+                        "then": f"Re-run sign action with item_id='{file_zettel_id}'"
                     },
                     "option_2": {
                         "action": "Update frontmatter to match current filename",
                         "steps": [
                             f"1. Edit {file_path}",
                             f"2. Change frontmatter: zettel_id: {file_path.stem}",
-                            f"3. Re-run: mcp__kiwi_mcp__execute(item_type='knowledge', action='update', item_id='{file_path.stem}')"
+                            f"3. Re-run: mcp__kiwi_mcp__execute(item_type='knowledge', action='sign', item_id='{file_path.stem}')"
                         ]
                     },
                     "option_3": {
@@ -1030,55 +909,51 @@ content_hash: {content_hash}
                 }
             }
 
-        # Compute unified integrity hash
-        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, generate_timestamp
+        # Strict version requirement - fail if missing
+        version = entry_data.get("version")
+        if not version or version == "0.0.0":
+            return {
+                "error": "Knowledge entry validation failed",
+                "details": ["Knowledge entry is missing required 'version' in YAML frontmatter. "
+                            'Add to frontmatter: version: "1.0.0"'],
+                "path": str(file_path),
+                "solution": "Add version metadata and re-run sign action",
+            }
         
-        # Use existing version or default to 1.0.0
-        version = entry_data.get("version", "1.0.0")
+        # Compute unified integrity hash on content WITHOUT signature
+        # This allows re-signing to produce consistent hashes
+        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, MetadataManager
         
-        # Build full content with frontmatter (without signature fields) for integrity computation
-        temp_frontmatter = f"""---
-zettel_id: {file_zettel_id}
-title: {title}
-entry_type: {entry_type}
-category: {category}
-tags: {json.dumps(tags)}
-version: "{version}"
----
-
-"""
-        full_content_for_hash = temp_frontmatter + content
+        # Remove existing signature before hashing (chained validation)
+        strategy = MetadataManager.get_strategy("knowledge")
+        content_without_sig = strategy.remove_signature(current_content)
         
+        # Hash only original content, not signature
         content_hash = compute_unified_integrity(
             item_type="knowledge",
             item_id=file_zettel_id,
             version=version,
-            file_content=full_content_for_hash,
+            file_content=content_without_sig,  # Hash only original content, not signature
             file_path=file_path
         )
-        timestamp = generate_timestamp()
+        
+        # Sign the validated content with unified integrity hash (updates signature fields in frontmatter)
+        signed_content = MetadataManager.sign_content_with_hash(
+            "knowledge", current_content, content_hash, file_path=file_path, project_path=self.project_path
+        )
+        file_path.write_text(signed_content)
 
-        # Recreate frontmatter with signature fields (use file's zettel_id, not parameter)
-        frontmatter = f"""---
-zettel_id: {file_zettel_id}
-title: {title}
-entry_type: {entry_type}
-category: {category}
-tags: {json.dumps(tags)}
-version: "{version}"
-validated_at: {timestamp}
-content_hash: {content_hash}
----
-
-"""
-        full_content = frontmatter + content
-        file_path.write_text(full_content)
+        # Get signature info for response
+        signature_info = MetadataManager.get_signature_info("knowledge", signed_content, file_path=file_path, project_path=self.project_path)
 
         return {
-            "status": "updated",
+            "status": "signed",
             "zettel_id": file_zettel_id,
             "path": str(file_path),
-            "signature": {"hash": content_hash, "timestamp": timestamp},
+            "location": determined_location,
+            "category": entry_data.get("category"),
+            "entry_type": entry_data.get("entry_type"),
+            "signature": signature_info,
             "integrity": content_hash,
             "integrity_short": content_hash[:12],
         }
@@ -1141,7 +1016,7 @@ content_hash: {content_hash}
                 "path": str(file_path),
                 "hint": "Knowledge entries must be validated before publishing",
                 "solution": (
-                    f"Run: execute(item_type='knowledge', action='update', "
+                    f"Run: execute(item_type='knowledge', action='sign', "
                     f"item_id='{zettel_id}', parameters={{'location': 'project'}}, "
                     f"project_path='{self.project_path}')"
                 ),
@@ -1182,7 +1057,7 @@ content_hash: {content_hash}
                         "steps": [
                             f"1. Edit {file_path}",
                             f"2. Change frontmatter: zettel_id: {file_path.stem}",
-                            f"3. Run: mcp__kiwi_mcp__execute(item_type='knowledge', action='update', item_id='{file_path.stem}')",
+                            f"3. Run: mcp__kiwi_mcp__execute(item_type='knowledge', action='sign', item_id='{file_path.stem}')",
                             f"4. Then re-run publish with: item_id='{file_path.stem}'"
                         ]
                     },

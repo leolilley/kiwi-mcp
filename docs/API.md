@@ -342,7 +342,7 @@ curl -X POST http://localhost:3000/tools/load \
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `item_type` | string | ✓ | `directive`, `tool`, or `knowledge` |
-| `action` | string | ✓ | Operation: `run`, `publish`, `delete`, `create`, `update`, `link` |
+| `action` | string | ✓ | Operation: `run`, `publish`, `delete`, `sign`, `link` |
 | `item_id` | string | ✓ | Item identifier |
 | `parameters` | object | | Action-specific params |
 | `dry_run` | boolean | | Validate without executing |
@@ -357,8 +357,7 @@ curl -X POST http://localhost:3000/tools/load \
 | `run` | Execute directive | `{}` |
 | `publish` | Publish to registry | `version`, `changelog` |
 | `delete` | Remove | `confirm`, `source` |
-| `create` | Create new | `content`, `category`, `version` |
-| `update` | Modify | `content`, `version`, `category` |
+| `sign` | Validate and sign | `location`, `category` |
 
 #### tool
 
@@ -367,13 +366,14 @@ curl -X POST http://localhost:3000/tools/load \
 | `run` | Execute with inputs | `inputs`, `dry_run` |
 | `publish` | Publish to registry | `version`, `changelog` |
 | `delete` | Remove | `confirm`, `source` |
+| `sign` | Validate and sign | `location`, `category` |
 
 #### knowledge
 
 | Action | Description | Parameters |
 |--------|-------------|-----------|
-| `create` | Create new entry | `title`, `content`, `entry_type`, `tags` |
-| `update` | Modify entry | `title`, `content`, `tags` |
+| `run` | Load entry content | `{}` |
+| `sign` | Validate and sign entry | `location`, `category` |
 | `delete` | Remove | `confirm`, `source` |
 | `link` | Link to another entry | `target_id`, `relationship_type` |
 | `publish` | Publish to registry | `version` |
@@ -383,7 +383,7 @@ curl -X POST http://localhost:3000/tools/load \
 **Success (varies by action):**
 ```json
 {
-  "status": "executed|published|deleted|created|updated|linked",
+  "status": "executed|published|deleted|signed|linked",
   "name": "item_id",
   "action": "action_name",
   "result": {}

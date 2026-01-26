@@ -1,4 +1,4 @@
-"""Execute tool - run, publish, delete, create, update items."""
+"""Execute tool - run, publish, delete, sign items."""
 
 import json
 import logging
@@ -20,23 +20,22 @@ class ExecuteTool(BaseTool):
             name="execute",
             description="""Execute operations on directives, tools, or knowledge.
 
-All three types support the same 5 actions for consistency:
+All three types support the same 4 actions for consistency:
 - run: Execute/load content (directive returns parsed XML, tool executes code, knowledge returns content for context)
 - publish: Upload to registry with version (requires 'version' parameter)
 - delete: Remove from local/registry (requires 'confirm': true for safety)
-- create: Validate and sign existing file - file must exist first (validates XML for directive, Python for tool, frontmatter for knowledge)
-- update: Validate and update existing item
+- sign: Validate and sign file - file must exist first (validates XML for directive, tool code for tool, frontmatter for knowledge). Always allows re-signing.
 
 Examples:
   directive.run: Returns parsed XML for agent to follow
-  tool.run: Executes Python code and returns results
+  tool.run: Executes tool code and returns results
   knowledge.run: Returns knowledge content to inform decisions
   
-  directive.create: Validates XML syntax and adds signature (file must exist)
-  tool.create: Validates Python syntax and adds signature (file must exist)
-  knowledge.create: Validates frontmatter and adds signature (file must exist)
+  directive.sign: Validates XML syntax and signs (file must exist, always allows re-signing)
+  tool.sign: Validates tool code and signs (file must exist, always allows re-signing)
+  knowledge.sign: Validates frontmatter and signs (file must exist, always allows re-signing)
   
-Note: Use create_directive, create_script, or create_knowledge directives to create files first, then use create action to validate and sign.
+Note: Create files manually first, then use sign action to validate and sign.
 """,
             inputSchema={
                 "type": "object",
@@ -48,8 +47,8 @@ Note: Use create_directive, create_script, or create_knowledge directives to cre
                     },
                     "action": {
                         "type": "string",
-                        "enum": ["run", "publish", "delete", "create", "update"],
-                        "description": "Action to perform (all 5 actions supported for all types)",
+                        "enum": ["run", "publish", "delete", "sign"],
+                        "description": "Action to perform (all 4 actions supported for all types)",
                     },
                     "item_id": {
                         "type": "string",
@@ -70,16 +69,16 @@ Note: Use create_directive, create_script, or create_knowledge directives to cre
                             },
                             "content": {
                                 "type": "string",
-                                "description": "Content for update actions only (create action expects file to exist first)",
+                                "description": "Content for sign action (optional)",
                             },
                             "location": {
                                 "type": "string",
                                 "enum": ["project", "user"],
-                                "description": "Save location for create action (project=.ai/ folder, user=home directory)",
+                                "description": "Save location for sign action (project=.ai/ folder, user=home directory)",
                             },
                             "category": {
                                 "type": "string",
-                                "description": "Category folder for create action (optional)",
+                                "description": "Category folder for sign action (optional)",
                             },
                             "source": {
                                 "type": "string",

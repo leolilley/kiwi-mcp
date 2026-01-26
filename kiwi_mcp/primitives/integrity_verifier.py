@@ -205,14 +205,22 @@ class IntegrityVerifier:
         
         # Compute integrity
         try:
-            file_content = file_path.read_text() if isinstance(file_path, Path) else Path(file_path).read_text()
+            from pathlib import Path as PathlibPath
+            from kiwi_mcp.utils.metadata_manager import MetadataManager
+            
+            file_path_obj = file_path if isinstance(file_path, PathlibPath) else PathlibPath(file_path)
+            file_content = file_path_obj.read_text()
+            
+            # Remove signature before hashing (consistent with sign operation)
+            strategy = MetadataManager.get_strategy(item_type, file_path=file_path_obj)
+            content_without_sig = strategy.remove_signature(file_content)
             
             computed_hash = compute_unified_integrity(
                 item_type=item_type,
                 item_id=item_id,
                 version=version,
-                file_content=file_content,
-                file_path=file_path if isinstance(file_path, Path) else Path(file_path),
+                file_content=content_without_sig,  # Hash only content without signature
+                file_path=file_path_obj,
                 metadata=None
             )
         except Exception as e:

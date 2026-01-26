@@ -59,12 +59,9 @@ def compute_unified_integrity(
     from kiwi_mcp.utils.parsers import parse_knowledge_entry
     
     if item_type == "tool":
-        # Strip signature before computing hash
-        strategy = ToolMetadataStrategy(file_path=file_path, project_path=file_path.parent)
-        content_without_sig = strategy.remove_signature(file_content)
-        
+        # Include signature in hash computation (creates validation chain)
         manifest = extract_tool_metadata(file_path, file_path.parent)
-        file_hash = hashlib.sha256(content_without_sig.encode()).hexdigest()
+        file_hash = hashlib.sha256(file_content.encode()).hexdigest()
         file_entry = {
             "path": file_path.name,
             "sha256": file_hash
@@ -315,10 +312,9 @@ class KnowledgeMetadataStrategy(MetadataStrategy):
         }
 
     def insert_signature(self, content: str, signature: str) -> str:
-        """Insert signature into YAML frontmatter."""
-        # For knowledge entries, signature is part of frontmatter
-        # This method is not typically used directly - frontmatter is rebuilt in handler
-        # But we provide it for consistency
+        """Insert or update signature fields in YAML frontmatter."""
+        # For knowledge entries, signature fields (validated_at, content_hash) are part of frontmatter
+        # This method updates those fields while preserving all other frontmatter fields
         if not content.startswith("---"):
             # No frontmatter, create one
             return f"---\n{signature}\n---\n\n{content}"
@@ -331,29 +327,42 @@ class KnowledgeMetadataStrategy(MetadataStrategy):
         yaml_content = content[3:end_idx].strip()
         entry_content = content[end_idx + 3:].strip()
 
-        # Update or add signature fields
+        # Parse signature to extract validated_at and content_hash values
+        sig_lines = signature.strip().split("\n")
+        new_validated_at = None
+        new_content_hash = None
+        for sig_line in sig_lines:
+            if sig_line.startswith("validated_at:"):
+                new_validated_at = sig_line.split(":", 1)[1].strip()
+            elif sig_line.startswith("content_hash:"):
+                new_content_hash = sig_line.split(":", 1)[1].strip()
+
+        # Update or add signature fields in existing frontmatter
         lines = yaml_content.split("\n")
         updated_lines = []
         has_validated_at = False
         has_content_hash = False
 
         for line in lines:
-            if line.startswith("validated_at:"):
-                updated_lines.append(f"validated_at: {signature.split('validated_at: ')[1].split('\\n')[0]}")
-                has_validated_at = True
-            elif line.startswith("content_hash:"):
-                updated_lines.append(f"content_hash: {signature.split('content_hash: ')[1].split('\\n')[0]}")
-                has_content_hash = True
+            if line.strip().startswith("validated_at:"):
+                # Replace existing validated_at with new value
+                if new_validated_at is not None:
+                    updated_lines.append(f"validated_at: {new_validated_at}")
+                    has_validated_at = True
+            elif line.strip().startswith("content_hash:"):
+                # Replace existing content_hash with new value
+                if new_content_hash is not None:
+                    updated_lines.append(f"content_hash: {new_content_hash}")
+                    has_content_hash = True
             else:
+                # Keep all other frontmatter fields
                 updated_lines.append(line)
 
-        # Add missing fields
-        sig_lines = signature.split("\n")
-        for sig_line in sig_lines:
-            if sig_line.startswith("validated_at:") and not has_validated_at:
-                updated_lines.append(sig_line)
-            elif sig_line.startswith("content_hash:") and not has_content_hash:
-                updated_lines.append(sig_line)
+        # Add missing signature fields if they weren't in the original frontmatter
+        if new_validated_at is not None and not has_validated_at:
+            updated_lines.append(f"validated_at: {new_validated_at}")
+        if new_content_hash is not None and not has_content_hash:
+            updated_lines.append(f"content_hash: {new_content_hash}")
 
         updated_yaml = "\n".join(updated_lines)
         return f"---\n{updated_yaml}\n---\n\n{entry_content}"

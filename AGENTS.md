@@ -267,7 +267,7 @@ Kiwi MCP provides 4 unified tools for 3 item types (directives, tools, knowledge
          <mcp>kiwi-mcp</mcp>
          <tool>manage</tool>
         <params>
-          <action>create</action>
+          <action>sign</action>
           <zettel_id>new_entry_id</zettel_id>
           <title>Entry title</title>
           <content>Markdown content</content>

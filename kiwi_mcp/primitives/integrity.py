@@ -202,12 +202,9 @@ def compute_knowledge_integrity(
     # Compute hash of content for determinism
     content_hash = hashlib.sha256(content.encode()).hexdigest()
     
-    # Clean frontmatter: remove validation fields that would cause circular dependency
-    clean_frontmatter = {}
-    if frontmatter:
-        for key, value in frontmatter.items():
-            if key not in ("validated_at", "content_hash", "integrity"):
-                clean_frontmatter[key] = value
+    # Include ALL frontmatter fields (including signature fields) to create validation chain
+    # This ensures each signature includes the previous one in the hash
+    clean_frontmatter = frontmatter or {}
     
     # Build canonical payload
     payload = {

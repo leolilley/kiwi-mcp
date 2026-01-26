@@ -248,12 +248,12 @@ load(
 
 ### execute
 
-Run operations on items: run, publish, delete, create, update.
+Run operations on items: run, publish, delete, sign.
 
 **Parameters:**
 
 - `item_type` (required): `"directive"`, `"tool"`, or `"knowledge"`
-- `action` (required): `"run"`, `"publish"`, `"delete"`, `"create"`, `"update"`
+- `action` (required): `"run"`, `"publish"`, `"delete"`, `"sign"`
 - `item_id` (required): Item identifier
 - `project_path` (required): Absolute path to project root
 - `parameters` (optional): Action-specific parameters dict
@@ -263,13 +263,12 @@ Run operations on items: run, publish, delete, create, update.
 
 **Supported Actions (All Types):**
 
-All item types support the same 6 actions for consistency:
+All item types support the same 4 actions for consistency:
 
 - `run` - Execute/load the item (directives return parsed content, scripts execute with params, knowledge returns entry)
 - `publish` - Publish to registry with version
 - `delete` - Remove from local or registry (requires `confirm: true`)
-- `create` - Create new item locally
-- `update` - Modify existing item
+- `sign` - Validate and sign item (always allows re-signing)
 
 **Type-Specific Behavior:**
 

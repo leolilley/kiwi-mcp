@@ -50,7 +50,7 @@ Kiwi MCP - Unified MCP for directives, tools, and knowledge
 This MCP provides 4 tools:
 - search: Find items across all types
 - load: Download from registry to local
-- execute: Run, publish, delete, create, update, link
+- execute: Run, publish, delete, sign, link
 - help: Get help and guidance
 
 Types supported:
@@ -86,11 +86,11 @@ Example:
 load(item_type="directive", item_id="my_directive", destination="project")
 """,
             "execute": """
-execute - Run, publish, delete, create, update, or link items
+execute - Run, publish, delete, sign, or link items
 
 Parameters:
 - item_type: "directive" | "tool" | "knowledge" (required)
-- action: "run" | "publish" | "delete" | "create" | "update" | "link" (required)
+- action: "run" | "publish" | "delete" | "sign" | "link" (required)
 - item_id: Item ID (required)
 - parameters: Action-specific parameters (object)
 - project_path: Path to project (for project operations)
@@ -99,8 +99,7 @@ Actions:
 - run: Execute/run the item
 - publish: Publish to registry
 - delete: Delete item
-- create: Create new item
-- update: Update existing item
+- sign: Validate and sign item (always allows re-signing)
 - link: Create relationship between items
 """,
         }

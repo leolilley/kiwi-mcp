@@ -260,7 +260,7 @@ class TestTypeHandlerRegistryExecute:
         registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["knowledge"] = mock_handler
 
-        await registry.execute(item_type="knowledge", action="create", item_id="001-test")
+        await registry.execute(item_type="knowledge", action="sign", item_id="001-test")
 
         call_kwargs = mock_handler.execute.call_args[1]
         assert "zettel_id" in call_kwargs

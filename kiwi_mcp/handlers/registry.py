@@ -6,7 +6,6 @@ and dispatches search, load, and execute operations.
 """
 
 from typing import Dict, Any, Optional
-import json
 import logging
 
 try:
@@ -154,7 +153,7 @@ class TypeHandlerRegistry:
 
         Args:
             item_type: "directive", "tool", or "knowledge"
-            action: "run", "publish", "delete", "create", "update", "link", etc.
+            action: "run", "publish", "delete", "sign"
             item_id: Item identifier
             parameters: Action-specific parameters
             **kwargs: Additional execution parameters (dry_run, project_path, etc.)
@@ -218,7 +217,7 @@ class TypeHandlerRegistry:
             "registry": "TypeHandlerRegistry",
             "project_path": self.project_path,
             "supported_types": self.get_supported_types(),
-            "unified_actions": ["run", "publish", "delete", "create", "update", "link"],
+            "unified_actions": ["run", "publish", "delete", "sign"],
             "handlers": {
                 "directive": {
                     "class": "DirectiveHandler",
@@ -228,9 +227,7 @@ class TypeHandlerRegistry:
                         "run",
                         "publish",
                         "delete",
-                        "create",
-                        "update",
-                        "link",
+                        "sign",
                     ],
                     "run_behavior": "Returns parsed XML content for agent to follow",
                 },
@@ -242,9 +239,7 @@ class TypeHandlerRegistry:
                         "run",
                         "publish",
                         "delete",
-                        "create",
-                        "update",
-                        "link",
+                        "sign",
                     ],
                     "run_behavior": "Executes Python code and returns results",
                 },
@@ -254,10 +249,8 @@ class TypeHandlerRegistry:
                         "search",
                         "load",
                         "run",
-                        "create",
-                        "update",
+                        "sign",
                         "delete",
-                        "link",
                         "publish",
                     ],
                     "run_behavior": "Returns knowledge content for agent context",
