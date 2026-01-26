@@ -13,6 +13,7 @@ Everything else is data-driven configuration.
 """
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -424,6 +425,48 @@ class PrimitiveExecutor:
 
         return schema_validator.validate(merged_config, config_schema)
 
+
+    def _template_config(self, config: Any, params: Dict[str, Any]) -> Any:
+        """
+        Template string values in config with runtime parameters.
+        
+        Recursively walks the config dict and replaces template strings like
+        "{url}" or "{command}" with actual parameter values.
+        
+        Args:
+            config: Configuration (dict, list, str, or primitive - may contain template strings)
+            params: Runtime parameters to substitute
+            
+        Returns:
+            Config with all template strings resolved (same type as input)
+        """
+        if isinstance(config, dict):
+            return {k: self._template_config(v, params) for k, v in config.items()}
+        elif isinstance(config, list):
+            return [self._template_config(item, params) for item in config]
+        elif isinstance(config, str):
+            # Single placeholder: "{param}" -> preserve type
+            match = re.match(r'^\{(\w+)\}$', config.strip())
+            if match is not None:
+                param_name: str = match.group(1)
+                if param_name in params:
+                    return params[param_name]
+                # Leave template as-is if param not provided
+                return config
+            
+            # Multiple placeholders or mixed content: use format
+            if '{' in config:
+                try:
+                    return config.format(**params)
+                except KeyError:
+                    # Missing param - leave as-is for validation to catch
+                    return config
+            
+            return config
+        
+        # Primitive types - return as-is
+        return config
+
     async def execute(
         self, 
         tool_id: str, 
@@ -436,17 +479,11 @@ class PrimitiveExecutor:
         Pipeline:
         1. Resolve chain (with caching)
         2. Verify integrity at every step (if enabled)
-        3. Validate parent→child relationships (if enabled)
-        4. Validate runtime parameters against config_schema
-        5. Execute via hardcoded primitive
-
-        Args:
-            tool_id: ID of the tool to execute
-            params: Runtime parameters
-            lockfile: Optional lockfile for pinned execution
-
-        Returns:
-            ExecutionResult with unified response
+        3. Validate parent->child relationships (if enabled)
+        4. Merge configs from chain
+        5. Template config with runtime params (NEW)
+        6. Validate templated config against config_schema
+        7. Execute via hardcoded primitive
         """
         start_time = time.time()
         context = ExecutionContext()
@@ -463,7 +500,7 @@ class PrimitiveExecutor:
                 )
             context.chain = chain
 
-            # 2. Verify integrity at every step (if enabled)
+            # 2. Verify integrity (unchanged)
             if self.verify_integrity:
                 integrity_result = self._verify_chain_integrity(chain)
                 if not integrity_result["success"]:
@@ -477,7 +514,7 @@ class PrimitiveExecutor:
                 context.integrity_verified = True
                 context.verification_cached = integrity_result.get("cached_count", 0)
             
-            # 3. Validate parent→child relationships (if enabled)
+            # 3. Validate chain relationships (unchanged)
             if self.validate_chain:
                 chain_result = self._validate_chain_relationships(chain)
                 if not chain_result["valid"]:
@@ -490,11 +527,10 @@ class PrimitiveExecutor:
                     )
                 context.chain_validated = True
                 
-                # Log warnings
                 for warning in chain_result.get("warnings", []):
                     logger.warning(f"Chain validation warning for {tool_id}: {warning}")
 
-            # 4. Find terminal primitive
+            # 4. Find terminal primitive (unchanged)
             terminal_tool = chain[-1]
             if terminal_tool.get("tool_type") != "primitive":
                 return ExecutionResult(
@@ -506,12 +542,15 @@ class PrimitiveExecutor:
 
             primitive_type = terminal_tool.get("tool_id")
 
-            # 5. Merge configs
+            # 5. Merge configs (unchanged)
             config = self.resolver.merge_configs(chain)
 
-            # 6. Runtime parameter validation (Layer 2)
+            # 6. Template config with params BEFORE validation (KEY FIX)
+            templated_config = self._template_config(config, params)
+
+            # 7. Runtime parameter validation (now on TEMPLATED config)
             terminal_manifest = terminal_tool.get("manifest", {})
-            validation_result = self._validate_runtime_params(config, terminal_manifest)
+            validation_result = self._validate_runtime_params(templated_config, terminal_manifest)
 
             if not validation_result.get("valid", True):
                 return ExecutionResult(
@@ -522,23 +561,22 @@ class PrimitiveExecutor:
                     metadata={"validation_issues": validation_result.get("issues", [])},
                 )
 
-            # Log any warnings but continue execution
             if validation_result.get("warnings"):
                 for warning in validation_result["warnings"]:
                     logger.warning(f"Runtime validation warning for {tool_id}: {warning}")
 
-            # 7. Execute with appropriate primitive
+            # 8. Execute with appropriate primitive (use TEMPLATED config)
             if primitive_type == "subprocess":
                 # Build execution config with file path and CLI args
-                exec_config = self._build_subprocess_config(config, params)
-                # Remove internal params before passing to subprocess
+                exec_config = self._build_subprocess_config(templated_config, params)
                 exec_params = {k: v for k, v in params.items() if not k.startswith("_")}
                 result = await self.subprocess_primitive.execute(exec_config, exec_params)
                 exec_result = self._convert_subprocess_result(result)
             elif primitive_type == "http_client":
-                # Remove internal params for HTTP (like _file_path)
                 exec_params = {k: v for k, v in params.items() if not k.startswith("_")}
-                result = await self.http_client_primitive.execute(config or {}, exec_params)
+                # HTTP primitive handles its own templating, but we already did it
+                # So we can pass templated_config directly
+                result = await self.http_client_primitive.execute(templated_config, exec_params)
                 exec_result = self._convert_http_result(result)
             else:
                 return ExecutionResult(
@@ -565,7 +603,7 @@ class PrimitiveExecutor:
                 duration_ms=int((time.time() - start_time) * 1000), 
                 error=f"Execution failed: {e}"
             )
-    
+
     def _verify_chain_integrity(self, chain: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Verify integrity of every tool in the chain.

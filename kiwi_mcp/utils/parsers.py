@@ -444,8 +444,26 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
     content_start = content_without_sig.find("---", 3) + 3 if content_without_sig.startswith("---") else 0
     entry_content = content_without_sig[content_start:].strip()
 
-    # Get zettel_id from frontmatter (fallback to filename stem if not present)
-    zettel_id = frontmatter.get("zettel_id", file_path.stem)
+    # Get zettel_id from frontmatter (REQUIRED - no fallback)
+    if "zettel_id" not in frontmatter or not frontmatter.get("zettel_id"):
+        raise ValueError(
+            f"Knowledge entry is missing required 'zettel_id' in frontmatter: {file_path}\n"
+            f"\n"
+            f"PROBLEM:\n"
+            f"  The YAML frontmatter must have a 'zettel_id' field\n"
+            f"  Example: ---\n"
+            f"           zettel_id: my_entry\n"
+            f"           title: My Entry\n"
+            f"           ---\n"
+            f"\n"
+            f"SOLUTION:\n"
+            f"  1. Edit {file_path}\n"
+            f"  2. Add zettel_id to frontmatter: zettel_id: {file_path.stem}\n"
+            f"  3. Ensure filename matches: {file_path.name} should match the zettel_id\n"
+            f"  4. Run: mcp__kiwi_mcp__execute(item_type='knowledge', action='sign', item_id='{file_path.stem}')"
+        )
+
+    zettel_id = frontmatter["zettel_id"]
 
     # Validate filename matches zettel_id
     expected_filename = f"{zettel_id}.md"
