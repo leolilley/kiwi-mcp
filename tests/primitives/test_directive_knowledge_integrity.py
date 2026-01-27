@@ -5,12 +5,9 @@ These tests verify the canonical content-addressed hashing for
 directives and knowledge entries.
 """
 
-import pytest
 from kiwi_mcp.primitives.integrity import (
     compute_directive_integrity,
-    verify_directive_integrity,
     compute_knowledge_integrity,
-    verify_knowledge_integrity,
     short_hash,
 )
 
@@ -90,25 +87,6 @@ class TestDirectiveIntegrity:
         
         # Both None and {} should produce same result
         assert hash1 == hash2
-
-    def test_verify_directive_integrity_success(self):
-        """Test successful verification."""
-        xml = '<directive name="test" version="1.0.0"><process><step>Do thing</step></process></directive>'
-        metadata = {"category": "test"}
-        
-        computed_hash = compute_directive_integrity("test", "1.0.0", xml, metadata)
-        
-        assert verify_directive_integrity("test", "1.0.0", xml, computed_hash, metadata)
-
-    def test_verify_directive_integrity_failure(self):
-        """Test failed verification."""
-        xml = '<directive name="test" version="1.0.0"><process><step>Do thing</step></process></directive>'
-        modified_xml = '<directive name="test" version="1.0.0"><process><step>Modified</step></process></directive>'
-        metadata = {"category": "test"}
-        
-        original_hash = compute_directive_integrity("test", "1.0.0", xml, metadata)
-        
-        assert not verify_directive_integrity("test", "1.0.0", modified_xml, original_hash, metadata)
 
 
 class TestKnowledgeIntegrity:
@@ -216,25 +194,6 @@ class TestKnowledgeIntegrity:
         hash2 = compute_knowledge_integrity("test", "1.0.0", content, {})
         
         assert hash1 == hash2
-
-    def test_verify_knowledge_integrity_success(self):
-        """Test successful verification."""
-        content = "Knowledge content"
-        frontmatter = {"title": "Test", "tags": ["a", "b"]}
-        
-        computed_hash = compute_knowledge_integrity("test", "1.0.0", content, frontmatter)
-        
-        assert verify_knowledge_integrity("test", "1.0.0", content, computed_hash, frontmatter)
-
-    def test_verify_knowledge_integrity_failure(self):
-        """Test failed verification."""
-        content = "Original content"
-        modified_content = "Modified content"
-        frontmatter = {"title": "Test"}
-        
-        original_hash = compute_knowledge_integrity("test", "1.0.0", content, frontmatter)
-        
-        assert not verify_knowledge_integrity("test", "1.0.0", modified_content, original_hash, frontmatter)
 
 
 class TestShortHash:

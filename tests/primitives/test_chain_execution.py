@@ -65,10 +65,9 @@ def main():
         return Mock()
 
     @pytest.fixture
-    def executor(self, mock_registry, project_path):
+    def executor(self, project_path):
         """PrimitiveExecutor instance."""
         return PrimitiveExecutor(
-            mock_registry,
             project_path=project_path,
             verify_integrity=True,
             validate_chain=False  # Skip chain validation for these tests

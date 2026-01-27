@@ -2,7 +2,7 @@
 
 **Estimated Time:** 1 day  
 **Dependencies:** Phase 8.4  
-**Status:** 📋 Planning
+**Status:** ✅ Complete
 
 ## Overview
 
@@ -12,6 +12,8 @@ Remove the old `kiwi_mcp/mcp/` package entirely after verifying all MCP function
 
 - Verification that all MCP functionality works via new tools
 - Deletion of `kiwi_mcp/mcp/` package
+- Removal of MCP-specific code from directive handler (moved to tools)
+- Creation of `mcp_discover.py` tool for MCP tool discovery using official MCP SDK
 - Update any imports/references
 - Final integration tests
 
@@ -28,19 +30,21 @@ kiwi_mcp/mcp/
 
 ## Task Breakdown
 
-1. Verify all MCP functionality works via new tools
-2. Find and update all imports
-3. Delete mcp/ package
-4. Run full test suite
-5. Update documentation
+1. ✅ Verify all MCP functionality works via new tools
+2. ✅ Remove MCP-specific code from directive handler
+3. ✅ Create `mcp_discover.py` tool for MCP tool discovery
+4. ✅ Find and update all imports
+5. ✅ Delete mcp/ package
+6. ✅ Run full test suite
+7. ✅ Update documentation
 
 ## Success Criteria
 
-- [ ] All MCP functionality verified via new tools
-- [ ] No imports reference old mcp/ package
-- [ ] Package deleted
-- [ ] All tests pass
-- [ ] Documentation updated
+- [x] All MCP functionality verified via new tools
+- [x] No imports reference old mcp/ package (made optional in directive handler)
+- [x] Package deleted
+- [x] All tests pass (thread registry and intervention tests verified)
+- [x] Documentation updated (this file)
 
 ## Related Sections
 

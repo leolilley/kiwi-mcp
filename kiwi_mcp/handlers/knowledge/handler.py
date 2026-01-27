@@ -11,7 +11,6 @@ from kiwi_mcp.handlers import SortBy
 import json
 from pathlib import Path
 
-from kiwi_mcp.api.knowledge_registry import KnowledgeRegistry
 from kiwi_mcp.utils.logger import get_logger
 from kiwi_mcp.utils.resolvers import KnowledgeResolver, get_user_space
 from kiwi_mcp.utils.parsers import parse_knowledge_entry
@@ -20,7 +19,6 @@ from kiwi_mcp.utils.metadata_manager import MetadataManager
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 from kiwi_mcp.primitives.integrity import (
     compute_knowledge_integrity,
-    verify_knowledge_integrity,
     short_hash,
 )
 from kiwi_mcp.utils.schema_validator import SchemaValidator
@@ -33,15 +31,14 @@ class KnowledgeHandler:
         """Initialize handler with project path."""
         self.project_path = Path(project_path)
         self.logger = get_logger("knowledge_handler")
-        self.registry = KnowledgeRegistry()  # Only for remote operations
 
         # Local file handling
         self.resolver = KnowledgeResolver(self.project_path)
         self.search_paths = [self.resolver.project_knowledge, self.resolver.user_knowledge]
-        
+
         # Frontmatter schema validation
         self._schema_validator = SchemaValidator()
-        
+
         # Vector store for automatic embedding
         self._vector_store = None
         self._init_vector_store()
@@ -49,19 +46,23 @@ class KnowledgeHandler:
     def _init_vector_store(self):
         """Initialize project vector store for automatic embedding."""
         try:
-            from kiwi_mcp.storage.vector import LocalVectorStore, EmbeddingService, load_vector_config
-            
+            from kiwi_mcp.storage.vector import (
+                LocalVectorStore,
+                EmbeddingService,
+                load_vector_config,
+            )
+
             # Load embedding config from environment
             config = load_vector_config()
             embedding_service = EmbeddingService(config)
-            
+
             vector_path = self.project_path / ".ai" / "vector" / "project"
             vector_path.mkdir(parents=True, exist_ok=True)
-            
+
             self._vector_store = LocalVectorStore(
                 storage_path=vector_path,
                 collection_name="project_items",
-                embedding_service=embedding_service
+                embedding_service=embedding_service,
             )
         except ValueError as e:
             # Missing config - vector search disabled
@@ -71,15 +72,13 @@ class KnowledgeHandler:
             self.logger.warning(f"Vector store init failed: {e}")
             self._vector_store = None
 
-    def _compute_knowledge_integrity(
-        self, entry_data: Dict[str, Any]
-    ) -> str:
+    def _compute_knowledge_integrity(self, entry_data: Dict[str, Any]) -> str:
         """
         Compute canonical integrity hash for a knowledge entry.
-        
+
         Args:
             entry_data: Parsed knowledge entry data
-            
+
         Returns:
             SHA256 hex digest (64 characters)
         """
@@ -88,24 +87,22 @@ class KnowledgeHandler:
             "entry_type": entry_data.get("entry_type"),
             "tags": entry_data.get("tags", []),
         }
-        
+
         return compute_knowledge_integrity(
             zettel_id=entry_data.get("zettel_id", ""),
             version=entry_data.get("version", "1.0.0"),
             content=entry_data.get("content", ""),
             metadata=metadata,
         )
-    
-    def _verify_knowledge_integrity(
-        self, entry_data: Dict[str, Any], stored_hash: str
-    ) -> bool:
+
+    def _verify_knowledge_integrity(self, entry_data: Dict[str, Any], stored_hash: str) -> bool:
         """
         Verify knowledge entry content matches stored canonical integrity hash.
-        
+
         Args:
             entry_data: Parsed knowledge entry data
             stored_hash: Expected integrity hash
-            
+
         Returns:
             True if computed hash matches stored hash
         """
@@ -115,10 +112,10 @@ class KnowledgeHandler:
     def _extract_frontmatter_schema(self, entry_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Extract optional frontmatter_schema from knowledge entry.
-        
+
         The schema can be defined in the frontmatter as a 'schema' field
         containing a JSON Schema for validating custom frontmatter fields.
-        
+
         Example frontmatter:
             ---
             zettel_id: 20260124-api-patterns
@@ -131,10 +128,10 @@ class KnowledgeHandler:
                   type: string
                   minLength: 3
             ---
-        
+
         Args:
             entry_data: Parsed knowledge entry data
-            
+
         Returns:
             JSON Schema dict or None if not defined
         """
@@ -142,11 +139,11 @@ class KnowledgeHandler:
         if schema and isinstance(schema, dict):
             return schema
         return None
-    
+
     def _build_base_frontmatter_schema(self) -> Dict[str, Any]:
         """
         Build base JSON Schema for standard knowledge frontmatter fields.
-        
+
         Returns:
             JSON Schema dict for base frontmatter validation
         """
@@ -156,48 +153,43 @@ class KnowledgeHandler:
                 "zettel_id": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Unique identifier for the knowledge entry"
+                    "description": "Unique identifier for the knowledge entry",
                 },
                 "title": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Title of the knowledge entry"
+                    "description": "Title of the knowledge entry",
                 },
                 "entry_type": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Type of knowledge entry (e.g., pattern, learning, reference, concept, decision, insight, procedure, api_fact, experiment, template, workflow, etc.)"
+                    "description": "Type of knowledge entry (e.g., pattern, learning, reference, concept, decision, insight, procedure, api_fact, experiment, template, workflow, etc.)",
                 },
-                "category": {
-                    "type": "string",
-                    "description": "Category for organization"
-                },
+                "category": {"type": "string", "description": "Category for organization"},
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Tags for categorization"
+                    "description": "Tags for categorization",
                 },
                 "version": {
                     "type": "string",
                     "pattern": "^\\d+\\.\\d+\\.\\d+$",
-                    "description": "Semantic version"
+                    "description": "Semantic version",
                 },
             },
             "required": ["zettel_id", "title", "entry_type"],
         }
-    
+
     def _validate_frontmatter_with_schema(
-        self, 
-        entry_data: Dict[str, Any], 
-        custom_schema: Optional[Dict[str, Any]] = None
+        self, entry_data: Dict[str, Any], custom_schema: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Validate knowledge entry frontmatter against schema.
-        
+
         Args:
             entry_data: Parsed knowledge entry data (includes frontmatter fields)
             custom_schema: Optional custom schema to merge with base schema
-            
+
         Returns:
             Validation result with valid, issues, warnings
         """
@@ -205,25 +197,39 @@ class KnowledgeHandler:
             return {
                 "valid": True,
                 "issues": [],
-                "warnings": ["JSON Schema validation not available - skipping frontmatter validation"],
+                "warnings": [
+                    "JSON Schema validation not available - skipping frontmatter validation"
+                ],
             }
-        
+
         # Build combined schema
         base_schema = self._build_base_frontmatter_schema()
-        
+
         if custom_schema:
             # Merge custom schema properties into base
             if "properties" in custom_schema:
                 base_schema["properties"].update(custom_schema["properties"])
             if "required" in custom_schema:
-                base_schema["required"] = list(set(base_schema.get("required", []) + custom_schema["required"]))
-        
+                base_schema["required"] = list(
+                    set(base_schema.get("required", []) + custom_schema["required"])
+                )
+
         # Extract frontmatter fields for validation (exclude content and validation fields)
         frontmatter_to_validate = {
-            k: v for k, v in entry_data.items() 
-            if k not in ("content", "validated_at", "content_hash", "integrity", "path", "source", "schema")
+            k: v
+            for k, v in entry_data.items()
+            if k
+            not in (
+                "content",
+                "validated_at",
+                "content_hash",
+                "integrity",
+                "path",
+                "source",
+                "schema",
+            )
         }
-        
+
         return self._schema_validator.validate(frontmatter_to_validate, base_schema)
 
     async def search(
@@ -258,30 +264,9 @@ class KnowledgeHandler:
         try:
             results = []
 
-            # Search local files
-            if source in ("local", "all"):
-                local_results = self._search_local(query, category, entry_type, tags)
-                results.extend(local_results)
-
-            # Search registry
-            if source in ("registry", "all"):
-                try:
-                    # Registry search accepts: query, category, entry_type, tags, limit
-                    registry_results = await self.registry.search(
-                        query=query,
-                        category=category,
-                        entry_type=entry_type,
-                        tags=tags,
-                        limit=limit,
-                    )
-
-                    # Registry returns list directly
-                    if isinstance(registry_results, list):
-                        for item in registry_results:
-                            item["source"] = "registry"
-                        results.extend(registry_results)
-                except Exception as e:
-                    self.logger.warning(f"Registry search failed: {e}")
+            # Search local files only
+            local_results = self._search_local(query, category, entry_type, tags)
+            results.extend(local_results)
 
             # Sort results based on sort_by parameter
             source_priority = {"project": 0, "user": 1, "registry": 2}
@@ -315,7 +300,7 @@ class KnowledgeHandler:
     async def load(
         self,
         zettel_id: str,
-        source: Literal["project", "user", "registry"],
+        source: Literal["project", "user"],
         destination: Optional[Literal["project", "user"]] = None,
         include_relationships: bool = False,
     ) -> Dict[str, Any]:
@@ -324,7 +309,7 @@ class KnowledgeHandler:
 
         Args:
             zettel_id: Entry ID to load
-            source: Where to load from - "project" | "user" | "registry"
+            source: Where to load from - "project" | "user"
             destination: Where to copy to (optional). If None or same as source, read-only mode.
             include_relationships: Include linked entries
 
@@ -337,69 +322,7 @@ class KnowledgeHandler:
 
         try:
             # Determine if this is read-only mode (no copy)
-            # Read-only when: destination is None OR destination equals source (for non-registry)
-            is_read_only = destination is None or (source == destination and source != "registry")
-            
-            # LOAD FROM REGISTRY
-            if source == "registry":
-                # For registry, default destination to "project" if not specified
-                effective_destination = destination or "project"
-                
-                # Get entry from registry
-                registry_data = await self.registry.get(zettel_id=zettel_id)
-                if not registry_data:
-                    return {"error": f"Knowledge entry '{zettel_id}' not found in registry"}
-
-                content = registry_data.get("content")
-                if not content:
-                    return {"error": f"Knowledge entry '{zettel_id}' has no content"}
-
-                # Determine target path based on destination
-                if effective_destination == "user":
-                    base_path = get_user_space() / "knowledge"
-                else:  # destination == "project"
-                    base_path = self.project_path / ".ai" / "knowledge"
-
-                # Build category path
-                category = registry_data.get("category", "")
-                if category:
-                    target_dir = base_path / category
-                else:
-                    target_dir = base_path
-
-                # Create directory if needed
-                target_dir.mkdir(parents=True, exist_ok=True)
-
-                # Write file
-                target_path = target_dir / f"{zettel_id}.md"
-                target_path.write_text(content)
-
-                self.logger.info(f"Downloaded knowledge entry from registry to: {target_path}")
-
-                # Check signature after download for safety
-                file_content = target_path.read_text()
-                signature_info = MetadataManager.get_signature_info("knowledge", file_content)
-
-                # Parse and return
-                entry_data = parse_knowledge_entry(target_path)
-                entry_data["source"] = "registry"
-                entry_data["destination"] = effective_destination
-                entry_data["path"] = str(target_path)
-
-                # Add warning if no signature (registry content should be signed)
-                if not signature_info:
-                    entry_data["warning"] = {
-                        "message": "Registry knowledge entry has no signature - content may be corrupted",
-                        "solution": "Use execute action 'sign' to re-validate the entry",
-                    }
-                    self.logger.warning(f"Registry knowledge entry '{zettel_id}' has no signature")
-
-                # Include relationships if requested
-                if include_relationships:
-                    relationships = await self.registry.get_relationships(zettel_id)
-                    entry_data["relationships"] = relationships
-
-                return entry_data
+            is_read_only = destination is None or (source == destination)
 
             # LOAD FROM PROJECT
             if source == "project":
@@ -419,7 +342,7 @@ class KnowledgeHandler:
                             "path": str(file_path),
                             "solution": "Use execute action 'sign' to re-validate the entry before copying",
                         }
-                    
+
                     content = file_path.read_text()
                     # Determine category from source path
                     relative_path = file_path.relative_to(search_base)
@@ -437,18 +360,18 @@ class KnowledgeHandler:
                     # Read-only mode: check signature and warn if missing
                     file_content = file_path.read_text()
                     signature_info = MetadataManager.get_signature_info("knowledge", file_content)
-                    
+
                     entry_data = parse_knowledge_entry(file_path)
                     entry_data["source"] = "project"
                     entry_data["path"] = str(file_path)
                     entry_data["mode"] = "read_only"
-                    
+
                     if not signature_info:
                         entry_data["warning"] = {
                             "message": "Knowledge entry has no signature",
                             "solution": "Use execute action 'sign' to re-validate",
                         }
-                    
+
                     return entry_data
 
             # LOAD FROM USER
@@ -469,7 +392,7 @@ class KnowledgeHandler:
                         "path": str(file_path),
                         "solution": "Use execute action 'sign' to re-validate the entry before copying",
                     }
-                
+
                 # Determine category from source path
                 relative_path = file_path.relative_to(search_base)
                 target_path = self.project_path / ".ai" / "knowledge" / relative_path
@@ -486,18 +409,18 @@ class KnowledgeHandler:
                 # Read-only mode: check signature and warn if missing
                 file_content = file_path.read_text()
                 signature_info = MetadataManager.get_signature_info("knowledge", file_content)
-                
+
                 entry_data = parse_knowledge_entry(file_path)
                 entry_data["source"] = "user"
                 entry_data["path"] = str(file_path)
                 entry_data["mode"] = "read_only"
-                
+
                 if not signature_info:
                     entry_data["warning"] = {
                         "message": "Knowledge entry has no signature",
                         "solution": "Use execute action 'sign' to re-validate",
                     }
-                
+
                 return entry_data
         except Exception as e:
             return {"error": str(e), "message": f"Failed to load entry '{zettel_id}'"}
@@ -542,38 +465,23 @@ class KnowledgeHandler:
                                         newest_version = user_version
                                         newest_location = "user"
                             except Exception as e:
-                                self.logger.warning(f"Failed to compare versions with user space: {e}")
+                                self.logger.warning(
+                                    f"Failed to compare versions with user space: {e}"
+                                )
                     except Exception as e:
-                        self.logger.warning(f"Failed to parse user space knowledge {zettel_id}: {e}")
+                        self.logger.warning(
+                            f"Failed to parse user space knowledge {zettel_id}: {e}"
+                        )
             except Exception as e:
                 self.logger.warning(f"Failed to check user space for knowledge {zettel_id}: {e}")
 
-        try:
-            reg = await self.registry.get(zettel_id)
-            if reg and reg.get("version"):
-                rv = reg["version"]
-                try:
-                    if compare_versions(current_version, rv) < 0:
-                        if compare_versions(newest_version, rv) < 0:
-                            newest_version = rv
-                            newest_location = "registry"
-                except Exception as e:
-                    self.logger.warning(f"Failed to compare versions with registry: {e}")
-        except Exception as e:
-            self.logger.warning(f"Failed to check registry for knowledge {zettel_id}: {e}")
-
         if newest_location and newest_version != current_version:
-            sugg = (
-                "Use load() to download the newer version from registry"
-                if newest_location == "registry"
-                else "Use load() to copy the newer version from user space"
-            )
             return {
                 "message": "A newer version of this knowledge entry is available",
                 "current_version": current_version,
                 "newer_version": newest_version,
                 "location": newest_location,
-                "suggestion": sugg,
+                "suggestion": "Use load() to copy the newer version from user space",
             }
         return None
 
@@ -584,7 +492,7 @@ class KnowledgeHandler:
         Execute a knowledge operation.
 
         Args:
-            action: "run", "sign", "delete", "link", "publish"
+            action: "run", "sign"
             zettel_id: Entry ID
             parameters: Action parameters (title, content, etc.)
 
@@ -598,21 +506,16 @@ class KnowledgeHandler:
                 return await self._run_knowledge(zettel_id, params)
             elif action == "sign":
                 return await self._sign_knowledge(zettel_id, params)
-            elif action == "delete":
-                return await self._delete_knowledge(zettel_id, params)
-            elif action == "publish":
-                return await self._publish_knowledge(zettel_id, params)
             else:
                 return {
                     "error": f"Unknown action: {action}",
-                    "supported_actions": ["run", "sign", "delete", "publish"],
+                    "supported_actions": ["run", "sign"],
                 }
         except Exception as e:
             return {
                 "error": str(e),
                 "message": f"Failed to execute action '{action}' on entry '{zettel_id}'",
             }
-
 
     def _search_local(
         self,
@@ -669,7 +572,9 @@ class KnowledgeHandler:
 
         # Extract integrity hash from signature
         file_content = file_path.read_text()
-        stored_hash = MetadataManager.get_signature_hash("knowledge", file_content, file_path=file_path, project_path=self.project_path)
+        stored_hash = MetadataManager.get_signature_hash(
+            "knowledge", file_content, file_path=file_path, project_path=self.project_path
+        )
 
         if not stored_hash:
             return {
@@ -693,18 +598,19 @@ class KnowledgeHandler:
                 "error": f"Failed to parse knowledge entry: {e}",
                 "path": str(file_path),
             }
-        
+
         # Verify integrity - recompute hash and compare
         from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
+
         computed_hash = compute_unified_integrity(
             item_type="knowledge",
             item_id=zettel_id,
             version=entry_data.get("version", "0.0.0"),
             file_content=file_content,
             file_path=file_path,
-            metadata=None  # Let compute_unified_integrity extract what it needs
+            metadata=None,  # Let compute_unified_integrity extract what it needs
         )
-        
+
         if computed_hash != stored_hash:
             return {
                 "status": "error",
@@ -717,14 +623,14 @@ class KnowledgeHandler:
         # Parse entry file and validate
         try:
             entry_data = parse_knowledge_entry(file_path)
-            
+
             # Validate using centralized validator and embed if valid
             validation_result = await ValidationManager.validate_and_embed(
-                "knowledge", 
-                file_path, 
+                "knowledge",
+                file_path,
                 entry_data,
                 vector_store=self._vector_store,
-                item_id=entry_data.get("zettel_id")
+                item_id=entry_data.get("zettel_id"),
             )
             if not validation_result["valid"]:
                 return {
@@ -743,12 +649,14 @@ class KnowledgeHandler:
             version_warning = await self._check_for_newer_version(
                 zettel_id, current_version, current_source
             )
-            
+
             # Frontmatter schema validation (optional but recommended)
             # Only fail on critical issues, warnings are acceptable
             custom_schema = self._extract_frontmatter_schema(entry_data)
-            frontmatter_validation = self._validate_frontmatter_with_schema(entry_data, custom_schema)
-            
+            frontmatter_validation = self._validate_frontmatter_with_schema(
+                entry_data, custom_schema
+            )
+
             # Return error only if validation has critical issues (not just warnings)
             # Warnings are acceptable and don't block execution
             if not frontmatter_validation.get("valid", True):
@@ -764,7 +672,7 @@ class KnowledgeHandler:
                         "path": str(file_path),
                         "solution": "Fix the validation issues in the frontmatter",
                     }
-            
+
             # Get integrity hash from signature
             signature_info = MetadataManager.get_signature_info("knowledge", file_content)
             content_hash = signature_info["hash"] if signature_info else None
@@ -783,11 +691,11 @@ class KnowledgeHandler:
                 "frontmatter_validated": True,
                 "instructions": "Use this knowledge to inform your decisions.",
             }
-            
+
             # Add validation warnings if any
             if frontmatter_validation.get("warnings"):
                 out["validation_warnings"] = frontmatter_validation["warnings"]
-            
+
             if version_warning:
                 out["version_warning"] = version_warning
             return out
@@ -811,14 +719,14 @@ class KnowledgeHandler:
 
         # Find the knowledge entry file - try resolver first, then search by location
         file_path = self.resolver.resolve(zettel_id)
-        
+
         if not file_path or not file_path.exists():
             # Search by location if resolver didn't find it
             if location == "project":
                 search_base = self.project_path / ".ai" / "knowledge"
             else:
                 search_base = get_user_space() / "knowledge"
-            
+
             file_path = self._find_entry_in_path(zettel_id, search_base)
 
         if not file_path or not file_path.exists():
@@ -826,12 +734,14 @@ class KnowledgeHandler:
             return {
                 "error": f"Knowledge entry file not found: {zettel_id}",
                 "hint": f"Create the file first at .ai/knowledge/{category_hint}/{zettel_id}.md",
-                "searched_in": str(search_base if 'search_base' in locals() else self.project_path / ".ai" / "knowledge"),
             }
 
         # Validate path structure
         from kiwi_mcp.utils.paths import validate_path_structure
-        determined_location = "project" if str(file_path).startswith(str(self.project_path)) else "user"
+
+        determined_location = (
+            "project" if str(file_path).startswith(str(self.project_path)) else "user"
+        )
         path_validation = validate_path_structure(
             file_path, "knowledge", determined_location, self.project_path
         )
@@ -854,11 +764,11 @@ class KnowledgeHandler:
 
         # Validate entry
         validation_result = await ValidationManager.validate_and_embed(
-            "knowledge", 
-            file_path, 
+            "knowledge",
+            file_path,
             entry_data,
             vector_store=self._vector_store,
-            item_id=entry_data.get("zettel_id")
+            item_id=entry_data.get("zettel_id"),
         )
         if not validation_result["valid"]:
             return {
@@ -870,7 +780,7 @@ class KnowledgeHandler:
 
         # Use zettel_id from file's frontmatter (not parameter) - parse_knowledge_entry() already validated match
         file_zettel_id = entry_data["zettel_id"]
-        
+
         # Explicit validation check before writing (double-check)
         expected_filename = f"{file_zettel_id}.md"
         if file_path.stem != file_zettel_id:
@@ -880,30 +790,30 @@ class KnowledgeHandler:
                     "filename": file_path.name,
                     "frontmatter_zettel_id": file_zettel_id,
                     "expected_filename": expected_filename,
-                    "path": str(file_path)
+                    "path": str(file_path),
                 },
                 "solution": {
                     "option_1": {
                         "action": "Rename file to match frontmatter zettel_id",
                         "command": f"mv '{file_path}' '{file_path.parent / expected_filename}'",
-                        "then": f"Re-run sign action with item_id='{file_zettel_id}'"
+                        "then": f"Re-run sign action with item_id='{file_zettel_id}'",
                     },
                     "option_2": {
                         "action": "Update frontmatter to match current filename",
                         "steps": [
                             f"1. Edit {file_path}",
                             f"2. Change frontmatter: zettel_id: {file_path.stem}",
-                            f"3. Re-run: mcp__kiwi_mcp__execute(item_type='knowledge', action='sign', item_id='{file_path.stem}')"
-                        ]
+                            f"3. Re-run: mcp__kiwi_mcp__execute(item_type='knowledge', action='sign', item_id='{file_path.stem}')",
+                        ],
                     },
                     "option_3": {
                         "action": "Use edit_knowledge directive",
                         "steps": [
                             f"Run: edit_knowledge directive with zettel_id='{file_path.stem}'",
-                            f"Update frontmatter zettel_id to '{file_path.stem}' OR rename file to '{expected_filename}'"
-                        ]
-                    }
-                }
+                            f"Update frontmatter zettel_id to '{file_path.stem}' OR rename file to '{expected_filename}'",
+                        ],
+                    },
+                },
             }
 
         # Strict version requirement - fail if missing
@@ -911,37 +821,45 @@ class KnowledgeHandler:
         if not version or version == "0.0.0":
             return {
                 "error": "Knowledge entry validation failed",
-                "details": ["Knowledge entry is missing required 'version' in YAML frontmatter. "
-                            'Add to frontmatter: version: "1.0.0"'],
+                "details": [
+                    "Knowledge entry is missing required 'version' in YAML frontmatter. "
+                    'Add to frontmatter: version: "1.0.0"'
+                ],
                 "path": str(file_path),
                 "solution": "Add version metadata and re-run sign action",
             }
-        
+
         # Compute unified integrity hash on content WITHOUT signature
         # This allows re-signing to produce consistent hashes
         from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, MetadataManager
-        
+
         # Remove existing signature before hashing (chained validation)
         strategy = MetadataManager.get_strategy("knowledge")
         content_without_sig = strategy.remove_signature(current_content)
-        
+
         # Hash only original content, not signature
         content_hash = compute_unified_integrity(
             item_type="knowledge",
             item_id=file_zettel_id,
             version=version,
             file_content=content_without_sig,  # Hash only original content, not signature
-            file_path=file_path
+            file_path=file_path,
         )
-        
+
         # Sign the validated content with unified integrity hash (adds signature at top, removes old signature fields)
         signed_content = MetadataManager.sign_content_with_hash(
-            "knowledge", content_without_sig, content_hash, file_path=file_path, project_path=self.project_path
+            "knowledge",
+            content_without_sig,
+            content_hash,
+            file_path=file_path,
+            project_path=self.project_path,
         )
         file_path.write_text(signed_content)
 
         # Get signature info for response
-        signature_info = MetadataManager.get_signature_info("knowledge", signed_content, file_path=file_path, project_path=self.project_path)
+        signature_info = MetadataManager.get_signature_info(
+            "knowledge", signed_content, file_path=file_path, project_path=self.project_path
+        )
 
         return {
             "status": "signed",
@@ -954,146 +872,3 @@ class KnowledgeHandler:
             "integrity": content_hash,
             "integrity_short": content_hash[:12],
         }
-
-    async def _delete_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Delete knowledge entry from local and/or registry."""
-        if not params.get("confirm"):
-            return {
-                "error": "Delete requires confirmation",
-                "required": {"confirm": True},
-                "example": "parameters={'confirm': True, 'source': 'local'}",
-            }
-
-        source = params.get("source", "all")
-        deleted = []
-
-        # Delete local
-        if source in ("local", "all"):
-            file_path = self.resolver.resolve(zettel_id)
-            if file_path:
-                file_path.unlink()
-                deleted.append("local")
-
-        # Delete from registry
-        if source in ("registry", "all"):
-            try:
-                result = await self.registry.delete(
-                    zettel_id=zettel_id,
-                    cascade_relationships=params.get("cascade_relationships", False)
-                )
-                if "error" in result:
-                    self.logger.warning(f"Registry delete failed: {result.get('error')}")
-                else:
-                    deleted.append("registry")
-            except Exception as e:
-                self.logger.warning(f"Registry delete failed: {e}")
-
-        if not deleted:
-            return {"error": f"Knowledge entry '{zettel_id}' not found in specified location(s)"}
-
-        return {"status": "deleted", "zettel_id": zettel_id, "deleted_from": deleted}
-
-    async def _publish_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Publish knowledge entry to registry."""
-        # Find local entry file first (needed to extract version)
-        file_path = self.resolver.resolve(zettel_id)
-        if not file_path:
-            return {
-                "error": f"Knowledge entry '{zettel_id}' not found locally",
-                "suggestion": "Create entry first before publishing",
-            }
-
-        # Extract integrity hash from signature
-        file_content = file_path.read_text()
-        stored_hash = MetadataManager.get_signature_hash("knowledge", file_content, file_path=file_path, project_path=self.project_path)
-
-        if not stored_hash:
-            return {
-                "error": "Cannot publish: knowledge entry has no signature",
-                "path": str(file_path),
-                "hint": "Knowledge entries must be validated before publishing",
-                "solution": (
-                    f"Run: execute(item_type='knowledge', action='sign', "
-                    f"item_id='{zettel_id}', parameters={{'location': 'project'}}, "
-                    f"project_path='{self.project_path}')"
-                ),
-            }
-
-        # Parse entry to get metadata
-        # parse_knowledge_entry() will validate filename/zettel_id match and raise if mismatch
-        try:
-            entry_data = parse_knowledge_entry(file_path)
-        except ValueError as e:
-            # Convert parse validation error to structured response
-            return {
-                "error": "Cannot publish: filename and zettel_id mismatch",
-                "details": str(e),
-                "path": str(file_path)
-            }
-        
-        # Explicit validation check after parsing (double-check for clarity)
-        expected_filename = f"{entry_data['zettel_id']}.md"
-        if file_path.stem != entry_data["zettel_id"]:
-            return {
-                "error": "Cannot publish: filename and zettel_id mismatch",
-                "problem": {
-                    "filename": file_path.name,
-                    "frontmatter_zettel_id": entry_data["zettel_id"],
-                    "expected_filename": expected_filename,
-                    "path": str(file_path)
-                },
-                "solution": {
-                    "message": "Fix mismatch before publishing. Choose one option:",
-                    "option_1": {
-                        "action": "Rename file to match frontmatter",
-                        "command": f"mv '{file_path}' '{file_path.parent / expected_filename}'",
-                        "then": f"Re-run publish with: item_id='{entry_data['zettel_id']}'"
-                    },
-                    "option_2": {
-                        "action": "Update frontmatter to match filename",
-                        "steps": [
-                            f"1. Edit {file_path}",
-                            f"2. Change frontmatter: zettel_id: {file_path.stem}",
-                            f"3. Run: mcp__kiwi_mcp__execute(item_type='knowledge', action='sign', item_id='{file_path.stem}')",
-                            f"4. Then re-run publish with: item_id='{file_path.stem}'"
-                        ]
-                    },
-                    "option_3": {
-                        "action": "Use edit_knowledge directive",
-                        "steps": [
-                            f"Run: edit_knowledge directive with zettel_id='{file_path.stem}'",
-                            f"Fix mismatch (rename file or update frontmatter)",
-                            f"Then re-run publish"
-                        ]
-                    }
-                }
-            }
-
-        # Use explicit param if provided, otherwise fall back to parsed version (default 1.0.0)
-        version = params.get("version") or entry_data.get("version", "1.0.0")
-
-        # Ensure tags is a list
-        tags = entry_data.get("tags", [])
-        if isinstance(tags, str):
-            # Split comma-separated tags or treat as single tag
-            tags = [t.strip() for t in tags.split(",")] if "," in tags else ([tags] if tags else [])
-        elif not isinstance(tags, list):
-            tags = []
-
-        # Use registry publish method
-        result = await self.registry.publish(
-            zettel_id=zettel_id,
-            title=entry_data.get("title", zettel_id),
-            content=entry_data.get("content", ""),
-            entry_type=entry_data.get("entry_type", "note"),
-            version=version,
-            category=entry_data.get("category", ""),
-            tags=tags,
-        )
-
-        # Ensure response includes version actually used
-        if isinstance(result, dict) and "error" not in result:
-            result["zettel_id"] = zettel_id
-            result["version"] = version
-
-        return result

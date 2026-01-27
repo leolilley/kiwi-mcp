@@ -295,6 +295,7 @@ VALIDATION_SCHEMA = {
         "config_schema": {"required": False, "type": "object"},
         "config": {"required": False, "type": "object"},
         "mutates_state": {"required": False, "type": "boolean", "default": False},
+        "requires": {"required": False, "type": "list_of_strings"},
     },
 }
 
@@ -455,6 +456,14 @@ class SchemaValidator:
         elif expected_type == "object":
             if not isinstance(value, dict):
                 return f"Field '{field_name}' must be an object/dict"
+        elif expected_type == "list_of_strings":
+            if not isinstance(value, list):
+                return f"Field '{field_name}' must be a list"
+            for item in value:
+                if not isinstance(item, str):
+                    return f"Field '{field_name}' must contain only strings, got {type(item).__name__}"
+                if "." not in item:
+                    return f"Field '{field_name}' capability '{item}' must follow resource.action format (e.g., fs.read)"
         return None
 
 

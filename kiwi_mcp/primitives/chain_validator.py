@@ -8,7 +8,7 @@ each adjacent pair (parent, child) in the execution chain.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 

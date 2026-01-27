@@ -17,16 +17,18 @@ from .http_client import HttpClientPrimitive, HttpResult
 from .executor import PrimitiveExecutor, ExecutionResult, ChainResolver
 from .integrity import (
     compute_tool_integrity,
-    compute_file_hash,
-    verify_file_integrity,
     compute_directive_integrity,
-    verify_directive_integrity,
     compute_knowledge_integrity,
-    verify_knowledge_integrity,
 )
 from .integrity_verifier import IntegrityVerifier, VerificationResult
 from .chain_validator import ChainValidator, ChainValidationResult
 from .lockfile import Lockfile, LockfileManager, LockfileError
+from .errors import (
+    ToolChainError,
+    FailedToolContext,
+    ValidationError,
+    ConfigValidationError,
+)
 
 __all__ = [
     # Primitives (hardcoded execution)
@@ -40,12 +42,8 @@ __all__ = [
     "ChainResolver",
     # Integrity
     "compute_tool_integrity",
-    "compute_file_hash",
-    "verify_file_integrity",
     "compute_directive_integrity",
-    "verify_directive_integrity",
     "compute_knowledge_integrity",
-    "verify_knowledge_integrity",
     "IntegrityVerifier",
     "VerificationResult",
     # Validation
@@ -55,4 +53,9 @@ __all__ = [
     "Lockfile",
     "LockfileManager",
     "LockfileError",
+    # Error handling
+    "ToolChainError",
+    "FailedToolContext",
+    "ValidationError",
+    "ConfigValidationError",
 ]

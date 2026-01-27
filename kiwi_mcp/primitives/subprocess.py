@@ -49,18 +49,25 @@ class SubprocessPrimitive:
             capture_output = config.get("capture_output", True)
             input_data = config.get("input_data")
 
-            # Resolve environment variables in command and args
-            command = self._resolve_env_var(command)
-            args = [self._resolve_env_var(arg) for arg in args]
-
             # Prepare environment
-            env = os.environ.copy()
-            for key, value in env_vars.items():
-                env[key] = self._resolve_env_var(str(value))
+            # If env_vars is large (>50 vars), it's likely from EnvResolver and already
+            # includes os.environ + .env files. Otherwise, merge with os.environ.
+            if len(env_vars) > 50:
+                # Use provided env directly (already resolved by executor)
+                env = {k: str(v) for k, v in env_vars.items()}
+            else:
+                # Legacy behavior: merge os.environ with config env_vars
+                env = os.environ.copy()
+                for key, value in env_vars.items():
+                    env[key] = str(value)
+
+            # Resolve environment variables in command and args using merged env
+            command = self._resolve_env_var(command, env)
+            args = [self._resolve_env_var(arg, env) for arg in args]
 
             # Resolve cwd if provided
             if cwd:
-                cwd = self._resolve_env_var(cwd)
+                cwd = self._resolve_env_var(cwd, env)
 
             # Create subprocess
             if capture_output:
@@ -144,18 +151,22 @@ class SubprocessPrimitive:
                 duration_ms=duration_ms,
             )
 
-    def _resolve_env_var(self, value: str) -> str:
+    def _resolve_env_var(self, value: str, env: Dict[str, str] = None) -> str:
         """
         Resolve environment variables with default syntax: ${VAR:-default}
 
         Args:
             value: String that may contain environment variable references
+            env: Environment dict to use for resolution (defaults to os.environ)
 
         Returns:
             String with environment variables resolved
         """
         if not isinstance(value, str):
             return str(value)
+
+        if env is None:
+            env = os.environ
 
         import re
 
@@ -168,8 +179,8 @@ class SubprocessPrimitive:
             # Check for default value syntax
             if ":-" in var_expr:
                 var_name, default_value = var_expr.split(":-", 1)
-                return os.environ.get(var_name.strip(), default_value)
+                return env.get(var_name.strip(), default_value)
             else:
-                return os.environ.get(var_expr, "")
+                return env.get(var_expr, "")
 
         return re.sub(pattern, replace_var, value)

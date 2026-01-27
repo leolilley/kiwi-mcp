@@ -6,24 +6,18 @@ Handles LOCAL file operations directly, only uses registry for REMOTE operations
 """
 
 from typing import Dict, Any, Optional, List, Literal
-
 from kiwi_mcp.handlers import SortBy
 from pathlib import Path
 import xml.etree.ElementTree as ET
-import re
-
-from kiwi_mcp.api.directive_registry import DirectiveRegistry
 from kiwi_mcp.utils.logger import get_logger
-from kiwi_mcp.utils.resolvers import DirectiveResolver, get_user_space
+from kiwi_mcp.utils.resolvers import DirectiveResolver
 from kiwi_mcp.utils.parsers import parse_directive_file
 from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
 from kiwi_mcp.utils.metadata_manager import MetadataManager, compute_unified_integrity
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 from kiwi_mcp.utils.xml_error_helper import format_error_with_context
-from kiwi_mcp.mcp import MCPClientPool, SchemaCache
 from kiwi_mcp.primitives.integrity import (
     compute_directive_integrity,
-    verify_directive_integrity,
     short_hash,
 )
 from kiwi_mcp.utils.schema_validator import SchemaValidator
@@ -36,19 +30,16 @@ class DirectiveHandler:
         """Initialize handler with project path."""
         self.project_path = Path(project_path)
         self.logger = get_logger("directive_handler")
-        self.registry = DirectiveRegistry()  # Only for remote operations
 
         # Local file handling
         self.resolver = DirectiveResolver(self.project_path)
         self.search_paths = [self.resolver.project_directives, self.resolver.user_directives]
 
-        # MCP support
-        self.mcp_pool = MCPClientPool()
-        self.schema_cache = SchemaCache()
-        
+        # MCP tool discovery removed - handled by tools
+
         # Input schema validation
         self._schema_validator = SchemaValidator()
-        
+
         # Vector store for automatic embedding
         self._vector_store = None
         self._init_vector_store()
@@ -56,19 +47,23 @@ class DirectiveHandler:
     def _init_vector_store(self):
         """Initialize project vector store for automatic embedding."""
         try:
-            from kiwi_mcp.storage.vector import LocalVectorStore, EmbeddingService, load_vector_config
-            
+            from kiwi_mcp.storage.vector import (
+                LocalVectorStore,
+                EmbeddingService,
+                load_vector_config,
+            )
+
             # Load embedding config from environment
             config = load_vector_config()
             embedding_service = EmbeddingService(config)
-            
+
             vector_path = self.project_path / ".ai" / "vector" / "project"
             vector_path.mkdir(parents=True, exist_ok=True)
-            
+
             self._vector_store = LocalVectorStore(
                 storage_path=vector_path,
                 collection_name="project_items",
-                embedding_service=embedding_service
+                embedding_service=embedding_service,
             )
         except ValueError as e:
             # Missing config - vector search disabled
@@ -83,42 +78,44 @@ class DirectiveHandler:
     ) -> str:
         """
         Compute canonical integrity hash for a directive.
-        
+
         Args:
             directive_data: Parsed directive data
             file_content: Raw file content
-            
+
         Returns:
             SHA256 hex digest (64 characters)
         """
         strategy = MetadataManager.get_strategy("directive")
         xml_content = strategy.extract_content_for_hash(file_content)
-        
+
         # Build metadata dict for integrity computation
         metadata = {
             "category": directive_data.get("category"),
             "description": directive_data.get("description"),
-            "model_tier": directive_data.get("model", {}).get("tier") if isinstance(directive_data.get("model"), dict) else None,
+            "model_tier": directive_data.get("model", {}).get("tier")
+            if isinstance(directive_data.get("model"), dict)
+            else None,
         }
-        
+
         return compute_directive_integrity(
             directive_name=directive_data.get("name", ""),
             version=directive_data.get("version", "0.0.0"),
             xml_content=xml_content or "",
             metadata=metadata,
         )
-    
+
     def _verify_directive_integrity(
         self, directive_data: Dict[str, Any], file_content: str, stored_hash: str
     ) -> bool:
         """
         Verify directive content matches stored canonical integrity hash.
-        
+
         Args:
             directive_data: Parsed directive data
             file_content: Raw file content
             stored_hash: Expected integrity hash
-            
+
         Returns:
             True if computed hash matches stored hash
         """
@@ -128,27 +125,27 @@ class DirectiveHandler:
     def _extract_input_schema(self, parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Extract optional input_schema from parsed directive XML.
-        
+
         The input_schema can be defined in <inputs> as a JSON schema attribute
         or as a child <schema> element containing JSON.
-        
+
         Example XML:
             <inputs>
               <input name="topic" type="string" required="true">Topic to research</input>
               <schema>{"type": "object", "properties": {"topic": {"minLength": 3}}}</schema>
             </inputs>
-        
+
         Args:
             parsed: Parsed directive XML structure
-            
+
         Returns:
             JSON Schema dict or None if not defined
         """
         if "inputs" not in parsed:
             return None
-        
+
         inputs_section = parsed["inputs"]
-        
+
         # Check for <schema> element
         if "schema" in inputs_section:
             schema_data = inputs_section["schema"]
@@ -157,11 +154,12 @@ class DirectiveHandler:
             if schema_text:
                 try:
                     import json
+
                     return json.loads(schema_text)
                 except json.JSONDecodeError:
                     self.logger.warning("Invalid JSON in directive input_schema")
                     return None
-        
+
         # Check for schema attribute on inputs element
         if isinstance(inputs_section, dict):
             attrs = inputs_section.get("_attrs", {})
@@ -169,34 +167,35 @@ class DirectiveHandler:
             if schema_attr:
                 try:
                     import json
+
                     return json.loads(schema_attr)
                 except json.JSONDecodeError:
                     self.logger.warning("Invalid JSON in directive input_schema attribute")
                     return None
-        
+
         return None
-    
+
     def _build_input_schema_from_spec(self, inputs_spec: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Build a JSON Schema from the directive's input specifications.
-        
+
         This auto-generates a schema from the <input> elements if no
         explicit schema is provided.
-        
+
         Args:
             inputs_spec: List of input specifications from _extract_inputs()
-            
+
         Returns:
             JSON Schema dict
         """
         properties = {}
         required = []
-        
+
         for inp in inputs_spec:
             name = inp.get("name", "")
             if not name:
                 continue
-            
+
             # Map directive types to JSON Schema types
             type_mapping = {
                 "string": "string",
@@ -206,43 +205,41 @@ class DirectiveHandler:
                 "array": "array",
                 "object": "object",
             }
-            
+
             inp_type = inp.get("type", "string")
             json_type = type_mapping.get(inp_type, "string")
-            
+
             prop_schema = {"type": json_type}
-            
+
             # Add description if available
             if inp.get("description"):
                 prop_schema["description"] = inp["description"]
-            
+
             properties[name] = prop_schema
-            
+
             if inp.get("required"):
                 required.append(name)
-        
+
         schema = {
             "type": "object",
             "properties": properties,
         }
-        
+
         if required:
             schema["required"] = required
-        
+
         return schema
-    
+
     def _validate_inputs_with_schema(
-        self, 
-        params: Dict[str, Any], 
-        schema: Dict[str, Any]
+        self, params: Dict[str, Any], schema: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Validate input parameters against JSON Schema.
-        
+
         Args:
             params: Input parameters to validate
             schema: JSON Schema to validate against
-            
+
         Returns:
             Validation result with valid, issues, warnings
         """
@@ -252,7 +249,7 @@ class DirectiveHandler:
                 "issues": [],
                 "warnings": ["JSON Schema validation not available - skipping input validation"],
             }
-        
+
         return self._schema_validator.validate(params, schema)
 
     async def search(
@@ -291,30 +288,9 @@ class DirectiveHandler:
         try:
             results = []
 
-            # Search local files
-            if source in ("local", "all"):
-                local_results = self._search_local(
-                    query, categories, subcategories, tags
-                )
-                results.extend(local_results)
-
-            # Search registry
-            if source in ("registry", "all"):
-                try:
-                    # Registry search only accepts: query, category (singular), limit
-                    category_filter = categories[0] if categories and len(categories) > 0 else None
-
-                    registry_results = await self.registry.search(
-                        query=query, category=category_filter, limit=limit
-                    )
-
-                    # Registry returns list directly, not dict with "results" key
-                    if isinstance(registry_results, list):
-                        for item in registry_results:
-                            item["source"] = "registry"
-                        results.extend(registry_results)
-                except Exception as e:
-                    self.logger.warning(f"Registry search failed: {e}")
+            # Search local files only
+            local_results = self._search_local(query, categories, subcategories, tags)
+            results.extend(local_results)
 
             # Sort results based on sort_by parameter
             source_priority = {"project": 0, "user": 1, "registry": 2}
@@ -349,7 +325,7 @@ class DirectiveHandler:
     async def load(
         self,
         directive_name: str,
-        source: Literal["project", "user", "registry"],
+        source: Literal["project", "user"],
         destination: Optional[Literal["project", "user"]] = None,
         version: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -370,76 +346,6 @@ class DirectiveHandler:
         )
 
         try:
-            # Determine if this is read-only mode (no copy)
-            # Read-only when: destination is None OR destination equals source (for non-registry)
-            is_read_only = destination is None or (source == destination and source != "registry")
-
-            # LOAD FROM REGISTRY
-            if source == "registry":
-                # Fetch from registry
-                registry_data = await self.registry.get(name=directive_name, version=version)
-
-                if not registry_data:
-                    return {"error": f"Directive '{directive_name}' not found in registry"}
-
-                # Extract metadata
-                content = registry_data.get("content")
-                category = registry_data.get("category", "core")
-
-                if not content:
-                    return {"error": f"Directive '{directive_name}' has no content"}
-
-                # For registry, default destination to "project" if not specified
-                effective_destination = destination or "project"
-
-                # Determine target path based on destination
-                if effective_destination == "user":
-                    base_path = Path.home() / ".ai" / "directives"
-                else:  # destination == "project"
-                    base_path = self.project_path / ".ai" / "directives"
-
-                # Build category path from slash-separated category string
-                # category can be "core" or "core/api/endpoints" etc.
-                if category:
-                    # Split category by slashes and build path
-                    category_parts = category.split("/")
-                    target_dir = base_path
-                    for part in category_parts:
-                        target_dir = target_dir / part
-                else:
-                    target_dir = base_path
-
-                # Create directory if needed
-                target_dir.mkdir(parents=True, exist_ok=True)
-
-                # Write file
-                target_path = target_dir / f"{directive_name}.md"
-                target_path.write_text(content)
-
-                self.logger.info(f"Downloaded directive from registry to: {target_path}")
-
-                # Check signature after download for safety
-                file_content = target_path.read_text()
-                signature_info = MetadataManager.get_signature_info("directive", file_content)
-
-                # Parse and return
-                directive_data = parse_directive_file(target_path)
-                directive_data["source"] = "registry"
-                directive_data["destination"] = effective_destination
-                directive_data["path"] = str(target_path)
-
-                # Add warning if no signature (registry content should be signed)
-                if not signature_info:
-                    directive_data["warning"] = {
-                        "message": "Registry directive has no signature - content may be corrupted",
-                        "solution": "Use execute action 'sign' to re-validate the directive",
-                    }
-                    self.logger.warning(
-                        f"Registry directive '{directive_name}' has no signature"
-                    )
-
-                return directive_data
-
             # LOAD FROM PROJECT
             if source == "project":
                 search_base = self.project_path / ".ai" / "directives"
@@ -550,7 +456,7 @@ class DirectiveHandler:
         Execute a directive or perform directive operation.
 
         Args:
-            action: "run", "publish", "delete", "sign", "link"
+            action: "run", "sign"
             directive_name: Name of directive
             parameters: Directive inputs/parameters
 
@@ -562,16 +468,12 @@ class DirectiveHandler:
         try:
             if action == "run":
                 return await self._run_directive(directive_name, parameters or {})
-            elif action == "publish":
-                return await self._publish_directive(directive_name, parameters or {})
-            elif action == "delete":
-                return await self._delete_directive(directive_name, parameters or {})
             elif action == "sign":
                 return await self._sign_directive(directive_name, parameters or {})
             else:
                 return {
                     "error": f"Unknown action: {action}",
-                    "supported_actions": ["run", "publish", "delete", "sign"],
+                    "supported_actions": ["run", "sign"],
                 }
         except Exception as e:
             return {
@@ -636,11 +538,11 @@ class DirectiveHandler:
 
             # Validate directive using centralized validator and embed if valid
             validation_result = await ValidationManager.validate_and_embed(
-                "directive", 
-                file_path, 
+                "directive",
+                file_path,
                 directive_data,
                 vector_store=self._vector_store,
-                item_id=directive_data.get("name")
+                item_id=directive_data.get("name"),
             )
             if not validation_result["valid"]:
                 # Format error response
@@ -681,7 +583,9 @@ class DirectiveHandler:
 
             # Extract integrity hash from signature
             file_content = file_path.read_text()
-            stored_hash = MetadataManager.get_signature_hash("directive", file_content, file_path=file_path, project_path=self.project_path)
+            stored_hash = MetadataManager.get_signature_hash(
+                "directive", file_content, file_path=file_path, project_path=self.project_path
+            )
 
             if not stored_hash:
                 return {
@@ -703,11 +607,12 @@ class DirectiveHandler:
                 version=directive_data.get("version", "0.0.0"),
                 file_content=file_content,
                 file_path=file_path,
-                metadata=None  # Let compute_unified_integrity extract what it needs
+                metadata=None,  # Let compute_unified_integrity extract what it needs
             )
-            
+
             if computed_hash != stored_hash:
                 from kiwi_mcp.primitives.integrity import short_hash
+
                 return {
                     "error": "Directive content has been modified since last validation",
                     "details": f"Integrity mismatch for {directive_name}@{directive_data.get('version')}: computed={short_hash(computed_hash)}, stored={short_hash(stored_hash)}",
@@ -789,11 +694,11 @@ class DirectiveHandler:
             if input_schema is None and inputs_spec:
                 # Auto-generate schema from input specifications
                 input_schema = self._build_input_schema_from_spec(inputs_spec)
-            
+
             schema_validation_result = None
             if input_schema and params:
                 schema_validation_result = self._validate_inputs_with_schema(params, input_schema)
-                
+
                 if not schema_validation_result.get("valid", True):
                     return {
                         "error": "Input validation failed",
@@ -806,35 +711,20 @@ class DirectiveHandler:
                         "solution": "Fix the validation issues in the provided inputs",
                     }
 
-            # Parse MCP declarations and fetch tool schemas
+            # MCP tool discovery removed - directives should use mcp_stdio/mcp_http tools directly
+            # Parse MCP declarations for informational purposes only
             mcps_required = self._parse_mcps(directive_data)
             mcp_tools = {}
 
             if mcps_required:
+                # Inform agent that MCPs are declared but discovery must be done via tools
                 for mcp_decl in mcps_required:
                     mcp_name = mcp_decl["name"]
-                    tool_filter = mcp_decl.get("tools")
-                    refresh = mcp_decl.get("refresh", False)
-
-                    if not mcp_name:
-                        continue
-
-                    try:
-                        # Check cache first
-                        schemas = self.schema_cache.get(mcp_name, force_refresh=refresh)
-                        if schemas is None:
-                            schemas = await self.mcp_pool.get_tool_schemas(mcp_name, tool_filter)
-                            self.schema_cache.set(mcp_name, schemas)
-
-                        mcp_tools[mcp_name] = {"available": True, "tools": schemas}
-                    except Exception as e:
-                        if mcp_decl.get("required"):
-                            return {
-                                "error": f"Required MCP '{mcp_name}' connection failed",
-                                "mcp_error": str(e),
-                                "solution": "Check MCP configuration and credentials",
-                            }
-                        mcp_tools[mcp_name] = {"available": False, "error": str(e)}
+                    if mcp_name:
+                        mcp_tools[mcp_name] = {
+                            "available": "check_via_tool",
+                            "note": "Use mcp_stdio or mcp_http tools to discover and call tools",
+                        }
 
             # Get integrity hash from signature
             signature_info = MetadataManager.get_signature_info("directive", file_content)
@@ -856,11 +746,11 @@ class DirectiveHandler:
                     "Use provided_inputs for any matching input names."
                 ),
             }
-            
+
             # Add input schema if defined
             if input_schema:
                 result["input_schema"] = input_schema
-            
+
             # Add validation warnings if any
             if schema_validation_result and schema_validation_result.get("warnings"):
                 result["validation_warnings"] = schema_validation_result["warnings"]
@@ -869,8 +759,8 @@ class DirectiveHandler:
             if mcp_tools:
                 result["tool_context"] = mcp_tools
                 result["call_format"] = {
-                    "description": "All MCP tools called via Kiwi execute",
-                    "example": "execute(item_type='tool', action='call', ...)",
+                    "description": "Use mcp_stdio or mcp_http tools to discover and call MCP tools",
+                    "example": "execute(item_type='tool', action='run', item_id='mcp_stdio', ...)",
                 }
 
             # Check for newer versions in other locations
@@ -941,29 +831,9 @@ class DirectiveHandler:
                     f"Failed to check user space for directive {directive_name}: {e}"
                 )
 
-        # Check registry (always)
-        try:
-            registry_data = await self.registry.get(directive_name)
-            if registry_data and registry_data.get("version"):
-                registry_version = registry_data["version"]
-                try:
-                    if compare_versions(current_version, registry_version) < 0:
-                        # Registry version is newer
-                        if compare_versions(newest_version, registry_version) < 0:
-                            newest_version = registry_version
-                            newest_location = "registry"
-                except Exception as e:
-                    self.logger.warning(f"Failed to compare versions with registry: {e}")
-        except Exception as e:
-            self.logger.warning(f"Failed to check registry for directive {directive_name}: {e}")
-
         # Return warning if newer version found
         if newest_location and newest_version != current_version:
-            suggestion = (
-                f"Use load() to download the newer version from {newest_location}"
-                if newest_location == "registry"
-                else f"Use load() to copy the newer version from user space"
-            )
+            suggestion = f"Use load() to copy the newer version from {newest_location}"
             return {
                 "message": "A newer version of this directive is available",
                 "current_version": current_version,
@@ -1017,135 +887,7 @@ class DirectiveHandler:
 
         return None
 
-    async def _publish_directive(
-        self, directive_name: str, params: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Publish directive to registry."""
-        # Find local directive file first (needed to extract version)
-        file_path = self.resolver.resolve(directive_name)
-        if not file_path:
-            return {
-                "error": f"Directive '{directive_name}' not found locally",
-                "suggestion": "Create directive first before publishing",
-            }
-
-        # Extract integrity hash from signature
-        file_content = file_path.read_text()
-        stored_hash = MetadataManager.get_signature_hash("directive", file_content)
-
-        if not stored_hash:
-            return {
-                "error": "Cannot publish: directive has no signature",
-                "status": "missing",
-                "path": str(file_path),
-                "hint": "Directives must be validated before publishing",
-                "solution": (
-                    f"Run: execute(item_type='directive', action='sign', "
-                    f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
-                    f"project_path='{self.project_path}')"
-                ),
-            }
-
-        # Parse directive to get content and metadata (including version from XML)
-        # parse_directive_file() will validate filename/directive name match and raise if mismatch
-        try:
-            directive_data = parse_directive_file(file_path)
-        except ValueError as e:
-            # Convert parse validation error to structured response
-            return {
-                "error": "Cannot publish: filename and directive name mismatch",
-                "details": str(e),
-                "path": str(file_path),
-            }
-
-        # Explicit validation check after parsing (double-check for clarity)
-        parsed_name = directive_data["name"]
-        expected_filename = f"{parsed_name}.md"
-        if file_path.stem != parsed_name:
-            return {
-                "error": "Cannot publish: filename and directive name mismatch",
-                "problem": {
-                    "expected": expected_filename,
-                    "actual": file_path.name,
-                    "directive_name": parsed_name,
-                    "path": str(file_path),
-                },
-                "solution": {
-                    "message": "Filename must match the directive name attribute in XML",
-                    "option_1": f"Rename file: mv '{file_path}' '{file_path.parent / expected_filename}'",
-                    "option_2": f'Update XML: Change <directive name="{file_path.stem}" ...> in {file_path}',
-                    "option_3": f"Use edit_directive directive to fix",
-                },
-            }
-
-        # Use explicit param if provided, otherwise fall back to XML version
-        version = params.get("version") or directive_data.get("version")
-
-        # Prevent publishing placeholder version
-        if not version or not str(version).strip() or version == "0.0.0":
-            return {
-                "error": "version is required for publish",
-                "hint": f"Set <directive ... version='x.y.z'> in {file_path}",
-                "file_version": directive_data.get("version"),
-                "example": "parameters={'version': '1.0.0'}",
-            }
-
-        # Use registry publish method
-        result = await self.registry.publish(
-            name=directive_name,
-            version=version,
-            content=directive_data.get("content", ""),
-            category=directive_data.get("category", "custom"),
-            description=directive_data.get("description", ""),
-        )
-
-        # Ensure response includes version actually used
-        if isinstance(result, dict) and "error" not in result:
-            result["name"] = directive_name
-            result["version"] = version
-
-        return result
-
-    async def _delete_directive(
-        self, directive_name: str, params: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Delete directive from local and/or registry."""
-        if not params.get("confirm"):
-            return {
-                "error": "Delete requires confirmation",
-                "required": {"confirm": True},
-                "example": "parameters={'confirm': True, 'source': 'local'}",
-            }
-
-        source = params.get("source", "all")
-        deleted = []
-
-        # Delete local
-        if source in ("local", "all"):
-            file_path = self.resolver.resolve(directive_name)
-            if file_path:
-                file_path.unlink()
-                deleted.append("local")
-
-        # Delete from registry
-        if source in ("registry", "all"):
-            try:
-                result = await self.registry.delete(name=directive_name)
-                if "error" in result:
-                    self.logger.warning(f"Registry delete failed: {result.get('error')}")
-                else:
-                    deleted.append("registry")
-            except Exception as e:
-                self.logger.warning(f"Registry delete failed: {e}")
-
-        if not deleted:
-            return {"error": f"Directive '{directive_name}' not found in specified location(s)"}
-
-        return {"status": "deleted", "name": directive_name, "deleted_from": deleted}
-
-    async def _sign_directive(
-        self, directive_name: str, params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _sign_directive(self, directive_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Validate and sign an existing directive file.
 
@@ -1162,7 +904,7 @@ class DirectiveHandler:
 
         # Find the directive file - try resolver first, then search by location
         file_path = self.resolver.resolve(directive_name)
-        
+
         if not file_path or not file_path.exists():
             # Search by location if resolver didn't find it
             if location == "project":
@@ -1194,6 +936,7 @@ class DirectiveHandler:
 
         # Validate path structure
         from kiwi_mcp.utils.paths import validate_path_structure
+
         path_validation = validate_path_structure(
             file_path, "directive", location, self.project_path
         )
@@ -1223,11 +966,7 @@ class DirectiveHandler:
 
         except ET.ParseError as e:
             # Use enhanced error formatting with context and suggestions
-            enhanced_error = format_error_with_context(
-                str(e),
-                xml_content,
-                str(file_path)
-            )
+            enhanced_error = format_error_with_context(str(e), xml_content, str(file_path))
             return {
                 "error": "Invalid directive XML",
                 "parse_error": enhanced_error,
@@ -1247,11 +986,11 @@ class DirectiveHandler:
 
             # Validate using centralized validator and embed if valid
             validation_result = await ValidationManager.validate_and_embed(
-                "directive", 
-                file_path, 
+                "directive",
+                file_path,
                 directive_data,
                 vector_store=self._vector_store,
-                item_id=directive_data.get("name")
+                item_id=directive_data.get("name"),
             )
             if not validation_result["valid"]:
                 # Format error response with helpful details
@@ -1334,29 +1073,31 @@ class DirectiveHandler:
         if not version or version == "0.0.0":
             return {
                 "error": "Directive validation failed",
-                "details": ["Directive is missing required 'version' attribute. "
-                            'Add version attribute to <directive> tag: <directive name="..." version="1.0.0">'],
+                "details": [
+                    "Directive is missing required 'version' attribute. "
+                    'Add version attribute to <directive> tag: <directive name="..." version="1.0.0">'
+                ],
                 "path": str(file_path),
                 "solution": "Add version metadata and re-run sign action",
             }
-        
+
         # Compute unified integrity hash on content WITHOUT signature
         # This allows re-signing to produce consistent hashes
         from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
-        
+
         # Remove existing signature before hashing (chained validation)
         strategy = MetadataManager.get_strategy("directive")
         content_without_sig = strategy.remove_signature(content)
-        
+
         content_hash = compute_unified_integrity(
             item_type="directive",
             item_id=directive_name,
             version=version,
             file_content=content_without_sig,  # Hash only original content, not signature
             file_path=file_path,
-            metadata=None
+            metadata=None,
         )
-        
+
         # Generate and add signature for validated content with unified integrity hash
         signed_content = MetadataManager.sign_content_with_hash("directive", content, content_hash)
 
@@ -1375,10 +1116,14 @@ class DirectiveHandler:
 
         # Extract current category from file path (supports nested categories)
         from kiwi_mcp.utils.paths import extract_category_path
-        
+
         # Determine location
-        determined_location = "project" if str(file_path).startswith(str(self.project_path)) else "user"
-        current_category = extract_category_path(file_path, "directive", determined_location, self.project_path)
+        determined_location = (
+            "project" if str(file_path).startswith(str(self.project_path)) else "user"
+        )
+        current_category = extract_category_path(
+            file_path, "directive", determined_location, self.project_path
+        )
 
         # Handle category change: move file if category changed
         moved = False
@@ -1394,6 +1139,7 @@ class DirectiveHandler:
             else:
                 # User space
                 from kiwi_mcp.utils.paths import get_user_space
+
                 new_dir = get_user_space() / "directives"
                 if new_category:
                     for part in new_category.split("/"):

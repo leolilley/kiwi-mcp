@@ -1,7 +1,7 @@
 # Phase 8.7: Thread Intervention Tools
 
 **Estimated Time:** 3 days  
-**Dependencies:** Phase 8.6  
+**Dependencies:** Phase 8.5 (Phase 8.6 skipped)  
 **Status:** 📋 Planning
 
 ## Overview

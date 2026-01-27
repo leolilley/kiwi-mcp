@@ -26,36 +26,35 @@ This folder contains the complete implementation plan for Thread and Streaming A
                        │
 8.1 ───────────────────> 8.5 (thread registry)
                        │
-8.5 ───────────────────> 8.6 (help tool)
-                       │
-8.6 ───────────────────> 8.7 (intervention)
+8.5 ───────────────────> 8.7 (intervention) [8.6 skipped]
                        │
 8.4, 8.10 ────────────> 8.13 (MCP connector)
 ```
 
 **Parallelization Opportunities:**
-- Phases 8.1-8.2 (streaming) and 8.3-8.4 (MCP primitives) can run in parallel
-- Phase 8.5-8.7 (intervention) requires streaming complete
 
-**Critical Path to Annealing:** 8.1 → 8.5 → 8.6 → 8.7
+- Phases 8.1-8.2 (streaming) and 8.3-8.4 (MCP primitives) can run in parallel
+- Phase 8.5-8.7 (intervention) requires streaming complete (8.6 skipped)
+
+**Critical Path to Annealing:** 8.1 → 8.5 → 8.7 (8.6 skipped)
 
 ## Phase Summary
 
-| Phase | Focus                         | Days | Dependencies | Status |
-| ----- | ----------------------------- | ---- | ------------ | ------ |
-| 8.1   | http_client streaming + sinks | 3-4  | None         | 📋     |
-| 8.2   | LLM endpoint tools            | 1-2  | 8.1          | 📋     |
-| 8.3   | JSON-RPC protocol handling    | 2    | None         | 📋     |
-| 8.4   | MCP base tools (stdio + http) | 2    | 8.3          | 📋     |
-| 8.5   | Thread registry (SQLite)      | 2-3  | 8.1          | 📋     |
-| 8.6   | Help tool extensions          | 2    | 8.5          | 📋     |
-| 8.7   | Thread intervention tools     | 3    | 8.6          | 📋     |
-| 8.8   | Cleanup: remove kiwi_mcp/mcp/ | 1    | 8.4          | 📋     |
-| 8.9   | Thread ID sanitization        | 0.5  | 8.5          | 📋     |
-| 8.10  | Capability token system       | 1-2  | 8.5          | 📋     |
-| 8.11  | Tool chain error handling     | 1    | 8.1          | 📋     |
-| 8.12  | Cost tracking validation      | 1    | None         | 📋     |
-| 8.13  | MCP connector pattern         | 1-2  | 8.4, 8.10    | 📋     |
+| Phase | Focus                         | Days | Dependencies | Status     |
+| ----- | ----------------------------- | ---- | ------------ | ---------- |
+| 8.1   | http_client streaming + sinks | 3-4  | None         | 📋         |
+| 8.2   | LLM endpoint tools            | 1-2  | 8.1          | 📋         |
+| 8.3   | JSON-RPC protocol handling    | 2    | None         | 📋         |
+| 8.4   | MCP base tools (stdio + http) | 2    | 8.3          | 📋         |
+| 8.5   | Thread registry (SQLite)      | 2-3  | 8.1          | ✅         |
+| 8.6   | Help tool extensions          | 2    | 8.5          | ⏭️ Skipped |
+| 8.7   | Thread intervention tools     | 3    | 8.5          | 📋         |
+| 8.8   | Cleanup: remove kiwi_mcp/mcp/ | 1    | 8.4          | ✅         |
+| 8.9   | Thread ID sanitization        | 0.5  | 8.5          | 📋         |
+| 8.10  | Capability token system       | 1-2  | 8.5          | 📋         |
+| 8.11  | Tool chain error handling     | 1    | 8.1          | 📋         |
+| 8.12  | Cost tracking validation      | 1    | None         | 📋         |
+| 8.13  | MCP connector pattern         | 1-2  | 8.4, 8.10    | 📋         |
 
 ## Execution Strategy
 
@@ -92,7 +91,7 @@ implementation/thread-streaming/
 ## Key Architectural Principles
 
 1. **Kernel Stays Dumb**: MCP kernel has NO thread logic - it only loads and returns data
-2. **Data-Driven Tools**: Everything is a tool with YAML config (except primitives)
+2. **Data-Driven Tools**: Everything is a tool with config (except primitives)
 3. **Harness IN Thread**: The harness is instantiated BY spawn_thread, lives in the thread
 4. **Guidance in AGENTS.md**: Spawning patterns documented in system prompt, not kernel
 5. **Permissions via Tokens**: Capability tokens minted by harness, validated by tools
@@ -107,12 +106,14 @@ implementation/thread-streaming/
 ## Tool Patterns
 
 **Runtime Tools (Python-only):**
+
 - No YAML sidecars
 - Metadata at top: `__tool_type__`, `__version__`, `__executor_id__`, `__category__`
 - Dependencies: `DEPENDENCIES = [...]` if needed
 - Examples: `file_sink.py`, `null_sink.py`, `websocket_sink.py`
 
 **HTTP Tools (YAML configs):**
+
 - Pure YAML configuration files
 - Chain to `http_client` primitive
 - Examples: `anthropic_messages.yaml`, `anthropic_thread.yaml`
@@ -132,3 +133,4 @@ implementation/thread-streaming/
 - `docs/THREAD_AND_STREAMING_ARCHITECTURE.md` - Full architecture specification
 - `docs/PERMISSION_MODEL.md` - Permission enforcement details
 - `docs/SAFETY_HARNESS_ROADMAP.md` - Harness implementation details
+- `MCP_DISCOVERY_FLOW.md` - How MCP discovery and integration works

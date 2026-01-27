@@ -15,8 +15,6 @@ from pathlib import Path
 
 from kiwi_mcp.primitives.integrity import (
     compute_tool_integrity,
-    compute_file_hash,
-    verify_file_integrity,
     short_hash,
 )
 from kiwi_mcp.primitives.integrity_verifier import IntegrityVerifier, VerificationResult
@@ -91,26 +89,6 @@ class TestIntegrity:
         hash2 = compute_tool_integrity("test", "1.0.0", manifest, files2)
         
         assert hash1 != hash2
-    
-    def test_compute_file_hash(self):
-        """File hash should be SHA256."""
-        content = "print('hello world')"
-        hash1 = compute_file_hash(content)
-        hash2 = compute_file_hash(content)
-        
-        assert hash1 == hash2
-        assert len(hash1) == 64
-    
-    def test_verify_file_integrity_success(self):
-        """Verification should pass for matching content."""
-        content = "test content"
-        expected = compute_file_hash(content)
-        
-        assert verify_file_integrity(content, expected) is True
-    
-    def test_verify_file_integrity_failure(self):
-        """Verification should fail for mismatched content."""
-        assert verify_file_integrity("content", "wrong_hash") is False
     
     def test_short_hash(self):
         """Short hash should truncate correctly."""

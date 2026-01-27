@@ -47,8 +47,8 @@ Use cases:
                     },
                     "source": {
                         "type": "string",
-                        "enum": ["project", "user", "registry"],
-                        "description": "Where to load from: 'project' (local .ai/), 'user' (~/.ai/), or 'registry' (remote Supabase)",
+                        "enum": ["project", "user"],
+                        "description": "Where to load from: 'project' (local .ai/) or 'user' (~/.ai/)",
                     },
                     "destination": {
                         "type": "string",

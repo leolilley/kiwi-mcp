@@ -20,10 +20,8 @@ class ExecuteTool(BaseTool):
             name="execute",
             description="""Execute operations on directives, tools, or knowledge.
 
-All three types support the same 4 actions for consistency:
+All three types support the same 2 actions for consistency:
 - run: Execute/load content (directive returns parsed XML, tool executes code, knowledge returns content for context)
-- publish: Upload to registry with version (requires 'version' parameter)
-- delete: Remove from local/registry (requires 'confirm': true for safety)
 - sign: Validate and sign file - file must exist first (validates XML for directive, tool code for tool, frontmatter for knowledge). Always allows re-signing.
 
 Examples:
@@ -47,8 +45,8 @@ Note: Create files manually first, then use sign action to validate and sign.
                     },
                     "action": {
                         "type": "string",
-                        "enum": ["run", "publish", "delete", "sign"],
-                        "description": "Action to perform (all 4 actions supported for all types)",
+                        "enum": ["run", "sign"],
+                        "description": "Action to perform (all 2 actions supported for all types)",
                     },
                     "item_id": {
                         "type": "string",

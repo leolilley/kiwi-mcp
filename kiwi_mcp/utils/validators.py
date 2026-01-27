@@ -334,11 +334,43 @@ class ToolValidator(BaseValidator):
                     "Non-primitive tools must reference another tool in the executor chain."
                 )
 
+        # Validate requires field (optional list of capability strings)
+        requires = parsed_data.get("requires")
+        if requires is not None:
+            if not isinstance(requires, list):
+                issues.append(
+                    f"'requires' field must be a list of capability strings, got {type(requires).__name__}"
+                )
+            else:
+                for cap in requires:
+                    if not isinstance(cap, str):
+                        issues.append(f"Capability in 'requires' must be a string, got {type(cap).__name__}")
+                    elif not self._validate_capability_format(cap):
+                        issues.append(
+                            f"Invalid capability format '{cap}'. "
+                            "Must be <resource>.<action> (e.g., 'fs.read', 'tool.bash')"
+                        )
+
         return {
             "valid": len(issues) == 0,
             "issues": issues,
             "warnings": warnings,
         }
+
+    def _validate_capability_format(self, capability: str) -> bool:
+        """Validate capability matches pattern <resource>.<action>."""
+        if not capability or "." not in capability:
+            return False
+        parts = capability.split(".", 1)
+        if len(parts) != 2:
+            return False
+        resource, action = parts
+        # Both resource and action must be non-empty and contain only valid chars
+        if not resource or not action:
+            return False
+        # Allow alphanumeric, underscore, hyphen
+        valid_pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
+        return bool(valid_pattern.match(resource) and valid_pattern.match(action))
 
 
 class KnowledgeValidator(BaseValidator):

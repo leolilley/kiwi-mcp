@@ -36,7 +36,7 @@ class SearchTool(BaseTool):
                     },
                     "source": {
                         "type": "string",
-                        "enum": ["local", "registry", "all"],
+                        "enum": ["local"],
                         "default": "local",
                         "description": "Search source",
                     },
@@ -71,7 +71,6 @@ class SearchTool(BaseTool):
         try:
             from kiwi_mcp.storage.vector import (
                 LocalVectorStore,
-                RegistryVectorStore,
                 ThreeTierVectorManager,
                 HybridSearch,
             )
@@ -95,13 +94,9 @@ class SearchTool(BaseTool):
                 embedding_service=embedding_service,
             )
 
-            registry_store = RegistryVectorStore(embedding_service=embedding_service)
-
             # Setup manager and hybrid search
             self._vector_manager = ThreeTierVectorManager(
-                project_store=project_store,
-                user_store=user_store,
-                registry_store=registry_store
+                project_store=project_store, user_store=user_store
             )
 
             self._hybrid_search = HybridSearch(self._vector_manager)

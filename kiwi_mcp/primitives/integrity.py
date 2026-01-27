@@ -15,11 +15,6 @@ import json
 from typing import Any, Dict, List, Optional
 
 
-# =============================================================================
-# Tool Integrity
-# =============================================================================
-
-
 def compute_tool_integrity(
     tool_id: str,
     version: str,
@@ -67,33 +62,6 @@ def compute_tool_integrity(
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def compute_file_hash(content: str) -> str:
-    """
-    Compute SHA256 hash of file content.
-    
-    Args:
-        content: File content as string
-        
-    Returns:
-        SHA256 hex digest
-    """
-    return hashlib.sha256(content.encode()).hexdigest()
-
-
-def verify_file_integrity(content: str, expected_hash: str) -> bool:
-    """
-    Verify file content matches expected hash.
-    
-    Args:
-        content: File content to verify
-        expected_hash: Expected SHA256 hex digest
-        
-    Returns:
-        True if hash matches
-    """
-    return compute_file_hash(content) == expected_hash
-
-
 def short_hash(full_hash: str, length: int = 12) -> str:
     """
     Return shortened hash for display purposes.
@@ -106,11 +74,6 @@ def short_hash(full_hash: str, length: int = 12) -> str:
         First `length` characters of hash
     """
     return full_hash[:length]
-
-
-# =============================================================================
-# Directive Integrity
-# =============================================================================
 
 
 def compute_directive_integrity(
@@ -150,34 +113,6 @@ def compute_directive_integrity(
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def verify_directive_integrity(
-    directive_name: str,
-    version: str,
-    xml_content: str,
-    stored_hash: str,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> bool:
-    """
-    Verify directive content matches stored integrity hash.
-    
-    Args:
-        directive_name: Directive identifier
-        version: Version string
-        xml_content: The XML directive content
-        stored_hash: Expected integrity hash
-        metadata: Optional metadata dict
-        
-    Returns:
-        True if computed hash matches stored hash
-    """
-    computed = compute_directive_integrity(directive_name, version, xml_content, metadata)
-    return computed == stored_hash
-
-
-# =============================================================================
-# Knowledge Integrity
-# =============================================================================
-
 
 def compute_knowledge_integrity(
     zettel_id: str,
@@ -215,26 +150,3 @@ def compute_knowledge_integrity(
     
     return hashlib.sha256(canonical.encode()).hexdigest()
 
-
-def verify_knowledge_integrity(
-    zettel_id: str,
-    version: str,
-    content: str,
-    stored_hash: str,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> bool:
-    """
-    Verify knowledge entry content matches stored integrity hash.
-    
-    Args:
-        zettel_id: Zettel identifier
-        version: Version string
-        content: The markdown content
-        stored_hash: Expected integrity hash
-        metadata: Optional metadata dict
-        
-    Returns:
-        True if computed hash matches stored hash
-    """
-    computed = compute_knowledge_integrity(zettel_id, version, content, metadata)
-    return computed == stored_hash

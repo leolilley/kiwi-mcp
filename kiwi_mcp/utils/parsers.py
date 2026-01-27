@@ -115,6 +115,40 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
                     for elem in elements
                 ]
 
+    # Extract orchestration data from metadata (if present)
+    orchestration_data = {}
+    orchestration_elem = metadata_elem.find("orchestration")
+    if orchestration_elem is not None:
+        # Parse on_spawn, on_error, on_timeout actions
+        for action_type in ["on_spawn", "on_error", "on_timeout"]:
+            action_elem = orchestration_elem.find(action_type)
+            if action_elem is not None:
+                action_data = {}
+                # Get action attribute or text content
+                action_attr = action_elem.get("action")
+                if action_attr:
+                    action_data["action"] = action_attr
+                elif action_elem.text and action_elem.text.strip():
+                    action_data["action"] = action_elem.text.strip()
+                # Get any additional attributes
+                for attr_name, attr_value in action_elem.attrib.items():
+                    if attr_name != "action":
+                        action_data[attr_name] = attr_value
+                if action_data:
+                    orchestration_data[action_type] = action_data
+        
+        # Parse max_threads and timeout attributes
+        max_threads = orchestration_elem.get("max_threads")
+        if max_threads:
+            try:
+                orchestration_data["max_threads"] = int(max_threads)
+            except ValueError:
+                pass
+        
+        timeout = orchestration_elem.get("timeout")
+        if timeout:
+            orchestration_data["timeout"] = timeout
+
     # Convert full XML to nested dict
     parsed = _element_to_dict(root)
 
@@ -228,6 +262,7 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
         "permissions": permissions,
         "model": model_data,
         "relationships": relationships_data if relationships_data else None,
+        "orchestration": orchestration_data if orchestration_data else None,
         "category": category,
     }
 

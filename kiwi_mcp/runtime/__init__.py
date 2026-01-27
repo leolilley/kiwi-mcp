@@ -1,22 +1,18 @@
-"""Runtime components for Kiwi Agent Harness.
+"""
+Kernel runtime services.
 
-This module provides runtime security and control systems:
-- PermissionContext: Permission enforcement
-- ToolProxy: Central tool call proxy
-- LoopDetector: Stuck pattern detection
-- AuditLogger: Operation logging
+This module contains trusted kernel services for:
+- Environment resolution (EnvResolver)
+- Authentication (AuthStore)
+- Lockfile management (LockfileStore) - to be implemented
 """
 
-from .permissions import PermissionContext, PermissionChecker
-from .proxy import ToolProxy
-from .loop_detector import LoopDetector, StuckSignal
-from .audit import AuditLogger
+from .env_resolver import EnvResolver
+from .auth import AuthStore, AuthenticationRequired, RefreshError
 
 __all__ = [
-    "PermissionContext",
-    "PermissionChecker",
-    "ToolProxy",
-    "LoopDetector",
-    "StuckSignal",
-    "AuditLogger",
+    "EnvResolver",
+    "AuthStore",
+    "AuthenticationRequired",
+    "RefreshError",
 ]
