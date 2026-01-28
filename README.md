@@ -28,24 +28,75 @@ Four tools. That's it.
 
 ```
 search   Find things
-load     Get things
-execute  Run things
+load     Inspect things (read-only, for context)
+execute  Run things (directives become instructions, tools become actions)
 sign     Validate things
 ```
 
-The magic isn't in the tools. It's in what you put in them.
+---
+
+## Install
+
+```bash
+# pipx (recommended)
+pipx install kiwi-mcp
+
+# or curl
+curl -sSL https://raw.githubusercontent.com/kiwi-mcp/kiwi-mcp/main/install.sh | bash
+
+# or from source
+git clone https://github.com/kiwi-mcp/kiwi-mcp && cd kiwi-mcp && pip install -e .
+```
+
+Add to your MCP client (Claude Desktop, Cursor, etc):
+
+```json
+{
+  "mcpServers": {
+    "kiwi": {
+      "command": "kiwi-mcp",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+---
+
+## Context Discipline
+
+Here's what most people get wrong: they dump everything into the context window and pray.
+
+Kiwi separates **inspection** from **execution**.
+
+**load** returns metadata. The agent sees what something *is* without loading *all of it*.
+
+```json
+{
+  "name": "email_outreach",
+  "version": "2.1.0", 
+  "description": "Cold email campaign with follow-up sequences",
+  "inputs": [
+    {"name": "prospect_list", "type": "string", "required": true},
+    {"name": "template_id", "type": "string", "required": true}
+  ]
+}
+```
+
+**execute** returns the full directive only when the agent is ready to follow it. No wasted tokens. No context pollution. The agent requests exactly what it needs, when it needs it.
+
+Same for knowledge. Load gives you the summary. Execute gives you the content. Your context window stays surgical.
 
 ---
 
 ## Directives: Prompts That Don't Suck
 
-A directive is a prompt you write once and reuse forever. It's version-controlled, signed, and validated before execution.
+A directive is a prompt you write once and reuse forever. Version-controlled. Signed. Validated before execution.
 
 ```xml
 <directive name="code_review" version="1.0.0">
   <metadata>
     <description>Review code for security and performance issues</description>
-    <category>engineering</category>
     <model tier="reasoning">Deep analysis required</model>
   </metadata>
 
@@ -71,9 +122,66 @@ The agent reads this. The agent follows it. Every time. No drift. No hallucinati
 
 ---
 
+## Tools: Scripts With Teeth
+
+Tools are executable code with cryptographic guarantees.
+
+```python
+"""
+__name__ = "google_maps_scraper"
+__version__ = "2.1.0"
+__executor__ = "subprocess"
+__requires__ = ["fs.read", "process.exec"]
+"""
+
+def scrape(query: str, location: str) -> list:
+    ...
+```
+
+Sign it:
+```
+sign(item_type="tool", item_id="google_maps_scraper", project_path="/project")
+```
+
+This computes a content hash, generates a lockfile pinning the execution chain, and writes the signature. If someone modifies the file, execution fails. If the chain changes, execution fails. If no lockfile exists, execution fails.
+
+One command. Total integrity.
+
+---
+
+## The Registry: Solve Once, Solve Everywhere
+
+Here's the thing about prompts: everyone's solving the same problems.
+
+How do I get an agent to review code properly? How do I make it scrape without hallucinating selectors? How do I get consistent JSON output?
+
+You solve it. You sign it. You publish it.
+
+```
+sign(item_type="directive", item_id="code_review", project_path="/project")
+execute(item_type="directive", action="publish", item_id="code_review", version="1.0.0")
+```
+
+Now everyone can pull your solution:
+
+```
+search(item_type="directive", query="code review security", source="registry")
+load(item_type="directive", item_id="code_review", source="registry", destination="project")
+```
+
+The directive lands in your `.ai/directives/` folder. Fully validated. Ready to customize or run as-is.
+
+**This is the unlock.** Someone figures out the perfect prompt for extracting structured data from PDFs. They publish it. Now you have it. You didn't spend 3 hours prompt engineering. You ran one command.
+
+Tools work the same way. Someone builds a scraper that actually works. They sign it, publish it, you pull it. Their lockfile becomes your lockfile. Their integrity guarantees become yours.
+
+The registry isn't a nice-to-have. It's the entire point. Individual prompt crafting doesn't scale. A community library of battle-tested, cryptographically signed, version-controlled prompts? That scales.
+
+---
+
 ## Safety Harness
 
-Every directive can declare:
+Every directive can declare what it's allowed to do.
 
 **Permissions** - What resources it can access
 ```xml
@@ -102,141 +210,123 @@ Every directive can declare:
 </hooks>
 ```
 
-Child threads inherit attenuated permissions. No escalation. Ever.
+No surprises. No runaway costs. No "oops it deleted my database."
 
 ---
 
-## Tools: Scripts With Teeth
+## Now It Gets Interesting
 
-Tools are executable code. Python, Bash, whatever. But they're not just files sitting in a folder.
-
-Every tool has:
-
-- **Metadata** extracted from docstrings and decorators
-- **Cryptographic signature** computed on content hash
-- **Lockfile** pinning the exact execution chain
-- **Chain validation** ensuring dependencies haven't been tampered with
-
-```python
-"""
-Lead scraper for Google Maps.
-
-__name__ = "google_maps_scraper"
-__version__ = "2.1.0"
-__executor__ = "subprocess"
-__category__ = "scraping"
-__requires__ = ["fs.read", "process.exec"]
-"""
-
-def scrape(query: str, location: str) -> list:
-    ...
-```
-
-Sign it once. Execute it anywhere. If someone modifies the file, execution fails. If the chain changes, execution fails. If no lockfile exists, execution fails.
-
-```
-sign(item_type="tool", item_id="google_maps_scraper", project_path="/project")
-```
-
-This generates the lockfile automatically. No extra steps.
+Everything above is table stakes. Here's where your brain starts melting.
 
 ---
 
-## Knowledge: Your Agent's Memory
+### Spawn Agents Inside The MCP
 
-Zettelkasten-style entries that your agent can search and reference.
+Not "call an API." Not "send a webhook." Actually spawn a new agent thread with its own context, its own permissions, its own limits - running in parallel, reporting back when done.
 
-```markdown
+```xml
+<directive name="research_competitors" version="1.0.0">
+  <metadata>
+    <permissions>
+      <execute resource="spawn" action="thread" />
+    </permissions>
+    <limits>
+      <spawns>5</spawns>
+      <spend currency="USD">2.00</spend>
+    </limits>
+  </metadata>
+
+  <process>
+    <step name="parallel_research">
+      <action>
+        For each competitor, spawn a child thread running the "deep_research" 
+        directive. Each thread gets attenuated permissions - only what the 
+        parent explicitly grants. Collect results when all complete.
+      </action>
+    </step>
+  </process>
+</directive>
+```
+
+Parent spawns 5 research agents. Each runs independently. Each has capped spend. Each can only access what parent grants. Results flow back when done.
+
+**Orchestration through prompts.** No code. No infrastructure. Just XML.
+
 ---
-id: email-deliverability-001
-title: Email Deliverability Best Practices  
-entry_type: reference
-tags: [email, deliverability, smtp]
----
 
-SPF, DKIM, and DMARC are table stakes. Here's what actually matters...
-```
+### Permission Attenuation
 
-Keyword search with BM25 scoring. Optional vector embeddings if you want semantic search. Zero external dependencies for basic usage.
+Child threads can never escalate privileges.
 
----
+Parent has: `[fs.read, fs.write, spawn.thread]`
+Child declares it needs: `[fs.write, tool.bash]`
+Child gets: `[fs.write]`
 
-## Installation
-
-```bash
-git clone https://github.com/your-org/kiwi-mcp
-cd kiwi-mcp
-pip install -e ".[dev]"
-```
-
-Requirements: Python 3.11+
+Intersection only. The child can't invent permissions the parent doesn't have. Delegation chains are cryptographically signed. You can trace exactly who granted what to whom.
 
 ---
 
-## Usage
+### Recursive Orchestration
 
-### With Claude Desktop / Cursor / Any MCP Client
+A directive can spawn children that spawn children. Each level attenuates further. Budget flows down and is tracked at every level.
 
-Add to your MCP config:
-
-```json
-{
-  "mcpServers": {
-    "kiwi": {
-      "command": "python",
-      "args": ["-m", "kiwi_mcp.server"],
-      "env": {
-        "KIWI_PROJECT_PATH": "/path/to/your/project"
-      }
-    }
-  }
-}
+```
+research_competitors (budget: $2.00)
+├── deep_research: CompanyA (budget: $0.40)
+│   ├── scrape_website (budget: $0.10)
+│   └── analyze_pricing (budget: $0.10)
+├── deep_research: CompanyB (budget: $0.40)
+│   ├── scrape_website (budget: $0.10)
+│   └── analyze_pricing (budget: $0.10)
+└── ... (3 more)
 ```
 
-### The Four Tools
+When a child hits its limit, it stops. Parent keeps going. No runaway recursion. No surprise bills.
 
-**search** - Find directives, tools, or knowledge
+---
 
-```json
-{
-  "item_type": "directive",
-  "query": "code review security",
-  "project_path": "/project"
-}
+### Hooks Are Just Directives
+
+When a hook fires, it runs a directive. That directive can do anything - including spawning more agents, running tools, or firing its own hooks.
+
+```xml
+<hook>
+  <when>event.name == "error" && event.code == "rate_limited"</when>
+  <directive>backoff_retry</directive>
+  <inputs>
+    <wait_seconds>{{event.detail.retry_after}}</wait_seconds>
+  </inputs>
+</hook>
 ```
 
-**load** - Inspect or copy items between locations
+Self-healing systems. Defined in XML. Executed by agents.
 
-```json
-{
-  "item_type": "tool",
-  "item_id": "linter",
-  "source": "user",
-  "destination": "project",
-  "project_path": "/project"
-}
+---
+
+## One Endpoint To Rule Them All
+
+Here's where it gets stupid simple.
+
+Wrap the MCP in an HTTP server. One endpoint. Plain text in.
+
+```
+POST /intent
+Content-Type: text/plain
+
+Find all Python files that import requests and check if they handle timeouts
 ```
 
-**execute** - Run a directive or tool
+The server runs a `tool_intent` directive that:
+1. Parses your natural language request
+2. Determines which tools/directives to invoke
+3. Executes the plan
+4. Returns structured results
 
-```json
-{
-  "item_type": "directive",
-  "item_id": "code_review",
-  "parameters": {"file_path": "src/auth.py"},
-  "project_path": "/project"
-}
-```
+Plain English command. Full system intelligence. One controlled interface.
 
-**sign** - Validate and sign an item
+No prompt engineering. No JSON gymnastics. No "act as a senior developer who..."
 
-```json
-{
-  "item_type": "tool",
-  "item_id": "scraper",
-  "project_path": "/project"
-}
-```
+**The directive is the system prompt. The MCP is the API. The agent is the backend.**
 
 ---
 
@@ -244,51 +334,14 @@ Add to your MCP config:
 
 ```
 .ai/
-├── directives/        # Your workflow instructions
-│   ├── engineering/
-│   └── research/
-├── tools/             # Your executable scripts
-│   ├── scraping/
-│   └── analysis/
-├── knowledge/         # Your structured information
+├── directives/        # Workflow instructions
+├── tools/             # Executable scripts  
+├── knowledge/         # Structured information
 ├── lockfiles/         # Auto-generated chain locks
 └── extractors/        # Custom metadata parsers
+
+~/.ai/                 # User-level fallback for global items
 ```
-
-User-level fallback at `~/.ai/` for global items.
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────┐
-│                  MCP Server                       │
-├────────────┬────────────┬────────────┬───────────┤
-│   search   │    load    │  execute   │   sign    │
-└─────┬──────┴─────┬──────┴─────┬──────┴─────┬─────┘
-      │            │            │            │
-      └────────────┴────────────┴────────────┘
-                       │
-              TypeHandlerRegistry
-      ┌────────────────┼────────────────┐
-      │                │                │
-  Directive        Tool           Knowledge
-  Handler         Handler          Handler
-      │                │                │
-      └────────────────┴────────────────┘
-                       │
-              ┌────────┴────────┐
-              │                 │
-          Local FS          Registry
-         (.ai/)           (Supabase)
-```
-
-**Primitives layer**: Integrity verification, chain validation, lockfile enforcement
-
-**Runtime layer**: Auth tokens, environment resolution, subprocess execution
-
-**Safety layer**: Capability tokens, permission attenuation, limit tracking
 
 ---
 
@@ -304,12 +357,24 @@ You wouldn't write production code without types, tests, or version control. Why
 
 ---
 
+## What You Can Build
+
+- **Research pipelines** that spawn 20 agents to analyze different sources in parallel
+- **Code review systems** that check security, performance, and style simultaneously  
+- **Sales automation** that personalizes outreach based on scraped prospect data
+- **Content factories** that research, outline, draft, edit, and publish autonomously
+- **Data pipelines** that extract, transform, validate, and load without human intervention
+
+The limit isn't the model. The limit is your imagination and your directive library.
+
+---
+
 ## What's Next
 
-- Thread spawning with isolated capability tokens
-- Multi-agent orchestration through hook chains  
-- Registry for sharing validated directives and tools
 - Visual directive editor
+- Real-time execution streaming
+- Cross-model orchestration (spawn Claude for analysis, GPT for generation)
+- Marketplace for validated directive packages
 
 ---
 
@@ -321,4 +386,4 @@ MIT
 
 *"The best interface is no interface."*
 
-*The second best interface is four functions that do exactly what they say.*
+*The second best is four tools and a library of prompts that actually work.*
