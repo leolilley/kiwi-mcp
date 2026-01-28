@@ -6,7 +6,6 @@ Handles LOCAL file operations directly, only uses registry for REMOTE operations
 """
 
 import json
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -19,7 +18,6 @@ from kiwi_mcp.utils.parsers import parse_directive_file
 from kiwi_mcp.utils.resolvers import DirectiveResolver
 from kiwi_mcp.utils.schema_validator import SchemaValidator
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
-from kiwi_mcp.utils.xml_error_helper import format_error_with_context
 
 
 def _sanitize_for_json(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -646,32 +644,16 @@ class DirectiveHandler:
         }
 
         try:
-            # Extract XML content
-            import re
-
-            xml_match = re.search(r"```xml\s*(.*?)\s*```", content, re.DOTALL)
-            if not xml_match:
-                return metadata
-
-            xml_content = xml_match.group(1)
-
-            # Parse XML to extract metadata
-            root = ET.fromstring(xml_content)
-
-            # Get directive attributes
-            metadata["name"] = root.get("name", "")
-            metadata["version"] = root.get("version", "0.0.0")
-
-            # Get metadata section
-            metadata_elem = root.find("metadata")
-            if metadata_elem is not None:
-                desc_elem = metadata_elem.find("description")
-                if desc_elem is not None and desc_elem.text:
-                    metadata["description"] = desc_elem.text
-
-                category_elem = metadata_elem.find("category")
-                if category_elem is not None and category_elem.text:
-                    metadata["category"] = category_elem.text
+            # Use the data-driven parser via SchemaExtractor
+            from kiwi_mcp.schemas.tool_schema import get_parser
+            
+            parser = get_parser("markdown_xml", self.project_path)
+            parsed = parser(content)
+            
+            metadata["name"] = parsed.get("name", "")
+            metadata["version"] = parsed.get("version", "0.0.0")
+            metadata["description"] = parsed.get("description", "")
+            metadata["category"] = parsed.get("category", "")
 
         except Exception as e:
             self.logger.debug(f"Failed to extract metadata: {e}")
@@ -1122,30 +1104,10 @@ class DirectiveHandler:
                 "file": str(file_path),
             }
 
+        # Parse and validate using the parser (which handles escaping)
+        # Don't pre-validate with ET.fromstring - let the parser handle it
         try:
-            ET.fromstring(xml_content)  # Validate XML syntax
-
-        except ET.ParseError as e:
-            # Use enhanced error formatting with context and suggestions
-            enhanced_error = format_error_with_context(
-                str(e), xml_content, str(file_path)
-            )
-            return {
-                "error": "Invalid directive XML",
-                "parse_error": enhanced_error,
-                "hint": "See parse_error field for detailed error message with line numbers and suggestions.",
-                "file": str(file_path),
-            }
-        except Exception as e:
-            return {
-                "error": "Failed to validate directive",
-                "details": str(e),
-                "file": str(file_path),
-            }
-
-        # Parse and validate
-        try:
-            directive_data = parse_directive_file(file_path)
+            directive_data = parse_directive_file(file_path, self.project_path)
 
             # Validate using centralized validator and embed if valid
             validation_result = await ValidationManager.validate_and_embed(
@@ -1230,9 +1192,17 @@ class DirectiveHandler:
                 return error_response
         except ValueError as e:
             # Convert parse validation error to structured response
+            error_str = str(e)
+            if "Structure error" in error_str:
+                return {
+                    "error": "Invalid directive structure",
+                    "details": error_str,
+                    "path": str(file_path),
+                    "hint": "Directives must follow: <metadata> → <inputs> → <process>/content → <outputs>",
+                }
             return {
-                "error": "Cannot sign: filename and directive name mismatch",
-                "details": str(e),
+                "error": "Invalid directive XML",
+                "details": error_str,
                 "path": str(file_path),
             }
         except Exception as e:

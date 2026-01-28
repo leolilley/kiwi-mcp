@@ -43,6 +43,12 @@ def _get_extractor() -> SchemaExtractor:
     return _extractor
 
 
+def reset_extractor():
+    """Reset the singleton extractor (forces reload of parsers and rules)."""
+    global _extractor
+    _extractor = None
+
+
 def parse_directive_file(file_path: Path, project_path: Optional[Path] = None) -> Dict[str, Any]:
     """Parse directive file using extractor."""
     return _get_extractor().extract(file_path, "directive", project_path)

@@ -553,6 +553,14 @@ class ToolHandler:
             "tool", signed_content, file_path=file_path, project_path=self.project_path
         )
 
+        # Generate lockfile for the tool's chain
+        lockfile_info = await self._generate_lockfile(
+            tool_name=tool_name,
+            version=version,
+            category=tool_meta.get("category", "tools"),
+            location=determined_location,
+        )
+
         return {
             "status": "signed",
             "tool_id": tool_name,
@@ -560,6 +568,7 @@ class ToolHandler:
             "location": determined_location,
             "category": tool_meta.get("category"),
             "signature": signature_info,
+            "lockfile": lockfile_info,
         }
 
     async def _check_for_newer_version(
@@ -620,3 +629,64 @@ class ToolHandler:
             }
 
         return None
+
+    async def _generate_lockfile(
+        self,
+        tool_name: str,
+        version: str,
+        category: str,
+        location: str,
+    ) -> Dict[str, Any]:
+        """
+        Generate lockfile for a tool by resolving its chain and freezing.
+
+        Called automatically during sign to ensure lockfile is always current.
+
+        Args:
+            tool_name: Name of tool
+            version: Tool version
+            category: Tool category
+            location: "project" or "user"
+
+        Returns:
+            Dict with lockfile generation result
+        """
+        try:
+            from kiwi_mcp.runtime.lockfile_store import LockfileStore
+
+            # Resolve the tool's chain
+            chain = await self.primitive_executor.resolver.resolve(tool_name)
+
+            if not chain:
+                return {
+                    "status": "skipped",
+                    "reason": "No chain to freeze (tool has no executor chain)",
+                }
+
+            # Get lockfile store
+            lockfile_store = LockfileStore(project_root=self.project_path)
+
+            # Freeze the chain
+            lockfile = lockfile_store.freeze(
+                tool_id=tool_name,
+                version=version,
+                category=category,
+                chain=chain,
+            )
+
+            # Save to appropriate scope
+            scope = "project" if location == "project" else "user"
+            lockfile_path = lockfile_store.save(lockfile, category=category, scope=scope)
+
+            return {
+                "status": "generated",
+                "path": str(lockfile_path),
+                "chain_length": len(chain),
+            }
+
+        except Exception as e:
+            self.logger.warning(f"Failed to generate lockfile for {tool_name}: {e}")
+            return {
+                "status": "failed",
+                "error": str(e),
+            }

@@ -66,14 +66,14 @@ class TestLockfileValidation:
     """Tests for lockfile validation in executor."""
 
     def test_validate_lockfile_not_found(self, executor, sample_chain):
-        """Validate should succeed (with warning) when no lockfile exists."""
+        """Validate should fail when no lockfile exists (strict enforcement)."""
         result = executor._validate_lockfile(
             tool_id="test_tool",
             chain=sample_chain,
-            mode="warn",
         )
 
-        assert result["valid"] is True  # No lockfile is not an error
+        # No lockfile = validation failure (strict mode)
+        assert result["valid"] is False
         assert not result["lockfile_found"]
         assert len(result["issues"]) == 1
         assert "No lockfile found" in result["issues"][0]
@@ -98,53 +98,19 @@ class TestLockfileValidation:
         result = executor._validate_lockfile(
             tool_id="test_tool",
             chain=sample_chain,
-            mode="warn",
         )
 
         assert result["valid"] is True
         assert result["lockfile_found"] is True
         assert len(result["issues"]) == 0
 
-    def test_validate_lockfile_mismatched_warn_mode(
+    def test_validate_lockfile_mismatched(
         self,
         executor,
         lockfile_store,
         sample_chain,
     ):
-        """Validate should warn but not fail in warn mode for mismatch."""
-        # Create lockfile with original chain
-        lockfile = lockfile_store.freeze(
-            tool_id="test_tool",
-            version="1.0.0",
-            category="tests",
-            chain=sample_chain,
-        )
-        lockfile_store.save(lockfile, category="tests", scope="project")
-
-        # Modify chain
-        modified_chain = sample_chain.copy()
-        modified_chain[0] = modified_chain[0].copy()
-        modified_chain[0]["content_hash"] = "different" + "0" * 56
-
-        # Validate
-        result = executor._validate_lockfile(
-            tool_id="test_tool",
-            chain=modified_chain,
-            mode="warn",
-        )
-
-        assert result["valid"] is False
-        assert result["lockfile_found"] is True
-        assert len(result["issues"]) > 0
-        assert any("integrity" in issue.lower() for issue in result["issues"])
-
-    def test_validate_lockfile_mismatched_strict_mode(
-        self,
-        executor,
-        lockfile_store,
-        sample_chain,
-    ):
-        """Validate should fail in strict mode for mismatch."""
+        """Validate should fail on mismatch (strict enforcement)."""
         # Create lockfile with original chain
         lockfile = lockfile_store.freeze(
             tool_id="test_tool",
@@ -159,26 +125,26 @@ class TestLockfileValidation:
         modified_chain[0] = modified_chain[0].copy()
         modified_chain[0]["content_hash"] = "different" + "0" * 56
 
-        # Validate
+        # Validate - should fail (strict enforcement)
         result = executor._validate_lockfile(
             tool_id="test_tool",
             chain=modified_chain,
-            mode="strict",
         )
 
         assert result["valid"] is False
         assert result["lockfile_found"] is True
         assert len(result["issues"]) > 0
+        assert any("integrity" in issue.lower() for issue in result["issues"])
 
 
 class TestExecutorLockfileIntegration:
     """Tests for lockfile validation integrated into execute()."""
 
     @pytest.mark.asyncio
-    async def test_execute_without_lockfile(self, executor, temp_project):
-        """Execute should work normally when use_lockfile=False."""
+    async def test_execute_lockfile_always_runs(self, executor, temp_project):
+        """Lockfile validation runs automatically (no opt-in flag)."""
         # Note: This would need a real tool to execute
-        # For now, we just test that the parameter is accepted
+        # Lockfile validation is now always-on with warn mode by default
         pass
 
     @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 from kiwi_mcp.primitives.executor import PrimitiveExecutor, ExecutionResult
 from kiwi_mcp.runtime.auth import AuthStore, AuthenticationRequired
+from kiwi_mcp.runtime.lockfile_store import LockfileStore
 
 
 @pytest.fixture
@@ -28,6 +29,15 @@ def mock_auth_store():
     store = AsyncMock(spec=AuthStore)
     store.get_token = AsyncMock(return_value="test_token_123")
     return store
+
+
+def create_lockfile_for_chain(project_path: Path, chain: list, category: str = "tools"):
+    """Helper to create a lockfile for a mock chain."""
+    store = LockfileStore(project_root=project_path)
+    tool_id = chain[0]["tool_id"]
+    version = chain[0]["version"]
+    lockfile = store.freeze(tool_id=tool_id, version=version, category=category, chain=chain)
+    store.save(lockfile, category=category, scope="project")
 
 
 @pytest.mark.asyncio
@@ -75,6 +85,9 @@ async def test_executor_injects_auth_for_required_scope(test_project_path, mock_
             "source": "local",
         },
     ]
+
+    # Create lockfile for the chain (strict enforcement)
+    create_lockfile_for_chain(test_project_path, mock_chain)
 
     # Mock the resolver to return our test chain
     executor.resolver.resolve = AsyncMock(return_value=mock_chain)
@@ -150,6 +163,9 @@ async def test_executor_no_auth_for_public_tool(test_project_path, mock_auth_sto
             "source": "local",
         },
     ]
+
+    # Create lockfile for the chain (strict enforcement)
+    create_lockfile_for_chain(test_project_path, mock_chain)
 
     # Mock the resolver
     executor.resolver.resolve = AsyncMock(return_value=mock_chain)
@@ -231,6 +247,9 @@ async def test_executor_handles_missing_auth(test_project_path):
             "source": "local",
         },
     ]
+
+    # Create lockfile for the chain (strict enforcement)
+    create_lockfile_for_chain(test_project_path, mock_chain)
 
     # Mock the resolver
     executor.resolver.resolve = AsyncMock(return_value=mock_chain)

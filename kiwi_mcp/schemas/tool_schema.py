@@ -26,12 +26,14 @@ def _parse_text(content: str) -> Dict[str, Any]:
     return {"content": content}
 
 
-# Dynamic parser loading
-_loaded_parsers: Dict[str, Any] = {}
+# Dynamic parser loading with mtime-based cache invalidation
+_loaded_parsers: Dict[str, Any] = {}  # name -> parser function
+_parser_mtimes: Dict[str, float] = {}  # name -> file mtime when loaded
+_parser_paths: Dict[str, Path] = {}  # name -> file path
 
 
-def _load_parser(name: str, project_path: Optional[Path] = None):
-    """Load a parser from .ai/parsers/ directories."""
+def _load_parser(name: str, project_path: Optional[Path] = None) -> bool:
+    """Load a parser from .ai/parsers/ directories. Returns True if loaded."""
     from kiwi_mcp.utils.resolvers import get_user_space
 
     search_paths = [
@@ -48,21 +50,45 @@ def _load_parser(name: str, project_path: Optional[Path] = None):
             exec(code, ns)
             if "parse" in ns:
                 _loaded_parsers[name] = ns["parse"]
-                return
+                _parser_mtimes[name] = f.stat().st_mtime
+                _parser_paths[name] = f
+                return True
+    return False
 
 
-def get_parser(name: str, project_path: Optional[Path] = None):
-    """Get parser by name, loading from RYE if needed."""
+def _parser_needs_reload(name: str) -> bool:
+    """Check if parser file has been modified since loading."""
+    if name not in _parser_paths:
+        return True
+    
+    path = _parser_paths[name]
+    if not path.exists():
+        return True
+    
+    current_mtime = path.stat().st_mtime
+    cached_mtime = _parser_mtimes.get(name, 0)
+    return current_mtime > cached_mtime
+
+
+def get_parser(name: str, project_path: Optional[Path] = None, force_reload: bool = False):
+    """Get parser by name, with smart mtime-based caching."""
     # Check builtin first
     if name == "text":
         return _parse_text
 
-    # Check loaded parsers
-    if name not in _loaded_parsers:
+    # Check if reload needed (file changed or not loaded)
+    if force_reload or name not in _loaded_parsers or _parser_needs_reload(name):
         _load_parser(name, project_path)
 
     # Return loaded parser or fallback to text
     return _loaded_parsers.get(name, _parse_text)
+
+
+def clear_parser_cache():
+    """Clear all cached parsers."""
+    _loaded_parsers.clear()
+    _parser_mtimes.clear()
+    _parser_paths.clear()
 
 
 # Keep only text parser as builtin
@@ -209,6 +235,7 @@ class Bootstrap:
             rules = namespace.get("EXTRACTION_RULES")
             validation_schema = namespace.get("VALIDATION_SCHEMA")
             search_fields = namespace.get("SEARCH_FIELDS")
+            structure = namespace.get("STRUCTURE")  # Structure config for parsing
 
             if extensions and rules:
                 return {
@@ -218,6 +245,7 @@ class Bootstrap:
                     "rules": rules,
                     "validation_schema": validation_schema,
                     "search_fields": search_fields,
+                    "structure": structure,  # Include structure config
                     "path": file_path,
                 }
             return None
@@ -329,6 +357,8 @@ class SchemaExtractor:
     def __init__(self):
         self._extractors: Dict[tuple, Dict] = {}  # (item_type, ext) -> {parser, rules}
         self._loaded_types: set = set()  # Track which item_types have been loaded
+        # Clear parser cache to ensure fresh parsers are loaded
+        clear_parser_cache()
 
     def _load_extractors(self, item_type: str = "tool", project_path: Optional[Path] = None):
         """Load extractor tools for a specific item type."""
@@ -360,6 +390,7 @@ class SchemaExtractor:
                                     "rules": extractor_data["rules"],
                                     "validation_schema": extractor_data.get("validation_schema"),
                                     "search_fields": extractor_data.get("search_fields"),
+                                    "structure": extractor_data.get("structure"),  # Structure config
                                 }
 
         self._loaded_types.add(item_type)
@@ -384,6 +415,19 @@ class SchemaExtractor:
         # Use the extractor's parser with dynamic loading
         parser_name = extractor["parser"]
         parser_func = get_parser(parser_name, project_path)
+        
+        # Pass structure config to parser if available
+        structure_config = extractor.get("structure")
+        if structure_config and hasattr(parser_func, '__module__'):
+            # Try to set structure config on the parser module
+            try:
+                import sys
+                parser_module = sys.modules.get(parser_func.__module__)
+                if parser_module and hasattr(parser_module, 'set_structure_config'):
+                    parser_module.set_structure_config(structure_config)
+            except Exception:
+                pass  # Parser doesn't support structure config
+        
         parsed = parser_func(content)
 
         # Apply extraction rules

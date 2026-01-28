@@ -78,11 +78,11 @@ class DirectiveValidator(BaseValidator):
                 "issues": ["Directive name not found in parsed data"],
             }
 
-        # Validate name format (must be snake_case)
-        if not re.match(r"^[a-z][a-z0-9_]*$", directive_name):
+        # Validate name format (must be snake_case, can start with number for ordering)
+        if not re.match(r"^[a-z0-9][a-z0-9_]*$", directive_name):
             issues.append(
                 f"Invalid directive name '{directive_name}'. Must be snake_case "
-                "(lowercase letters, numbers, underscores, starting with a letter)"
+                "(lowercase letters, numbers, underscores)"
             )
 
         expected_filename = f"{directive_name}.md"

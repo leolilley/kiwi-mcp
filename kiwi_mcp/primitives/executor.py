@@ -497,9 +497,6 @@ class PrimitiveExecutor:
         self,
         tool_id: str,
         params: Dict[str, Any],
-        lockfile: Optional[Dict[str, Any]] = None,
-        use_lockfile: bool = False,
-        lockfile_mode: Literal["warn", "strict"] = "warn",
     ) -> ExecutionResult:
         """
         Execute a tool by resolving its chain and routing to the correct primitive.
@@ -508,7 +505,7 @@ class PrimitiveExecutor:
         1. Resolve chain (with caching)
         2. Verify integrity at every step (if enabled)
         3. Validate parent->child relationships (if enabled)
-        4. Validate against lockfile (if use_lockfile=True)
+        4. Validate against lockfile (strict - fails on mismatch)
         5. Merge configs from chain
         6. Template config with runtime params
         7. Validate templated config against config_schema
@@ -517,9 +514,6 @@ class PrimitiveExecutor:
         Args:
             tool_id: Tool to execute
             params: Runtime parameters
-            lockfile: Deprecated - for backward compatibility
-            use_lockfile: Whether to validate against lockfile
-            lockfile_mode: 'warn' logs mismatches, 'strict' fails on mismatch
         """
         start_time = time.time()
         context = ExecutionContext()
@@ -566,27 +560,17 @@ class PrimitiveExecutor:
                 for warning in chain_result.get("warnings", []):
                     logger.warning(f"Chain validation warning for {tool_id}: {warning}")
 
-            # 4. Validate against lockfile (if enabled)
-            if use_lockfile:
-                lockfile_result = self._validate_lockfile(
-                    tool_id=tool_id,
-                    chain=chain,
-                    mode=lockfile_mode,
-                )
+            # 4. Validate against lockfile (strict enforcement)
+            lockfile_result = self._validate_lockfile(tool_id=tool_id, chain=chain)
 
-                if not lockfile_result["valid"]:
-                    if lockfile_mode == "strict":
-                        return ExecutionResult(
-                            success=False,
-                            data=None,
-                            duration_ms=int((time.time() - start_time) * 1000),
-                            error=f"Lockfile validation failed: {'; '.join(lockfile_result['issues'])}",
-                            metadata={"lockfile_validation_failure": True},
-                        )
-                    else:
-                        # Warn mode - log but continue
-                        for issue in lockfile_result["issues"]:
-                            logger.warning(f"Lockfile validation warning for {tool_id}: {issue}")
+            if not lockfile_result["valid"]:
+                return ExecutionResult(
+                    success=False,
+                    data=None,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                    error=f"Lockfile validation failed: {'; '.join(lockfile_result['issues'])}",
+                    metadata={"lockfile_validation_failure": True},
+                )
 
             # 5. Find terminal primitive (unchanged)
             terminal_tool = chain[-1]
@@ -884,15 +868,13 @@ class PrimitiveExecutor:
         self,
         tool_id: str,
         chain: List[Dict[str, Any]],
-        mode: Literal["warn", "strict"],
     ) -> Dict[str, Any]:
         """
-        Validate resolved chain against lockfile.
+        Validate resolved chain against lockfile (strict enforcement).
 
         Args:
             tool_id: Tool being executed
             chain: Resolved chain
-            mode: Validation mode ('warn' or 'strict')
 
         Returns:
             Dict with valid, issues, and lockfile_found keys
@@ -915,12 +897,12 @@ class PrimitiveExecutor:
         )
 
         if not lockfile:
-            # No lockfile found
-            logger.debug(f"No lockfile found for {tool_id}@{tool_version}")
+            # No lockfile found - strict enforcement requires lockfile
+            logger.warning(f"No lockfile found for {tool_id}@{tool_version} - run sign to generate")
             return {
-                "valid": True,  # No lockfile is not an error
+                "valid": False,
                 "issues": [
-                    f"No lockfile found for {tool_id}@{tool_version} (category: {category})"
+                    f"No lockfile found for {tool_id}@{tool_version}. Run sign to generate lockfile."
                 ],
                 "lockfile_found": False,
             }
