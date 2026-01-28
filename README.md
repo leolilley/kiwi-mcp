@@ -69,7 +69,7 @@ Here's what most people get wrong: they dump everything into the context window 
 
 Kiwi separates **inspection** from **execution**.
 
-**load** returns metadata. The agent sees what something *is* without loading *all of it*.
+**load** (same source and destination, or no destination) returns the full content for inspection. The agent reads the directive, understands what it does, sees the inputs it needs.
 
 ```json
 {
@@ -79,13 +79,15 @@ Kiwi separates **inspection** from **execution**.
   "inputs": [
     {"name": "prospect_list", "type": "string", "required": true},
     {"name": "template_id", "type": "string", "required": true}
-  ]
+  ],
+  "process": { ... },
+  "content": "..."
 }
 ```
 
-**execute** returns the full directive only when the agent is ready to follow it. No wasted tokens. No context pollution. The agent requests exactly what it needs, when it needs it.
+**execute** is when context gets lean. The agent isn't carrying around a massive prompt blob. It's following structured steps. Each step tells it exactly what to do. The directive *is* the control flow.
 
-Same for knowledge. Load gives you the summary. Execute gives you the content. Your context window stays surgical.
+Same for knowledge. Load to read it. Execute to act on it. Your context window stays surgical because the agent operates on instructions, not raw dumps.
 
 ---
 
