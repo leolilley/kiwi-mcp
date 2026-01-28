@@ -296,6 +296,55 @@ Anyone who can make an HTTP request gets 100% of the system's intelligence throu
 
 ---
 
+## The Universal Agent File
+
+Forget "You are a helpful assistant." Forget "Act as a senior developer." Forget role-playing prompts entirely.
+
+Drop one file in your project: `AGENTS.md`
+
+```markdown
+## COMMAND DISPATCH TABLE
+
+| User Says            | Run Directive      | With Inputs              |
+| -------------------- | ------------------ | ------------------------ |
+| `create tool X`      | `create_tool`      | `tool_name=X`            |
+| `create directive X` | `create_directive` | `directive_name=X`       |
+| `search tools X`     | `search_tools`     | `query=X, source=local`  |
+| `run X`              | `run_directive`    | `directive_name=X`       |
+| `bootstrap X`        | `bootstrap`        | `project_type=X`         |
+| `research X`         | `research_topic`   | `topic=X`                |
+| `debug X`            | `debug_issue`      | `issue_description=X`    |
+```
+
+The agent reads this. Now it knows: when a user says "create tool scraper", execute `create_tool` with `tool_name=scraper`.
+
+No ambiguity. No interpretation. No "I think you meant..."
+
+**This is the system prompt.** Not a paragraph of vibes. A dispatch table that maps intent to action.
+
+The file also contains a full directive that teaches the agent the Kiwi workflow:
+
+1. Understand the task
+2. Search for existing directives that match
+3. Load and execute if found
+4. If not found, search tools and knowledge, orchestrate manually
+5. Store learnings for next time
+
+One file. Universal behavior. Works with Claude, Cursor, Amp, Gemini - any agent that reads project files gets the same capabilities.
+
+Compare this to:
+
+```
+You are a helpful AI assistant specializing in code review. 
+When asked to review code, you should look for security issues,
+performance problems, and style violations. Be thorough but concise.
+If you're unsure about something, ask for clarification.
+```
+
+That's a prayer. AGENTS.md is a program.
+
+---
+
 ## Project Structure
 
 ```
