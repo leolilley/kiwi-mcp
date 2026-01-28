@@ -48,14 +48,16 @@ class KeywordSearchEngine:
     K1 = 1.5  # Term frequency saturation
     B = 0.75  # Document length normalization
 
-    # Field boost weights
-    FIELD_WEIGHTS = {
-        "title": 3.0,
-        "name": 3.0,
+    # Default field boost weights (used when no explicit weights provided)
+    DEFAULT_FIELD_WEIGHTS = {
+        "title": 5.0,
+        "name": 5.0,
         "description": 2.0,
+        "summary": 2.0,
         "category": 1.5,
         "tags": 1.5,
         "content": 1.0,
+        "body": 1.0,
     }
 
     def __init__(self):
@@ -72,6 +74,7 @@ class KeywordSearchEngine:
         fields: Dict[str, str],
         path: Path,
         metadata: Dict[str, Any],
+        field_weights: Optional[Dict[str, float]] = None,
     ):
         """
         Add document to search index.
@@ -82,6 +85,7 @@ class KeywordSearchEngine:
             fields: Dictionary of field_name -> content to index
             path: Path to the document file
             metadata: Additional metadata to store with document
+            field_weights: Optional per-document field weights from extractor schema
         """
         # Tokenize each field
         tokenized = {}
@@ -99,6 +103,7 @@ class KeywordSearchEngine:
             "length": total_length,
             "path": path,
             "metadata": metadata,
+            "field_weights": field_weights,
         }
 
         # Update IDF cache
@@ -198,9 +203,12 @@ class KeywordSearchEngine:
         """
         total_score = 0.0
         doc_length = doc["length"]
+        
+        # Use per-document weights if provided, else fall back to defaults
+        doc_weights = doc.get("field_weights") or self.DEFAULT_FIELD_WEIGHTS
 
         for field, token_counts in doc["fields"].items():
-            field_weight = self.FIELD_WEIGHTS.get(field, 1.0)
+            field_weight = doc_weights.get(field, 1.0)
 
             for token in query_tokens:
                 if token in token_counts:

@@ -161,7 +161,7 @@ class TestMetadataValidationIntegration:
         from kiwi_mcp.utils.metadata_manager import compute_unified_integrity
         initial_hash = compute_unified_integrity(
             item_type="knowledge",
-            item_id=parsed_data["zettel_id"],
+            item_id=parsed_data["id"],
             version=parsed_data.get("version", "1.0.0"),
             file_content=file_content,
             file_path=sample_knowledge_file
@@ -175,7 +175,7 @@ class TestMetadataValidationIntegration:
         # Now compute hash WITH signature (for chain validation)
         final_hash = compute_unified_integrity(
             item_type="knowledge",
-            item_id=parsed_data["zettel_id"],
+            item_id=parsed_data["id"],
             version=parsed_data.get("version", "1.0.0"),
             file_content=signed_content,  # Includes signature
             file_path=sample_knowledge_file
@@ -192,7 +192,7 @@ class TestMetadataValidationIntegration:
         # Verify with hash that includes signature (chain validation)
         verify_result = verifier.verify_single_file(
             item_type="knowledge",
-            item_id=parsed_data["zettel_id"],
+            item_id=parsed_data["id"],
             version=parsed_data.get("version", "1.0.0"),
             file_path=sample_knowledge_file,
             stored_hash=final_hash,  # Use hash that includes signature
@@ -266,7 +266,7 @@ class TestHandlerIntegration:
 
         # Sign using handler's sign action (which uses MetadataManager)
         handler = DirectiveHandler(project_path=str(tmp_path))
-        result = await handler.execute("sign", "test_directive", {"location": "project"})
+        result = await handler.sign("test_directive", {"location": "project"})
 
         assert result.get("status") == "signed"
         assert "signature" in result
@@ -312,7 +312,7 @@ class TestHandlerIntegration:
 
         # Try to create - should validate first
         handler = DirectiveHandler(project_path=str(tmp_path))
-        result = await handler.execute("sign", "test_directive", {"location": "project"})
+        result = await handler.sign("test_directive", {"location": "project"})
 
         # Should succeed if validation passes
         assert result.get("status") == "signed" or "error" not in result
@@ -408,7 +408,7 @@ class TestHandlerIntegration:
         
         # Create file with frontmatter and content
         file_content = f"""---
-zettel_id: 001-test
+id: 001-test
 title: Test Entry
 entry_type: learning
 category: test
@@ -469,7 +469,7 @@ version: "1.0.0"
         
         # Create file with frontmatter and content
         file_content = f"""---
-zettel_id: 001-test
+id: 001-test
 title: Test Entry
 entry_type: learning
 category: test
@@ -522,7 +522,7 @@ class TestEndToEndFlows:
         handler = DirectiveHandler(project_path=str(tmp_path))
 
         # Sign (validates and signs)
-        sign_result = await handler.execute("sign", "test_directive", {"location": "project"})
+        sign_result = await handler.sign("test_directive", {"location": "project"})
         assert sign_result.get("status") == "signed"
 
         # Verify signature after sign
@@ -542,7 +542,7 @@ class TestEndToEndFlows:
         assert verify1.success is True
 
         # Re-sign (re-validates and re-signs, includes previous signature in chain)
-        sign_result2 = await handler.execute("sign", "test_directive", {})
+        sign_result2 = await handler.sign("test_directive", {})
         assert sign_result2.get("status") == "signed"
 
         # Verify signature after re-sign
@@ -587,10 +587,10 @@ class TestEndToEndFlows:
         handler = DirectiveHandler(project_path=str(tmp_path))
 
         # Sign it
-        await handler.execute("sign", "test_directive", {"location": "project"})
+        await handler.sign("test_directive", {"location": "project"})
 
         # Run should succeed (validation and verification pass)
-        run_result = await handler.execute("run", "test_directive", {})
+        run_result = await handler.execute("test_directive", {})
         assert run_result.get("status") == "ready" or "error" not in run_result
 
     @pytest.mark.integration
@@ -616,11 +616,11 @@ class TestEndToEndFlows:
         handler = DirectiveHandler(project_path=str(tmp_path))
 
         # Sign it
-        await handler.execute("sign", "test_directive", {"location": "project"})
+        await handler.sign("test_directive", {"location": "project"})
 
         # Publish should verify signature first
         # Note: This will fail if registry not configured, but that's expected
-        publish_result = await handler.execute("publish", "test_directive", {"version": "1.0.0"})
+        publish_result = await handler.publish("test_directive", {"version": "1.0.0"})
 
         # Should either succeed or fail with registry error, not signature error
         if "error" in publish_result:

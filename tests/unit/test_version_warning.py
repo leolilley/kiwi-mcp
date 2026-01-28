@@ -432,7 +432,7 @@ class TestDirectiveHandlerRunWithVersionWarning:
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.2.0"}
 
-            result = await handler.execute("run", "test_directive", {})
+            result = await handler.execute("test_directive", {})
 
             assert "version_warning" in result
             assert result["version_warning"]["newer_version"] == "1.2.0"
@@ -448,7 +448,7 @@ class TestDirectiveHandlerRunWithVersionWarning:
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = {"version": "1.0.0"}
 
-            result = await handler.execute("run", "test_directive", {})
+            result = await handler.execute("test_directive", {})
 
             assert "version_warning" not in result
             assert result["status"] == "ready"
@@ -479,7 +479,7 @@ class TestDirectiveHandlerRunWithVersionWarning:
         directive_file = directive_dir / "test_no_version.md"
         directive_file.write_text(directive_content)
 
-        result = await handler.execute("run", "test_no_version", {})
+        result = await handler.execute("test_no_version", {})
 
         # Should fail validation, not reach version checking
         assert "error" in result
@@ -573,7 +573,7 @@ class TestToolHandlerRunWithVersionWarning:
                 with patch.object(handler.primitive_executor, "execute", new_callable=AsyncMock) as sub:
                     from kiwi_mcp.primitives.executor import ExecutionResult
                     sub.return_value = ExecutionResult(success=True, data={}, duration_ms=100)
-                    r = await handler.execute("run", "valid_tool", {})
+                    r = await handler.execute("valid_tool", {})
         assert "version_warning" in r and r["version_warning"]["newer_version"] == "1.2.0"
 
     @pytest.mark.asyncio
@@ -585,7 +585,7 @@ class TestToolHandlerRunWithVersionWarning:
             # Mock validation to pass
             with patch("kiwi_mcp.handlers.tool.handler.ValidationManager.validate_and_embed") as mock_validate:
                 mock_validate.return_value = {"valid": True, "issues": []}
-                r = await handler.execute("run", "valid_tool", {"dry_run": True})
+                r = await handler.execute("valid_tool", {"dry_run": True})
         assert r.get("status") == "validation_passed" and "version_warning" in r
 
 
@@ -628,7 +628,7 @@ class TestKnowledgeHandlerRunWithVersionWarning:
     def valid_knowledge_with_version(self, tmp_path):
         d = tmp_path / ".ai" / "knowledge" / "test"
         d.mkdir(parents=True)
-        raw = "---\nzettel_id: k1\ntitle: K1\nversion: 1.0.0\n---\n\nContent here.\n"
+        raw = "---\nid: k1\ntitle: K1\nversion: 1.0.0\n---\n\nContent here.\n"
         p = d / "k1.md"
         p.write_text(raw)
         return p
@@ -645,5 +645,5 @@ class TestKnowledgeHandlerRunWithVersionWarning:
                 "kiwi_mcp.handlers.knowledge.handler.MetadataManager.verify_signature",
                 return_value=None,
             ):
-                r = await handler.execute("run", "k1", {})
+                r = await handler.execute("k1", {})
         assert "version_warning" in r and r["version_warning"]["newer_version"] == "1.2.0"

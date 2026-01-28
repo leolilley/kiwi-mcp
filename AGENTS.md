@@ -64,16 +64,17 @@ System prompt for the Kiwi agent that orchestrates Context Kiwi (directives), To
 
 ## Kiwi MCP (Unified Architecture)
 
-Kiwi MCP provides 4 unified tools for 3 item types (directives, tools, knowledge):
+Kiwi MCP provides 5 primitive tools for 3 item types (directives, tools, knowledge):
 
 ### Tools
 
-| Tool                     | Purpose                        |
-| ------------------------ | ------------------------------ |
-| `mcp__kiwi_mcp__search`  | Find items by keywords         |
-| `mcp__kiwi_mcp__load`    | Get item details               |
-| `mcp__kiwi_mcp__execute` | Run/create/update/delete items |
-| `mcp__kiwi_mcp__help`    | Get usage guidance             |
+| Tool                     | Purpose                                  |
+| ------------------------ | ---------------------------------------- |
+| `mcp__kiwi_mcp__search`  | Find items by keywords                   |
+| `mcp__kiwi_mcp__load`    | Get item details or copy between sources |
+| `mcp__kiwi_mcp__execute` | Execute/run an item                      |
+| `mcp__kiwi_mcp__sign`    | Validate and sign an item                |
+| `mcp__kiwi_mcp__help`    | Get usage guidance                       |
 
 ### Item Types
 
@@ -82,16 +83,6 @@ Kiwi MCP provides 4 unified tools for 3 item types (directives, tools, knowledge
 | `directive` | Workflow instructions (HOW to accomplish tasks)                            |
 | `tool`      | Executable tools including Python scripts, APIs, etc. (DO the actual work) |
 | `knowledge` | Domain information, patterns, learnings                                    |
-
-### Actions (via execute)
-
-| Action    | Description                         |
-| --------- | ----------------------------------- |
-| `run`     | Execute/load the item               |
-| `create`  | Create new item                     |
-| `update`  | Modify existing item                |
-| `delete`  | Remove item (requires confirm=true) |
-| `publish` | Upload to registry                  |
 
 ### Pattern Tips
 

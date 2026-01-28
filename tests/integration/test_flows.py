@@ -269,7 +269,7 @@ class TestKnowledgeRegistryFlow:
     async def test_knowledge_get(self, knowledge_registry):
         """Test getting a single knowledge entry."""
         entry_data = {
-            "zettel_id": "001-email-deliverability",
+            "id": "001-email-deliverability",
             "title": "Email Deliverability Best Practices",
             "content": "# Email Deliverability\n\nContent here...",
             "entry_type": "pattern",
@@ -286,7 +286,7 @@ class TestKnowledgeRegistryFlow:
         result = await knowledge_registry.get("001-email-deliverability")
         
         assert result is not None
-        assert result["zettel_id"] == "001-email-deliverability"
+        assert result["id"] == "001-email-deliverability"
         assert result["entry_type"] == "pattern"
     
     @pytest.mark.asyncio
@@ -301,7 +301,7 @@ class TestKnowledgeRegistryFlow:
         table_mock.insert.return_value.execute.return_value = insert_mock
         
         result = await knowledge_registry.publish(
-            zettel_id="003-new-entry",
+            id="003-new-entry",
             title="New Entry",
             content="# New Entry\n\nContent",
             entry_type="learning",
@@ -310,7 +310,7 @@ class TestKnowledgeRegistryFlow:
         )
         
         assert result["status"] == "success"
-        assert result["zettel_id"] == "003-new-entry"
+        assert result["id"] == "003-new-entry"
     
     @pytest.mark.asyncio
     async def test_knowledge_list(self, knowledge_registry, mock_knowledge_search_result):
@@ -327,15 +327,15 @@ class TestKnowledgeRegistryFlow:
         """Test getting relationships for an entry."""
         outgoing_data = [
             {
-                "from_zettel_id": "001",
-                "to_zettel_id": "002",
+                "from_id": "001",
+                "to_id": "002",
                 "relationship_type": "references"
             }
         ]
         incoming_data = [
             {
-                "from_zettel_id": "003",
-                "to_zettel_id": "001",
+                "from_id": "003",
+                "to_id": "001",
                 "relationship_type": "references"
             }
         ]

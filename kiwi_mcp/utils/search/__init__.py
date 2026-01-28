@@ -1,16 +1,17 @@
 """Search utilities for Kiwi MCP.
 
-This module provides keyword search and scoring functionality for searching
+This module provides keyword search functionality for searching
 directives, tools, and knowledge entries.
+
+Architecture:
+- KeywordSearchEngine: BM25-based search with schema-driven field weights
+- SearchResult: Standard result type with score and metadata
+- scoring.py: Standalone utilities (kept for potential reuse, not used by engine)
 """
 
 from .keyword import KeywordSearchEngine, SearchResult
-from .scoring import DEFAULT_FIELD_WEIGHTS, bm25_score, tf_idf_score
 
 __all__ = [
     "KeywordSearchEngine",
     "SearchResult",
-    "bm25_score",
-    "tf_idf_score",
-    "DEFAULT_FIELD_WEIGHTS",
 ]

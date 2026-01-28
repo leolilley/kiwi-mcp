@@ -48,18 +48,10 @@ class EnvResolver:
             project_path: Path to project root (where .ai/ folder lives)
         """
         self.project_path = Path(project_path) if project_path else None
-        self.user_space = self._get_user_space()
+        # Use canonical get_user_space from path_service
+        from kiwi_mcp.utils.path_service import get_user_space
+        self.user_space = get_user_space()
         logger.debug(f"EnvResolver initialized with project_path={self.project_path}")
-
-    def _get_user_space(self) -> Path:
-        """Get user-level kiwi space (~/.ai by default)."""
-        # Check for KIWI_USER_SPACE override
-        user_space_env = os.environ.get("KIWI_USER_SPACE")
-        if user_space_env:
-            return Path(user_space_env)
-
-        # Default to ~/.ai
-        return Path.home() / ".ai"
 
     def resolve(
         self,

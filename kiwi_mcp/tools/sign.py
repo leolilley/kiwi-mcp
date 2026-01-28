@@ -1,4 +1,4 @@
-"""Execute tool - execute directives, tools, or knowledge items."""
+"""Sign tool - validate and sign items."""
 
 import json
 import logging
@@ -6,28 +6,30 @@ from mcp.types import Tool
 from kiwi_mcp.tools.base import BaseTool
 
 
-class ExecuteTool(BaseTool):
-    """Execute directives, tools, or knowledge items."""
+class SignTool(BaseTool):
+    """Validate and sign directives, tools, or knowledge."""
 
     def __init__(self, registry=None):
         """Initialize with optional registry reference."""
         self.registry = registry
-        self.logger = logging.getLogger("ExecuteTool")
+        self.logger = logging.getLogger("SignTool")
 
     @property
     def schema(self) -> Tool:
         return Tool(
-            name="execute",
-            description="""Execute a directive, tool, or knowledge item.
+            name="sign",
+            description="""Validate and sign a directive, tool, or knowledge file.
 
-- directive: Returns parsed XML for agent to follow
-- tool: Executes tool code and returns results
-- knowledge: Returns knowledge content to inform decisions
+File must exist first. Validates content and adds cryptographic signature:
+- directive: Validates XML syntax and structure
+- tool: Validates code and metadata
+- knowledge: Validates frontmatter
+
+Always allows re-signing to update signatures after changes.
 
 Examples:
-  execute(item_type='directive', item_id='create_tool', project_path='/path/to/project')
-  execute(item_type='tool', item_id='scraper', project_path='/path/to/project', parameters={'url': 'https://...'})
-  execute(item_type='knowledge', item_id='api_patterns', project_path='/path/to/project')
+  sign(item_type='directive', item_id='my_directive', project_path='/path/to/project')
+  sign(item_type='tool', item_id='my_tool', project_path='/path/to/project', parameters={'location': 'user'})
 """,
             inputSchema={
                 "type": "object",
@@ -35,7 +37,7 @@ Examples:
                     "item_type": {
                         "type": "string",
                         "enum": ["directive", "tool", "knowledge"],
-                        "description": "Type of item to execute",
+                        "description": "Type of item to sign",
                     },
                     "item_id": {
                         "type": "string",
@@ -47,12 +49,17 @@ Examples:
                     },
                     "parameters": {
                         "type": "object",
-                        "description": "Execution parameters. Directives/tools/knowledge can accept any parameters they define in their inputs.",
+                        "description": "Sign-specific parameters",
                         "additionalProperties": True,
                         "properties": {
-                            "dry_run": {
-                                "type": "boolean",
-                                "description": "Validate without executing (tools only)",
+                            "location": {
+                                "type": "string",
+                                "enum": ["project", "user"],
+                                "description": "Save location (project=.ai/ folder, user=home directory)",
+                            },
+                            "category": {
+                                "type": "string",
+                                "description": "Category folder (optional)",
                             },
                         },
                     },
@@ -62,7 +69,7 @@ Examples:
         )
 
     async def execute(self, arguments: dict) -> str:
-        """Execute item with dynamic handler creation."""
+        """Sign an item with dynamic handler creation."""
         item_type = arguments.get("item_type")
         item_id = arguments.get("item_id")
         parameters = arguments.get("parameters", {})
@@ -101,8 +108,8 @@ Examples:
                 )
 
             handler = handler_class(project_path=project_path)
-            result = await handler.execute(item_id, parameters)
+            result = await handler.sign(item_id, parameters)
             return self._format_response(result)
         except Exception as e:
-            self.logger.error(f"Execute failed: {e}")
+            self.logger.error(f"Sign failed: {e}")
             return self._format_response({"error": str(e)})

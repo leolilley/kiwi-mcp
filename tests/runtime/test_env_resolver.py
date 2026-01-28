@@ -34,9 +34,9 @@ class TestEnvResolverInit:
         assert resolver.user_space == Path.home() / ".ai"
 
     def test_init_with_custom_user_space(self):
-        """Test initialization with KIWI_USER_SPACE override."""
-        custom_space = "/tmp/custom-kiwi"
-        with patch.dict(os.environ, {"KIWI_USER_SPACE": custom_space}):
+        """Test initialization with USER_SPACE override."""
+        custom_space = "/tmp/custom-ai"
+        with patch.dict(os.environ, {"USER_SPACE": custom_space}):
             resolver = EnvResolver()
             assert resolver.user_space == Path(custom_space)
 

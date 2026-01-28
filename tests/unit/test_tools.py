@@ -1,5 +1,5 @@
 """
-Unit tests for Kiwi MCP tools (search, load, execute, help).
+Unit tests for Kiwi MCP tools (search, load, execute, sign, help).
 
 Tests each tool's schema, validation, and error handling.
 """
@@ -12,6 +12,7 @@ from mcp.types import Tool
 from kiwi_mcp.tools.search import SearchTool
 from kiwi_mcp.tools.load import LoadTool
 from kiwi_mcp.tools.execute import ExecuteTool
+from kiwi_mcp.tools.sign import SignTool
 from kiwi_mcp.tools.help import HelpTool
 
 
@@ -213,7 +214,6 @@ class TestExecuteTool:
             result = await tool.execute(
                 {
                     "item_type": "directive",
-                    "action": "run",
                     "item_id": "my_directive",
                     "parameters": {"key": "value"},
                     "project_path": "/tmp/test",
@@ -234,6 +234,7 @@ class TestToolSchemaConsistency:
             SearchTool(),
             LoadTool(),
             ExecuteTool(),
+            SignTool(),
             HelpTool(),
         ]
 
@@ -251,6 +252,7 @@ class TestToolSchemaConsistency:
             SearchTool(),
             LoadTool(),
             ExecuteTool(),
+            SignTool(),
             HelpTool(),
         ]
 

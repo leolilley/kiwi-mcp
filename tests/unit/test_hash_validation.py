@@ -84,7 +84,7 @@ class TestDirectiveHashValidation:
 
         # Try to run - should be blocked
         handler = DirectiveHandler(project_path=str(tmp_path))
-        result = await handler.execute("run", "test_directive", {})
+        result = await handler.execute("test_directive", {})
 
         # Should return error about modified content
         assert "error" in result
@@ -142,7 +142,7 @@ class TestDirectiveHashValidation:
 
         # Run should succeed (no signature error)
         handler = DirectiveHandler(project_path=str(tmp_path))
-        result = await handler.execute("run", "test_directive", {})
+        result = await handler.execute("test_directive", {})
 
         # Should NOT have signature error
         assert result.get("status") == "ready"
@@ -186,7 +186,7 @@ if __name__ == "__main__":
 
         # Try to run - should be blocked
         handler = ToolHandler(project_path=str(tmp_path))
-        result = await handler.execute("run", "test_tool", {}, dry_run=False)
+        result = await handler.execute("test_tool", {})
 
         # Should return error about modified content
         assert result.get("status") == "error"
@@ -223,7 +223,7 @@ if __name__ == "__main__":
 
         # Run should succeed (hash is valid)
         handler = ToolHandler(project_path=str(tmp_path))
-        result = await handler.execute("run", "test_tool", {}, dry_run=False)
+        result = await handler.execute("test_tool", {})
 
         # Should NOT have signature error
         # Note: actual execution might fail for other reasons, but NOT signature
@@ -252,7 +252,7 @@ class TestKnowledgeHashValidation:
         # Create frontmatter with signature (include version)
         file_content = f"""---
 version: "1.0.0"
-zettel_id: 001-test
+id: 001-test
 title: Test Entry
 entry_type: learning
 category: test
@@ -270,7 +270,7 @@ content_hash: {original_hash}
         modified_content = "This is the MODIFIED knowledge content."
         modified_file = f"""---
 version: "1.0.0"
-zettel_id: 001-test
+id: 001-test
 title: Test Entry
 entry_type: learning
 category: test
@@ -285,7 +285,7 @@ content_hash: {original_hash}
 
         # Try to run - should be blocked
         handler = KnowledgeHandler(project_path=str(tmp_path))
-        result = await handler.execute("run", "001-test", {})
+        result = await handler.execute("001-test", {})
 
         # Should return error about modified content
         assert result.get("status") == "error"
@@ -307,7 +307,7 @@ content_hash: {original_hash}
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         file_content_without_sig = f"""---
 version: "1.0.0"
-zettel_id: 001-test
+id: 001-test
 title: Test Entry
 entry_type: learning
 category: test
@@ -323,7 +323,7 @@ tags: []
         # Now create file with signature fields (use proper YAML format)
         file_content = f"""---
 version: 1.0.0
-zettel_id: 001-test
+id: 001-test
 title: Test Entry
 entry_type: learning
 category: test
@@ -343,7 +343,7 @@ content_hash: {content_hash}
         from unittest.mock import patch, AsyncMock
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = None  # No newer version in registry
-            result = await handler.execute("run", "001-test", {})
+            result = await handler.execute("001-test", {})
 
         # Should NOT have signature error
         assert result.get("status") == "ready"
@@ -361,7 +361,7 @@ content_hash: {content_hash}
         # Use proper YAML format: version as string (quoted), tags as array
         file_content = """---
 version: "1.0.0"
-zettel_id: 002-no-sig
+id: 002-no-sig
 title: Entry Without Signature
 entry_type: learning
 category: test
@@ -379,7 +379,7 @@ This is content without signature.
         from unittest.mock import patch, AsyncMock
         with patch.object(handler.registry, "get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = None  # No newer version in registry
-            result = await handler.execute("run", "002-no-sig", {})
+            result = await handler.execute("002-no-sig", {})
 
         # Should fail with signature error
         assert result.get("status") == "error"
@@ -421,7 +421,7 @@ class TestHashValidationNoBypass:
 
         # Try to run with skip_validation - should still be blocked
         handler = DirectiveHandler(project_path=str(tmp_path))
-        result = await handler.execute("run", "test", {"skip_validation": True})
+        result = await handler.execute("test", {"skip_validation": True})
 
         # Should STILL be blocked (skip_validation is ignored)
         assert "error" in result

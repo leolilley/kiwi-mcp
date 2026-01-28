@@ -1,4 +1,4 @@
-"""Context Kiwi Handler - Search, Load, Execute directives."""
+"""Context Kiwi Handler - Search, Load, Execute, Sign directives."""
 
 from .handler import DirectiveHandler
 
@@ -15,10 +15,16 @@ async def load(directive_name: str, destination: str = "project", **kwargs):
     return await handler.load(directive_name, destination=destination, **kwargs)
 
 
-async def execute(action: str, directive_name: str, parameters=None, **kwargs):
-    """Execute a directive or directive operation."""
+async def execute(directive_name: str, parameters=None, **kwargs):
+    """Execute a directive."""
     handler = DirectiveHandler(project_path=kwargs.get("project_path"))
-    return await handler.execute(action, directive_name, parameters=parameters, **kwargs)
+    return await handler.execute(directive_name, parameters=parameters)
 
 
-__all__ = ["search", "load", "execute", "DirectiveHandler"]
+async def sign(directive_name: str, parameters=None, **kwargs):
+    """Validate and sign a directive."""
+    handler = DirectiveHandler(project_path=kwargs.get("project_path"))
+    return await handler.sign(directive_name, parameters=parameters)
+
+
+__all__ = ["search", "load", "execute", "sign", "DirectiveHandler"]

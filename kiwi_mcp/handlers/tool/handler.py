@@ -15,7 +15,7 @@ import os
 from kiwi_mcp.handlers import SortBy
 from kiwi_mcp.utils.logger import get_logger
 from kiwi_mcp.utils.resolvers import ToolResolver, get_user_space
-from kiwi_mcp.utils.file_search import search_python_files, score_relevance
+from kiwi_mcp.schemas.tool_schema import search_items, extract_and_validate
 from kiwi_mcp.utils.output_manager import OutputManager, truncate_for_response
 from kiwi_mcp.utils.metadata_manager import MetadataManager
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
@@ -117,44 +117,18 @@ class ToolHandler:
         return {"results": results[:limit], "total": len(results), "query": query, "source": source}
 
     async def _search_local(self, query: str, limit: int) -> List[Dict[str, Any]]:
-        """Search local tool/script files."""
-        results = []
-
-        search_dirs = []
-
-        project_tools = self.project_path / ".ai" / "tools"
-        if project_tools.exists():
-            search_dirs.append(project_tools)
-
-        user_tools = get_user_space() / "tools"
-        if user_tools.exists():
-            search_dirs.append(user_tools)
-
-        # Search each directory
-        for search_dir in search_dirs:
-            files = search_python_files(search_dir, query)
-
-            for file_path in files:
-                try:
-                    meta = extract_tool_metadata(file_path, self.project_path)
-
-                    searchable_text = f"{meta['name']} {meta.get('description', '')}"
-                    score = score_relevance(searchable_text, query.split())
-
-                    results.append(
-                        {
-                            "name": meta["name"],
-                            "description": meta.get("description", ""),
-                            "source": "project" if ".ai/" in str(file_path) else "user",
-                            "path": str(file_path),
-                            "score": score,
-                            "tool_type": meta.get("tool_type", "unknown"),
-                        }
-                    )
-                except Exception as e:
-                    self.logger.warning(f"Failed to parse {file_path}: {e}")
-
-        return results
+        """Search local tools using Universal Extractor."""
+        search_dirs = [
+            self.project_path / ".ai" / "tools",
+            get_user_space() / "tools",
+        ]
+        
+        results = search_items("tool", query, search_dirs, self.project_path)
+        
+        for r in results:
+            r["source"] = "project" if ".ai/" in str(r["path"]) else "user"
+        
+        return results[:limit] if limit else results
 
     def _detect_tool_type(self, file_path: Path) -> str:
         """Detect tool type using schema-driven extraction."""
@@ -216,14 +190,22 @@ class ToolHandler:
                 self.logger.info(f"Copied tool from {source} to {destination}: {target_file}")
                 file_path = target_file  # Use new path for metadata extraction
 
-            meta = extract_tool_metadata(file_path, self.project_path)
+            validation = extract_and_validate(file_path, "tool", self.project_path)
+            
+            if not validation["valid"]:
+                return {
+                    "error": "Tool validation failed",
+                    "issues": validation["issues"],
+                    "path": str(file_path),
+                    "solution": "Fix issues and run sign tool",
+                }
 
             result = {
                 "name": tool_name,
                 "path": str(file_path),
                 "content": file_path.read_text(),
                 "source": source,
-                "metadata": meta,
+                "metadata": validation["data"],
             }
 
             if not is_read_only:
@@ -238,47 +220,55 @@ class ToolHandler:
 
     async def execute(
         self,
-        action: str,
         tool_name: str,
         parameters: Optional[Dict[str, Any]] = None,
-        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """
-        Execute a tool or perform tool operation.
+        Execute a tool.
 
         Args:
-            action: "run", "sign"
             tool_name: Name of tool to execute
-            parameters: Tool parameters (for run action)
-            dry_run: If True, validate without executing
+            parameters: Tool parameters
 
         Returns:
             Dict with execution result
         """
-        # Extract dry_run from parameters if present
         params = parameters or {}
-        if params and "dry_run" in params:
-            dry_run = params.pop("dry_run")
+        dry_run = params.pop("dry_run", False) if params else False
 
         try:
-            if action == "run":
-                return await self._run_tool(tool_name, params, dry_run)
-
-            elif action == "sign":
-                return await self._sign_tool(
-                    tool_name,
-                    params.get("location", "project"),
-                    params.get("category"),
-                )
-
-            else:
-                return {"error": f"Unknown action: {action}"}
-
+            return await self._execute_tool(tool_name, params, dry_run)
         except Exception as e:
             self.logger.error(f"Execute failed: {e}")
             return {"error": str(e)}
 
-    async def _run_tool(
+    async def sign(
+        self,
+        tool_name: str,
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Validate and sign a tool file.
+
+        Args:
+            tool_name: Name of tool to sign
+            parameters: Sign parameters (location, category)
+
+        Returns:
+            Dict with sign result
+        """
+        params = parameters or {}
+        try:
+            return await self._sign_tool(
+                tool_name,
+                params.get("location", "project"),
+                params.get("category"),
+            )
+        except Exception as e:
+            self.logger.error(f"Sign failed: {e}")
+            return {"error": str(e)}
+
+    async def _execute_tool(
         self, tool_name: str, params: Dict[str, Any], dry_run: bool
     ) -> Dict[str, Any]:
         """Execute a tool using appropriate executor."""
@@ -306,8 +296,8 @@ class ToolHandler:
                 "path": str(file_path),
                 "hint": "Tool needs validation",
                 "solution": (
-                    f"Run: execute(item_type='tool', action='sign', "
-                    f"item_id='{tool_name}', parameters={{'location': 'project'}}, "
+                    f"Run: sign(item_type='tool', "
+                    f"item_id='{tool_name}', "
                     f"project_path='{self.project_path}')"
                 ),
             }
@@ -345,7 +335,7 @@ class ToolHandler:
                 "error": "Tool content has been modified since last validation",
                 "details": verification.error,
                 "path": str(file_path),
-                "solution": "Run execute(action='sign', ...) to re-validate the tool",
+                "solution": "Run sign(...) to re-validate the tool",
             }
 
         # Validate using schema
@@ -404,7 +394,7 @@ class ToolHandler:
                     tool_name_val = tool_meta.get("name", "unknown")
                     response["checkpoint_hint"] = (
                         "This tool mutates state. Consider running git_checkpoint: "
-                        f"execute(item_type='directive', action='run', item_id='git_checkpoint', "
+                        f"execute(item_type='directive', item_id='git_checkpoint', "
                         f"parameters={{'operation': '{tool_name_val}'}})"
                     )
 

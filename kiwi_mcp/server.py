@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kiwi MCP Server - Unified MCP with 4 tools for directives, scripts, and knowledge.
+Kiwi MCP Server - Unified MCP with 5 tools for directives, tools, and knowledge.
 """
 
 import argparse
@@ -21,6 +21,7 @@ from mcp.types import Tool, TextContent
 from kiwi_mcp.tools.search import SearchTool
 from kiwi_mcp.tools.load import LoadTool
 from kiwi_mcp.tools.execute import ExecuteTool
+from kiwi_mcp.tools.sign import SignTool
 from kiwi_mcp.tools.help import HelpTool
 
 
@@ -70,7 +71,7 @@ def validate_rag_config() -> dict:
 
 
 class KiwiMCP:
-    """Unified Kiwi MCP server with 4 tools."""
+    """Unified Kiwi MCP server with 5 tools."""
 
     def __init__(self):
         # MANDATORY: Validate RAG config first
@@ -84,6 +85,7 @@ class KiwiMCP:
             "search": SearchTool(),
             "load": LoadTool(),
             "execute": ExecuteTool(),
+            "sign": SignTool(),
             "help": HelpTool(),
         }
         self._setup_handlers()
@@ -93,7 +95,7 @@ class KiwiMCP:
 
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
-            """Return all 4 unified tools."""
+            """Return all 5 unified tools."""
             return [tool.schema for tool in self.tools.values()]
 
         @self.server.call_tool()

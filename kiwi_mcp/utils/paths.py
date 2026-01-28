@@ -1,26 +1,33 @@
-"""Path resolution utilities for kiwi-mcp."""
+"""Path resolution utilities for kiwi-mcp.
+
+This module provides backwards-compatible wrappers around PathService.
+For new code, prefer using PathService directly.
+"""
 
 from pathlib import Path
 from typing import Optional, Dict, Any
-import os
-from kiwi_mcp.utils.extensions import get_tool_extensions
+
+# Import from canonical source
+from kiwi_mcp.utils.path_service import (
+    PathService,
+    get_user_space,
+    ITEM_TYPE_TO_DIR,
+)
+
+# Re-export for backwards compatibility
+__all__ = [
+    "get_user_home",
+    "get_user_space",
+    "get_project_path",
+    "resolve_item_path",
+    "extract_category_path",
+    "validate_path_structure",
+]
 
 
 def get_user_home() -> Path:
     """Get user home directory."""
     return Path.home()
-
-
-def get_user_space() -> Path:
-    """
-    Get user space directory from env var or default to ~/.ai
-    
-    Can be configured via USER_SPACE environment variable.
-    """
-    user_space = os.getenv("USER_SPACE")
-    if user_space:
-        return Path(user_space).expanduser()
-    return Path.home() / ".ai"
 
 
 def get_project_path(project_path: Optional[str] = None) -> Optional[Path]:
@@ -47,6 +54,8 @@ def resolve_item_path(
     """
     Resolve the filesystem path for an item.
     
+    Delegates to PathService for consistent resolution semantics.
+    
     Args:
         item_id: Item identifier (name)
         item_type: Type of item (directive, tool, knowledge)
@@ -56,67 +65,9 @@ def resolve_item_path(
     Returns:
         Path to item if found, None otherwise
     """
-    search_paths = []
-    
-    # Determine base directories based on item type
-    if item_type == "directive":
-        ext = ".md"
-        if source in ("local", "project") and project_path:
-            search_paths.append(Path(project_path) / ".ai" / "directives")
-        if source in ("local", "user"):
-            search_paths.append(get_user_space() / "directives")
-    
-    elif item_type == "tool":
-        # Tools support multiple extensions from extractors
-        tool_extensions = get_tool_extensions(Path(project_path) if project_path else None)
-        if source in ("local", "project") and project_path:
-            search_paths.append(Path(project_path) / ".ai" / "tools")
-        if source in ("local", "user"):
-            search_paths.append(get_user_space() / "tools")
-        
-        # Search with all supported extensions
-        for base_path in search_paths:
-            if not base_path.exists():
-                continue
-            for ext in tool_extensions:
-                for category_dir in base_path.glob("*"):
-                    if category_dir.is_dir():
-                        file_path = category_dir / f"{item_id}{ext}"
-                        if file_path.exists():
-                            return file_path
-                direct_path = base_path / f"{item_id}{ext}"
-                if direct_path.exists():
-                    return direct_path
-        return None
-    
-    elif item_type == "knowledge":
-        ext = ".md"
-        if source in ("local", "project") and project_path:
-            search_paths.append(Path(project_path) / ".ai" / "knowledge")
-        if source in ("local", "user"):
-            search_paths.append(get_user_space() / "knowledge")
-    
-    else:
-        return None
-    
-    # Search for item in all paths
-    for base_path in search_paths:
-        if not base_path.exists():
-            continue
-        
-        # Search in all subdirectories (categories)
-        for category_dir in base_path.glob("*"):
-            if category_dir.is_dir():
-                file_path = category_dir / f"{item_id}{ext}"
-                if file_path.exists():
-                    return file_path
-        
-        # Also check directly in base path
-        direct_path = base_path / f"{item_id}{ext}"
-        if direct_path.exists():
-            return direct_path
-    
-    return None
+    service = PathService(Path(project_path) if project_path else None)
+    result = service.resolve(item_type, item_id, source=source)
+    return result.path
 
 
 def extract_category_path(
@@ -128,10 +79,12 @@ def extract_category_path(
     """
     Extract category path from file location as slash-separated string.
     
+    Delegates to PathService for consistent handling.
+    
     Args:
         file_path: Full path to the file
         item_type: "directive", "tool", or "knowledge"
-        location: "project" or "user"
+        location: "project" or "user" (ignored, auto-detected)
         project_path: Project root (for project location)
     
     Returns:
@@ -141,27 +94,8 @@ def extract_category_path(
         .ai/directives/core/api/endpoints/my_directive.md
         -> "core/api/endpoints"
     """
-    # Determine expected base
-    if location == "project":
-        if not project_path:
-            return ""
-        # Map item type to folder name
-        folder_name = "tools" if item_type == "tool" else "directives" if item_type == "directive" else "knowledge"
-        expected_base = project_path / ".ai" / folder_name
-    else:
-        folder_name = "tools" if item_type == "tool" else "directives" if item_type == "directive" else "knowledge"
-        expected_base = get_user_space() / folder_name
-    
-    # Get relative path from base
-    try:
-        relative = file_path.relative_to(expected_base)
-        # Remove filename, get directory parts
-        parts = list(relative.parent.parts)
-        # Join with slashes to create category path string
-        return "/".join(parts) if parts else ""
-    except ValueError:
-        # Path not under base - return empty
-        return ""
+    service = PathService(project_path)
+    return service.extract_category_path(file_path, item_type)
 
 
 def validate_path_structure(
@@ -172,6 +106,8 @@ def validate_path_structure(
 ) -> Dict[str, Any]:
     """
     Validate file path matches expected structure.
+    
+    Delegates to PathService for consistent validation.
     
     Expected: .ai/{type}/{category}/{subcategory}/.../{name}.{ext}
     
@@ -190,54 +126,14 @@ def validate_path_structure(
             "actual_path": str
         }
     """
-    issues = []
+    service = PathService(project_path)
+    result = service.validate_path(file_path, item_type)
     
-    # Get valid extensions for item type
-    if item_type == "tool":
-        valid_extensions = get_tool_extensions(project_path)
-    else:
-        valid_extensions = [".md"]
+    # Add expected_base for backwards compatibility
+    expected_base = service.get_base_dir(item_type, location)
+    result["expected_base"] = str(expected_base) if expected_base else ""
     
-    # Check extension
-    if file_path.suffix not in valid_extensions:
-        ext_list = ", ".join(valid_extensions)
-        issues.append(
-            f"Invalid extension '{file_path.suffix}'. "
-            f"Expected one of: {ext_list} for {item_type}"
-        )
-    
-    # Determine expected base
-    if location == "project":
-        if not project_path:
-            issues.append("project_path required for project location")
-            return {
-                "valid": False, 
-                "issues": issues,
-                "category_path": "",
-                "expected_base": "",
-                "actual_path": str(file_path)
-            }
-        # Map item type to folder name
-        folder_name = "tools" if item_type == "tool" else "directives" if item_type == "directive" else "knowledge"
-        expected_base = project_path / ".ai" / folder_name
-    else:
-        folder_name = "tools" if item_type == "tool" else "directives" if item_type == "directive" else "knowledge"
-        expected_base = get_user_space() / folder_name
-    
-    # Check if path is under expected base
-    try:
-        relative = file_path.relative_to(expected_base)
-        category_path = extract_category_path(file_path, item_type, location, project_path)
-    except ValueError:
-        issues.append(
-            f"File path '{file_path}' is not under expected base '{expected_base}'"
-        )
-        category_path = ""
-    
-    return {
-        "valid": len(issues) == 0,
-        "issues": issues,
-        "category_path": category_path,
-        "expected_base": str(expected_base),
-        "actual_path": str(file_path)
-    }
+    return result
+
+
+

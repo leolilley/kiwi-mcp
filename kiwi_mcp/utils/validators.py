@@ -344,7 +344,9 @@ class ToolValidator(BaseValidator):
             else:
                 for cap in requires:
                     if not isinstance(cap, str):
-                        issues.append(f"Capability in 'requires' must be a string, got {type(cap).__name__}")
+                        issues.append(
+                            f"Capability in 'requires' must be a string, got {type(cap).__name__}"
+                        )
                     elif not self._validate_capability_format(cap):
                         issues.append(
                             f"Invalid capability format '{cap}'. "
@@ -379,15 +381,15 @@ class KnowledgeValidator(BaseValidator):
     def validate_filename_match(
         self, file_path: Path, parsed_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Validate filename matches zettel_id."""
-        zettel_id = parsed_data.get("zettel_id")
-        if not zettel_id:
+        """Validate filename matches id."""
+        id = parsed_data.get("id")
+        if not id:
             return {
                 "valid": False,
-                "issues": ["Zettel ID not found in parsed data"],
+                "issues": ["ID not found in parsed data"],
             }
 
-        expected_filename = f"{zettel_id}.md"
+        expected_filename = f"{id}.md"
         actual_filename = file_path.name
 
         if actual_filename != expected_filename:
@@ -399,7 +401,7 @@ class KnowledgeValidator(BaseValidator):
                 "error_details": {
                     "expected": expected_filename,
                     "actual": actual_filename,
-                    "zettel_id": zettel_id,
+                    "id": id,
                     "path": str(file_path),
                 },
             }
@@ -412,9 +414,9 @@ class KnowledgeValidator(BaseValidator):
         warnings = []
 
         # Required fields
-        zettel_id = parsed_data.get("zettel_id")
-        if not zettel_id:
-            issues.append("Zettel ID is required")
+        id = parsed_data.get("id")
+        if not id:
+            issues.append("ID is required")
 
         title = parsed_data.get("title")
         if not title:
@@ -580,25 +582,25 @@ class ValidationManager:
         file_path: Path,
         parsed_data: Dict[str, Any],
         vector_store: Optional[Any] = None,
-        item_id: Optional[str] = None
+        item_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Validate and optionally embed content to vector store.
-        
+
         This is the validation gate - only valid content gets embedded.
-        
+
         Args:
             item_type: Type of item (directive, tool, knowledge)
             file_path: Path to the item file
             parsed_data: Parsed item data
             vector_store: Optional vector store for embedding
             item_id: Optional item ID for embedding
-            
+
         Returns:
             Validation result with optional embedding status
         """
         # First validate
         result = cls.validate(item_type, file_path, parsed_data)
-        
+
         # If valid and vector store provided, embed
         if result["valid"] and vector_store and item_id:
             try:
@@ -607,28 +609,25 @@ class ValidationManager:
                     "name": parsed_data.get("name") or parsed_data.get("title", ""),
                     "description": parsed_data.get("description", "")[:200],
                 }
-                
+
                 success = await vector_store.embed_and_store(
-                    item_id=item_id,
-                    item_type=item_type,
-                    content=content,
-                    metadata=metadata
+                    item_id=item_id, item_type=item_type, content=content, metadata=metadata
                 )
                 result["embedded"] = success
             except Exception as e:
                 result["embedding_error"] = str(e)
-        
+
         return result
 
     @classmethod
     def _extract_searchable(cls, item_type: str, file_path: Path, parsed_data: Dict) -> str:
         """Extract searchable content based on item type.
-        
+
         Args:
             item_type: Type of item
             file_path: Path to file
             parsed_data: Parsed item data
-            
+
         Returns:
             Searchable text content
         """
@@ -637,15 +636,16 @@ class ValidationManager:
                 f"Directive: {parsed_data.get('name', '')}",
                 f"Description: {parsed_data.get('description', '')}",
             ]
-            for step in parsed_data.get('steps', []):
+            for step in parsed_data.get("steps", []):
                 parts.append(f"Step: {step.get('description', '')}")
             return "\n".join(parts)
-        
+
         elif item_type == "tool":
             parts = [f"Tool: {parsed_data.get('name', '')}"]
             # Extract docstrings from Python code
             try:
                 import ast
+
                 tree = ast.parse(file_path.read_text())
                 for node in ast.walk(tree):
                     if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
@@ -655,8 +655,8 @@ class ValidationManager:
             except:
                 pass
             return "\n".join(parts)
-        
+
         elif item_type == "knowledge":
             return f"{parsed_data.get('title', '')}\n{file_path.read_text()}"
-        
+
         return file_path.read_text()

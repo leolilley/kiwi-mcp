@@ -177,7 +177,7 @@ class TestTypeHandlerRegistryLoad:
 
     @pytest.mark.asyncio
     async def test_load_knowledge_id_mapping(self):
-        """Test load maps item_id to zettel_id."""
+        """Test load maps item_id to id."""
         mock_handler = AsyncMock()
         mock_handler.load.return_value = {}
 
@@ -186,9 +186,9 @@ class TestTypeHandlerRegistryLoad:
 
         await registry.load(item_type="knowledge", item_id="001-test")
 
-        # Check zettel_id parameter was used
+        # Check id parameter was used
         call_kwargs = mock_handler.load.call_args[1]
-        assert "zettel_id" in call_kwargs
+        assert "id" in call_kwargs
 
 
 class TestTypeHandlerRegistryExecute:
@@ -199,7 +199,7 @@ class TestTypeHandlerRegistryExecute:
         """Test execute with unknown item_type."""
         registry = TypeHandlerRegistry(project_path="/tmp/test")
 
-        result = await registry.execute(item_type="unknown", action="run", item_id="test")
+        result = await registry.execute(item_type="unknown", item_id="test")
 
         assert "error" in result
         assert "Unknown" in result["error"]
@@ -214,7 +214,7 @@ class TestTypeHandlerRegistryExecute:
         registry.handlers["directive"] = mock_handler
 
         result = await registry.execute(
-            item_type="directive", action="run", item_id="my_directive", parameters={"key": "value"}
+            item_type="directive", item_id="my_directive", parameters={"key": "value"}
         )
 
         mock_handler.execute.assert_called_once()
@@ -232,7 +232,7 @@ class TestTypeHandlerRegistryExecute:
         registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
 
-        await registry.execute(item_type="directive", action="publish", item_id="test_directive")
+        await registry.execute(item_type="directive", item_id="test_directive")
 
         call_kwargs = mock_handler.execute.call_args[1]
         assert "directive_name" in call_kwargs
@@ -246,24 +246,24 @@ class TestTypeHandlerRegistryExecute:
         registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["tool"] = mock_handler
 
-        await registry.execute(item_type="tool", action="run", item_id="test_tool")
+        await registry.execute(item_type="tool", item_id="test_tool")
 
         call_kwargs = mock_handler.execute.call_args[1]
         assert "tool_name" in call_kwargs
 
     @pytest.mark.asyncio
-    async def test_execute_maps_item_id_to_zettel_id(self):
-        """Test execute maps item_id for knowledge."""
+    async def test_sign_maps_item_id_to_id(self):
+        """Test sign maps item_id for knowledge."""
         mock_handler = AsyncMock()
-        mock_handler.execute.return_value = {}
+        mock_handler.sign.return_value = {}
 
         registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["knowledge"] = mock_handler
 
-        await registry.execute(item_type="knowledge", action="sign", item_id="001-test")
+        await registry.sign(item_type="knowledge", item_id="001-test")
 
-        call_kwargs = mock_handler.execute.call_args[1]
-        assert "zettel_id" in call_kwargs
+        call_kwargs = mock_handler.sign.call_args[1]
+        assert "id" in call_kwargs
 
     @pytest.mark.asyncio
     async def test_execute_handler_exception(self):
@@ -274,7 +274,7 @@ class TestTypeHandlerRegistryExecute:
         registry = TypeHandlerRegistry(project_path="/tmp/test")
         registry.handlers["directive"] = mock_handler
 
-        result = await registry.execute(item_type="directive", action="run", item_id="test")
+        result = await registry.execute(item_type="directive", item_id="test")
 
         assert "error" in result
         assert "Failed to execute" in result.get("message", "")
@@ -309,7 +309,7 @@ class TestTypeHandlerRegistryErrorCases:
         """Test execute returns error dict on failure."""
         registry = TypeHandlerRegistry(project_path="/tmp/test")
 
-        result = await registry.execute(item_type="invalid", action="run", item_id="test")
+        result = await registry.execute(item_type="invalid", item_id="test")
 
         assert isinstance(result, dict)
         assert "error" in result

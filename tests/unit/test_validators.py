@@ -436,7 +436,7 @@ class TestKnowledgeValidator:
     def sample_knowledge_data(self):
         """Sample knowledge parsed data."""
         return {
-            "zettel_id": "001-test",
+            "id": "001-test",
             "title": "Test Entry",
             "content": "Test content",
             "entry_type": "learning",
@@ -448,7 +448,7 @@ class TestKnowledgeValidator:
     @pytest.mark.unit
     @pytest.mark.validation
     def test_validate_filename_match_success(self, validator, tmp_path, sample_knowledge_data):
-        """Should pass when filename matches zettel_id."""
+        """Should pass when filename matches id."""
         file_path = tmp_path / "001-test.md"
 
         result = validator.validate_filename_match(file_path, sample_knowledge_data)
@@ -459,7 +459,7 @@ class TestKnowledgeValidator:
     @pytest.mark.unit
     @pytest.mark.validation
     def test_validate_filename_match_mismatch(self, validator, tmp_path, sample_knowledge_data):
-        """Should fail when filename doesn't match zettel_id."""
+        """Should fail when filename doesn't match id."""
         file_path = tmp_path / "wrong_id.md"
 
         result = validator.validate_filename_match(file_path, sample_knowledge_data)
@@ -470,15 +470,15 @@ class TestKnowledgeValidator:
 
     @pytest.mark.unit
     @pytest.mark.validation
-    def test_validate_filename_match_missing_zettel_id(self, validator, tmp_path):
-        """Should fail when zettel_id is missing."""
+    def test_validate_filename_match_missing_id(self, validator, tmp_path):
+        """Should fail when id is missing."""
         file_path = tmp_path / "001-test.md"
-        parsed_data = {}  # Missing zettel_id
+        parsed_data = {}  # Missing id
 
         result = validator.validate_filename_match(file_path, parsed_data)
 
         assert result["valid"] is False
-        assert "zettel" in result["issues"][0].lower() and "not found" in result["issues"][0].lower()
+        assert "id" in result["issues"][0].lower() and "not found" in result["issues"][0].lower()
 
     @pytest.mark.unit
     @pytest.mark.validation
@@ -491,17 +491,17 @@ class TestKnowledgeValidator:
 
     @pytest.mark.unit
     @pytest.mark.validation
-    def test_validate_metadata_missing_zettel_id(self, validator):
-        """Should fail when zettel_id is missing."""
+    def test_validate_metadata_missing_id(self, validator):
+        """Should fail when id is missing."""
         data = {
             "title": "Test Entry",
             "content": "Test content",
-        }  # Missing zettel_id
+        }  # Missing id
 
         result = validator.validate_metadata(data)
 
         assert result["valid"] is False
-        assert any("zettel" in issue.lower() and "required" in issue.lower() for issue in result["issues"])
+        assert any("id" in issue.lower() and "required" in issue.lower() for issue in result["issues"])
 
     @pytest.mark.unit
     @pytest.mark.validation
@@ -616,7 +616,7 @@ class TestValidationEdgeCases:
         """Should fail validation for empty knowledge content."""
         validator = KnowledgeValidator()
         file_path = tmp_path / "001-test.md"
-        data = {"zettel_id": "001-test", "title": "Test", "content": ""}
+        data = {"id": "001-test", "title": "Test", "content": ""}
 
         result = validator.validate_metadata(data)
 

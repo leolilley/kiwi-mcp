@@ -1,114 +1,111 @@
 """
 Path Resolution Utilities
 
-Finds directives, tools, and knowledge entries in local filesystems.
+Thin wrappers around PathService for backwards compatibility.
+All resolution logic is delegated to PathService.
 """
 
 from pathlib import Path
 from typing import Optional
 import logging
-import os
-from kiwi_mcp.utils.extensions import get_tool_extensions
+
+from kiwi_mcp.utils.path_service import (
+    PathService,
+    get_user_space,
+    ITEM_TYPE_TO_DIR,
+)
 
 logger = logging.getLogger(__name__)
 
-
-def get_user_space() -> Path:
-    """Get user space directory from env var or default to ~/.ai"""
-    user_space = os.getenv("USER_SPACE")
-    if user_space:
-        return Path(user_space).expanduser()
-    return Path.home() / ".ai"
+# Re-export get_user_space for backwards compatibility
+__all__ = ["get_user_space", "DirectiveResolver", "ToolResolver", "KnowledgeResolver"]
 
 
 class DirectiveResolver:
-    """Resolve directive file paths."""
-    
+    """Resolve directive file paths. Thin wrapper around PathService."""
+
     def __init__(self, project_path: Optional[Path] = None):
-        self.project_path = project_path or Path.cwd()
-        self.user_space = get_user_space()
+        self.project_path = Path(project_path) if project_path else Path.cwd()
+        self._service = PathService(self.project_path)
         
-        self.project_directives = self.project_path / ".ai" / "directives"
-        self.user_directives = self.user_space / "directives"
-    
+        # Expose base paths for backwards compatibility
+        self.user_space = self._service.user_space
+        self.project_directives = self._service.get_base_dir("directive", "project") or (
+            self.project_path / ".ai" / "directives"
+        )
+        self.user_directives = self._service.get_base_dir("directive", "user") or (
+            self.user_space / "directives"
+        )
+
     def resolve(self, directive_name: str) -> Optional[Path]:
         """
         Find directive file in project > user order.
-        
-        Searches recursively in all subdirectories.
+
+        Args:
+            directive_name: Name of directive (without extension)
+
+        Returns:
+            Path to directive file, or None if not found
         """
-        # Check project space
-        if self.project_directives.exists():
-            for file_path in self.project_directives.rglob(f"{directive_name}.md"):
-                if file_path.is_file():
-                    return file_path
-        
-        # Check user space
-        if self.user_directives.exists():
-            for file_path in self.user_directives.rglob(f"{directive_name}.md"):
-                if file_path.is_file():
-                    return file_path
-        
-        return None
+        result = self._service.resolve("directive", directive_name, source="local")
+        return result.path
 
 
 class ToolResolver:
-    """Resolve tool file paths."""
-    
+    """Resolve tool file paths. Thin wrapper around PathService."""
+
     def __init__(self, project_path: Optional[Path] = None):
-        self.project_path = project_path or Path.cwd()
-        self.user_space = get_user_space()
+        self.project_path = Path(project_path) if project_path else Path.cwd()
+        self._service = PathService(self.project_path)
         
-        self.project_tools = self.project_path / ".ai" / "tools"
-        self.user_tools = self.user_space / "tools"
-    
+        # Expose base paths for backwards compatibility
+        self.user_space = self._service.user_space
+        self.project_tools = self._service.get_base_dir("tool", "project") or (
+            self.project_path / ".ai" / "tools"
+        )
+        self.user_tools = self._service.get_base_dir("tool", "user") or (
+            self.user_space / "tools"
+        )
+
     def resolve(self, tool_name: str) -> Optional[Path]:
-        """Find tool file in project > user order."""
-        extensions = get_tool_extensions(self.project_path)
-        
-        # Check project space
-        if self.project_tools.exists():
-            for ext in extensions:
-                for file_path in self.project_tools.rglob(f"{tool_name}{ext}"):
-                    if file_path.is_file():
-                        return file_path
-        
-        # Check user space
-        if self.user_tools.exists():
-            for ext in extensions:
-                for file_path in self.user_tools.rglob(f"{tool_name}{ext}"):
-                    if file_path.is_file():
-                        return file_path
-        
-        return None
+        """
+        Find tool file in project > user order.
+
+        Args:
+            tool_name: Name of tool (without extension)
+
+        Returns:
+            Path to tool file, or None if not found
+        """
+        result = self._service.resolve("tool", tool_name, source="local")
+        return result.path
 
 
 class KnowledgeResolver:
-    """Resolve knowledge entry file paths."""
-    
+    """Resolve knowledge entry file paths. Thin wrapper around PathService."""
+
     def __init__(self, project_path: Optional[Path] = None):
-        self.project_path = project_path or Path.cwd()
-        self.user_space = get_user_space()
+        self.project_path = Path(project_path) if project_path else Path.cwd()
+        self._service = PathService(self.project_path)
         
-        self.project_knowledge = self.project_path / ".ai" / "knowledge"
-        self.user_knowledge = self.user_space / "knowledge"
-    
-    def resolve(self, zettel_id: str) -> Optional[Path]:
+        # Expose base paths for backwards compatibility
+        self.user_space = self._service.user_space
+        self.project_knowledge = self._service.get_base_dir("knowledge", "project") or (
+            self.project_path / ".ai" / "knowledge"
+        )
+        self.user_knowledge = self._service.get_base_dir("knowledge", "user") or (
+            self.user_space / "knowledge"
+        )
+
+    def resolve(self, id: str) -> Optional[Path]:
         """
         Find knowledge entry file in project > user order.
-        
-        Searches recursively in all subdirectories.
+
+        Args:
+            id: Knowledge entry ID (without extension)
+
+        Returns:
+            Path to knowledge file, or None if not found
         """
-        # Check project space
-        if self.project_knowledge.exists():
-            for file_path in self.project_knowledge.rglob(f"{zettel_id}.md"):
-                if file_path.is_file():
-                    return file_path
-        
-        # Check user space
-        if self.user_knowledge.exists():
-            for file_path in self.user_knowledge.rglob(f"{zettel_id}.md"):
-                if file_path.is_file():
-                    return file_path
-        
-        return None
+        result = self._service.resolve("knowledge", id, source="local")
+        return result.path

@@ -348,7 +348,7 @@ class TestKnowledgeMetadataStrategy:
     def sample_knowledge_with_frontmatter(self, sample_knowledge_content):
         """Knowledge entry with YAML frontmatter."""
         return f"""---
-zettel_id: 001-test
+id: 001-test
 title: Test Entry
 entry_type: learning
 category: test
@@ -365,7 +365,7 @@ tags: []
         result = strategy.extract_content_for_hash(sample_knowledge_with_frontmatter)
 
         assert result.strip() == sample_knowledge_content.strip()
-        assert "zettel_id" not in result
+        assert "id" not in result
         assert "---" not in result
 
     @pytest.mark.unit
@@ -396,7 +396,7 @@ tags: []
         """Should extract signature from HTML comment at start."""
         content = """<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:""" + "a" * 64 + """ -->
 ---
-zettel_id: 001-test
+id: 001-test
 title: Test
 ---
 
@@ -413,7 +413,7 @@ Content here
     def test_extract_signature_missing_comment(self, strategy):
         """Should return None when signature comment missing."""
         content = """---
-zettel_id: 001-test
+id: 001-test
 title: Test
 ---
 
@@ -432,7 +432,7 @@ Content here
         result = strategy.insert_signature(sample_knowledge_with_frontmatter, signature)
 
         assert result.startswith("<!-- kiwi-mcp:validated:")
-        assert "zettel_id: 001-test" in result  # Preserves other fields
+        assert "id: 001-test" in result  # Preserves other fields
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -440,7 +440,7 @@ Content here
         """Should remove signature HTML comment from start."""
         content = """<!-- kiwi-mcp:validated:2024-01-01T12:00:00Z:""" + "a" * 64 + """ -->
 ---
-zettel_id: 001-test
+id: 001-test
 title: Test
 ---
 
@@ -449,7 +449,7 @@ Content here
         result = strategy.remove_signature(content)
 
         assert not result.startswith("<!-- kiwi-mcp:validated:")
-        assert "zettel_id: 001-test" in result  # Preserves other fields
+        assert "id: 001-test" in result  # Preserves other fields
         assert "Content here" in result
 
 
@@ -495,7 +495,7 @@ class TestMetadataManager:
 
         assert isinstance(result, dict)
         assert result["name"] == "test_directive"
-        assert "parsed" in result
+        assert "version" in result
 
     @pytest.mark.unit
     @pytest.mark.metadata
@@ -514,7 +514,7 @@ class TestMetadataManager:
         result = MetadataManager.parse_file("knowledge", sample_knowledge_file)
 
         assert isinstance(result, dict)
-        assert result["zettel_id"] == "001-test"
+        assert result["id"] == "001-test"
 
     @pytest.mark.unit
     @pytest.mark.metadata

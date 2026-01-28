@@ -215,10 +215,10 @@ class TestKnowledgeFrontmatterSchemaValidation:
         schema = handler._build_base_frontmatter_schema(handler)
         
         assert schema["type"] == "object"
-        assert "zettel_id" in schema["properties"]
+        assert "id" in schema["properties"]
         assert "title" in schema["properties"]
         assert "entry_type" in schema["properties"]
-        assert set(schema["required"]) == {"zettel_id", "title"}
+        assert set(schema["required"]) == {"id", "title"}
 
     def test_build_base_frontmatter_schema_entry_type_string(self):
         """Test that entry_type is a flexible string field (no enum constraint)."""
@@ -250,7 +250,7 @@ class TestKnowledgeFrontmatterSchemaValidation:
         handler = MockHandler()
         
         entry_data = {
-            "zettel_id": "20260124-test",
+            "id": "20260124-test",
             "title": "Test Entry",
             "entry_type": "pattern",
             "content": "Some content",
@@ -275,7 +275,7 @@ class TestKnowledgeFrontmatterSchemaValidation:
         handler = MockHandler()
         
         entry_data = {
-            "zettel_id": "20260124-test",
+            "id": "20260124-test",
             # Missing "title"
             "entry_type": "pattern",
             "content": "Some content",
@@ -301,7 +301,7 @@ class TestKnowledgeFrontmatterSchemaValidation:
         handler = MockHandler()
         
         entry_data = {
-            "zettel_id": "20260124-test",
+            "id": "20260124-test",
             "title": "Test Entry",
             "custom_field": "ab",  # Too short
             "content": "Some content",
@@ -326,7 +326,7 @@ class TestKnowledgeFrontmatterSchemaValidation:
         handler._extract_frontmatter_schema = KnowledgeHandler._extract_frontmatter_schema
         
         entry_data = {
-            "zettel_id": "test",
+            "id": "test",
             "title": "Test",
             "schema": {
                 "properties": {
@@ -348,7 +348,7 @@ class TestKnowledgeFrontmatterSchemaValidation:
         handler._extract_frontmatter_schema = KnowledgeHandler._extract_frontmatter_schema
         
         entry_data = {
-            "zettel_id": "test",
+            "id": "test",
             "title": "Test",
         }
         

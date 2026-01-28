@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from kiwi_mcp.handlers import SortBy
 from kiwi_mcp.primitives.integrity import compute_directive_integrity
-from kiwi_mcp.utils.file_search import score_relevance, search_markdown_files
+from kiwi_mcp.schemas.tool_schema import search_items, extract_and_validate
 from kiwi_mcp.utils.logger import get_logger
 from kiwi_mcp.utils.metadata_manager import MetadataManager, compute_unified_integrity
 from kiwi_mcp.utils.parsers import parse_directive_file
@@ -387,7 +387,7 @@ class DirectiveHandler:
                         return {
                             "error": "Directive has no signature",
                             "path": str(file_path),
-                            "solution": "Use execute action 'sign' to re-validate the directive before copying",
+                            "solution": "Use sign tool to re-validate the directive before copying",
                         }
 
                     # Determine category from source path
@@ -405,13 +405,23 @@ class DirectiveHandler:
                     directive_data["path"] = str(target_path)
                     return directive_data
                 else:
-                    # Read-only mode: verify and warn, but don't block
+                    # Read-only mode: validate and warn
+                    validation = extract_and_validate(file_path, "directive", self.project_path)
+                    
+                    if not validation["valid"]:
+                        return {
+                            "error": "Directive validation failed",
+                            "issues": validation["issues"],
+                            "path": str(file_path),
+                            "solution": "Fix issues and run sign tool",
+                        }
+                    
                     file_content = file_path.read_text()
                     signature_info = MetadataManager.get_signature_info(
                         "directive", file_content
                     )
 
-                    directive_data = parse_directive_file(file_path)
+                    directive_data = validation["data"]
                     directive_data["source"] = "project"
                     directive_data["path"] = str(file_path)
                     directive_data["mode"] = "read_only"
@@ -419,7 +429,7 @@ class DirectiveHandler:
                     if not signature_info:
                         directive_data["warning"] = {
                             "message": "Directive has no signature",
-                            "solution": "Use execute action 'sign' to re-validate",
+                            "solution": "Use sign tool to re-validate",
                         }
 
                     return directive_data
@@ -445,7 +455,7 @@ class DirectiveHandler:
                     return {
                         "error": "Directive has no signature",
                         "path": str(file_path),
-                        "solution": "Use execute action 'sign' to re-validate the directive before copying",
+                        "solution": "Use sign tool to re-validate the directive before copying",
                     }
 
                 # Determine category from source path
@@ -463,13 +473,23 @@ class DirectiveHandler:
                 directive_data["path"] = str(target_path)
                 return directive_data
             else:
-                # Read-only mode: check signature and warn if missing
+                # Read-only mode: validate and warn
+                validation = extract_and_validate(file_path, "directive", self.project_path)
+                
+                if not validation["valid"]:
+                    return {
+                        "error": "Directive validation failed",
+                        "issues": validation["issues"],
+                        "path": str(file_path),
+                        "solution": "Fix issues and run sign tool",
+                    }
+                
                 file_content = file_path.read_text()
                 signature_info = MetadataManager.get_signature_info(
                     "directive", file_content
                 )
 
-                directive_data = parse_directive_file(file_path)
+                directive_data = validation["data"]
                 directive_data["source"] = "user"
                 directive_data["path"] = str(file_path)
                 directive_data["mode"] = "read_only"
@@ -477,7 +497,7 @@ class DirectiveHandler:
                 if not signature_info:
                     directive_data["warning"] = {
                         "message": "Directive has no signature",
-                        "solution": "Use execute action 'sign' to re-validate",
+                        "solution": "Use sign tool to re-validate",
                     }
 
                 return directive_data
@@ -489,39 +509,52 @@ class DirectiveHandler:
 
     async def execute(
         self,
-        action: str,
         directive_name: str,
         parameters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Execute a directive or perform directive operation.
+        Execute a directive - load and return for agent to follow.
 
         Args:
-            action: "run", "sign"
             directive_name: Name of directive
             parameters: Directive inputs/parameters
 
         Returns:
             Dict with execution result
         """
-        self.logger.info(
-            f"DirectiveHandler.execute: action={action}, directive={directive_name}"
-        )
+        self.logger.info(f"DirectiveHandler.execute: directive={directive_name}")
 
         try:
-            if action == "run":
-                return await self._run_directive(directive_name, parameters or {})
-            elif action == "sign":
-                return await self._sign_directive(directive_name, parameters or {})
-            else:
-                return {
-                    "error": f"Unknown action: {action}",
-                    "supported_actions": ["run", "sign"],
-                }
+            return await self._execute_directive(directive_name, parameters or {})
         except Exception as e:
             return {
                 "error": str(e),
-                "message": f"Failed to execute action '{action}' on directive '{directive_name}'",
+                "message": f"Failed to execute directive '{directive_name}'",
+            }
+
+    async def sign(
+        self,
+        directive_name: str,
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Validate and sign a directive file.
+
+        Args:
+            directive_name: Name of directive
+            parameters: Sign parameters (location, category)
+
+        Returns:
+            Dict with sign result
+        """
+        self.logger.info(f"DirectiveHandler.sign: directive={directive_name}")
+
+        try:
+            return await self._sign_directive(directive_name, parameters or {})
+        except Exception as e:
+            return {
+                "error": str(e),
+                "message": f"Failed to sign directive '{directive_name}'",
             }
 
     def _search_local(
@@ -531,40 +564,22 @@ class DirectiveHandler:
         subcategories: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Search local directive files."""
-        results = []
-        query_terms = query.lower().split()
-
-        # Search all markdown files in search paths
-        files = search_markdown_files(self.search_paths)
-
-        for file_path in files:
-            try:
-                directive = parse_directive_file(file_path)
-
-                # Calculate relevance score
-                searchable_text = f"{directive['name']} {directive['description']}"
-                score = score_relevance(searchable_text, query_terms)
-
-                if score > 0:
-                    # Determine source by checking if file is in project or user directives
-                    is_project = str(file_path).startswith(
-                        str(self.resolver.project_directives)
-                    )
-
-                    results.append(
-                        {
-                            "name": directive["name"],
-                            "description": directive["description"],
-                            "version": directive["version"],
-                            "score": score,
-                            "source": "project" if is_project else "user",
-                            "path": str(file_path),
-                        }
-                    )
-            except Exception as e:
-                self.logger.warning(f"Error parsing {file_path}: {e}")
-
+        """Search local directive files using Universal Extractor."""
+        filters = {}
+        if categories:
+            filters["category"] = categories[0] if len(categories) == 1 else categories
+        
+        results = search_items(
+            "directive", query, self.search_paths, self.project_path, filters
+        )
+        
+        # Add source field based on path
+        for r in results:
+            r["source"] = (
+                "project" if str(r["path"]).startswith(str(self.resolver.project_directives))
+                else "user"
+            )
+        
         return results
 
     def _get_directive_paths(self, source: str = "project") -> List[Path]:
@@ -641,7 +656,7 @@ class DirectiveHandler:
 
         return metadata
 
-    async def _run_directive(
+    async def _execute_directive(
         self, directive_name: str, params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Load and return directive for agent to execute."""
@@ -727,8 +742,8 @@ class DirectiveHandler:
                     "path": str(file_path),
                     "hint": "Directive needs validation",
                     "solution": (
-                        f"Run: execute(item_type='directive', action='sign', "
-                        f"item_id='{directive_name}', parameters={{'location': 'project'}}, "
+                        f"Run: sign(item_type='directive', "
+                        f"item_id='{directive_name}', "
                         f"project_path='{self.project_path}')"
                     ),
                 }
@@ -750,7 +765,7 @@ class DirectiveHandler:
                     "error": "Directive content has been modified since last validation",
                     "details": f"Integrity mismatch for {directive_name}@{directive_data.get('version')}: computed={short_hash(computed_hash)}, stored={short_hash(stored_hash)}",
                     "path": str(file_path),
-                    "solution": "Run execute(action='sign', ...) to re-validate the directive",
+                    "solution": "Run sign(...) to re-validate the directive",
                 }
 
             # Extract process steps and inputs for execution
@@ -900,7 +915,7 @@ class DirectiveHandler:
                 result["tool_context"] = mcp_tools
                 result["call_format"] = {
                     "description": "Use mcp_stdio or mcp_http tools to discover and call MCP tools",
-                    "example": "execute(item_type='tool', action='run', item_id='mcp_stdio', ...)",
+                    "example": "execute(item_type='tool', item_id='mcp_stdio', ...)",
                 }
 
             # Check for newer versions in other locations
@@ -1277,20 +1292,10 @@ class DirectiveHandler:
         # Update file with signature
         file_path.write_text(signed_content)
 
-        # Get signature info for response
         signature_info = MetadataManager.get_signature_info("directive", signed_content)
         timestamp = signature_info["timestamp"] if signature_info else None
 
-        try:
-            directive = parse_directive_file(file_path)
-            new_category = directive.get("category")
-        except Exception:
-            new_category = None
-
-        # Extract current category from file path (supports nested categories)
         from kiwi_mcp.utils.paths import extract_category_path
-
-        # Determine location
         determined_location = (
             "project" if str(file_path).startswith(str(self.project_path)) else "user"
         )
@@ -1298,73 +1303,15 @@ class DirectiveHandler:
             file_path, "directive", determined_location, self.project_path
         )
 
-        # Handle category change: move file if category changed
-        moved = False
-        final_path = file_path
-        if (
-            new_category
-            and new_category != current_category
-            and new_category != "unknown"
-        ):
-            # Determine new path based on project or user space
-            if determined_location == "project":
-                # Build path from slash-separated category
-                new_dir = self.project_path / ".ai" / "directives"
-                if new_category:
-                    for part in new_category.split("/"):
-                        new_dir = new_dir / part
-            else:
-                # User space
-                from kiwi_mcp.utils.paths import get_user_space
-
-                new_dir = get_user_space() / "directives"
-                if new_category:
-                    for part in new_category.split("/"):
-                        new_dir = new_dir / part
-
-            new_dir.mkdir(parents=True, exist_ok=True)
-            final_path = new_dir / file_path.name
-
-            # Move file
-            file_path.rename(final_path)
-            moved = True
-            self.logger.info(
-                f"Moved directive from {file_path} to {final_path} (category: {current_category} -> {new_category})"
-            )
-
-            # Clean up empty old directory if it's a category folder
-            old_dir = file_path.parent
-            if old_dir.name != "directives" and not any(old_dir.iterdir()):
-                try:
-                    old_dir.rmdir()
-                    self.logger.info(f"Removed empty directory: {old_dir}")
-                except OSError:
-                    pass  # Directory not empty or other error, ignore
-
-        result = {
+        return {
             "status": "signed",
             "name": directive_name,
-            "path": str(final_path),
+            "path": str(file_path),
             "location": determined_location,
-            "category": new_category or current_category or "unknown",
+            "category": current_category or "unknown",
             "validated": True,
             "signature": {"hash": content_hash, "timestamp": timestamp},
             "integrity": content_hash,
             "integrity_short": content_hash[:12],
             "message": "Directive validated and signed. Ready to use.",
         }
-
-        if moved:
-            result["moved"] = True
-            result["old_category"] = current_category
-            result["new_category"] = new_category
-            result["message"] = (
-                f"Directive validated, signed, and moved to category '{new_category}'."
-            )
-            result["registry_sync_note"] = (
-                "Category changed. If this directive is published to the registry, "
-                "republish it to sync the category: "
-                f"execute(action='publish', item_id='{directive_name}', parameters={{'version': '...'}})"
-            )
-
-        return result

@@ -103,7 +103,7 @@ def mock_knowledge_search_result():
     return {
         "data": [
             {
-                "zettel_id": "001-email-deliverability",
+                "id": "001-email-deliverability",
                 "title": "Email Deliverability Best Practices",
                 "entry_type": "pattern",
                 "category": "email-infrastructure",
@@ -111,7 +111,7 @@ def mock_knowledge_search_result():
                 "snippet": "Email deliverability refers to the ability of a transactional email to reach its intended email inbox.",
             },
             {
-                "zettel_id": "002-jwt-auth",
+                "id": "002-jwt-auth",
                 "title": "JWT Authentication in Python",
                 "entry_type": "learning",
                 "category": "authentication",
@@ -250,7 +250,7 @@ def sample_knowledge_file(tmp_path, sample_knowledge_content):
 
     file_content = f"""---
 version: "1.0.0"
-zettel_id: 001-test
+id: 001-test
 title: Test Knowledge Entry
 entry_type: learning
 category: test

@@ -86,7 +86,7 @@ if __name__ == "__main__":
 
         knowledge_file = tmp_path / "test_knowledge.md"
         knowledge_file.write_text("""---
-zettel_id: test_knowledge
+id: test_knowledge
 title: Test Knowledge
 version: "1.0.0"
 ---
@@ -110,7 +110,7 @@ This is a test knowledge entry.
 
         # Test knowledge validation
         knowledge_data = {
-            "zettel_id": "test_knowledge",
+            "id": "test_knowledge",
             "title": "Test Knowledge",
             "version": "1.0.0",
             "content": "Test content",
@@ -208,7 +208,7 @@ This is a test knowledge entry.
         # Knowledge validation
         knowledge_file = tmp_path / "test_knowledge.md"
         knowledge_data = {
-            "zettel_id": "test_knowledge",
+            "id": "test_knowledge",
             "title": "Test",
             "version": "1.0.0",
             "content": "Test content",

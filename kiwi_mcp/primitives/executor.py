@@ -191,7 +191,7 @@ class ChainResolver:
             if not content_hash:
                 raise ToolNotFoundError(
                     f"Tool '{current_id}' has no signature. "
-                    f"Run execute(action='sign', item_id='{current_id}', ...) to validate."
+                    f"Run sign(item_id='{current_id}', ...) to validate."
                 )
 
             # Build file hashes for integrity verification

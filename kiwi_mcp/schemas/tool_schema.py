@@ -3,19 +3,17 @@ Schema-driven extraction and validation engine.
 
 Architecture:
 1. BOOTSTRAP - Loads extractor tools (reads EXTENSIONS, PARSER, EXTRACTION_RULES)
-2. PARSERS - Minimal preprocessors (text, yaml, python_ast)
-3. PRIMITIVES - Generic extraction functions (filename, regex, path, ast_var, ast_docstring)
+2. PARSERS - Minimal preprocessors (text with dynamic loading from .ai/parsers/)
+3. PRIMITIVES - Generic extraction functions (filename, regex, regex_all, path, category_path)
 4. VALIDATION - Validates tools and extractors
 
 Extractors define WHAT to extract and HOW via schema rules.
 The engine provides only generic primitives.
 """
 
-import ast
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import yaml
 
 
 # =============================================================================
@@ -127,57 +125,31 @@ def _extract_path(rule: Dict, parsed: Dict, file_path: Path) -> Optional[Any]:
     return current
 
 
-def _extract_ast_var(rule: Dict, parsed: Dict, file_path: Path) -> Optional[Any]:
-    """Extract module-level variable from Python AST."""
-    tree = parsed.get("ast")
-    if not tree:
+def _extract_regex_all(rule: Dict, parsed: Dict, file_path: Path) -> Optional[List[str]]:
+    """Extract all values matching regex pattern."""
+    content = parsed.get("content", "")
+    pattern = rule.get("pattern")
+    if not pattern:
         return None
 
-    var_name = rule.get("name")
-    if not var_name:
-        return None
-
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-            if isinstance(target, ast.Name) and target.id == var_name:
-                try:
-                    return ast.literal_eval(node.value)
-                except (ValueError, TypeError):
-                    if isinstance(node.value, ast.Constant):
-                        return node.value.value
-                    return None
+    flags = re.MULTILINE if rule.get("multiline") else 0
+    matches = re.findall(pattern, content, flags)
+    if matches:
+        return [m.strip() if isinstance(m, str) else m for m in matches]
     return None
 
 
-def _extract_ast_docstring(rule: Dict, parsed: Dict, file_path: Path) -> Optional[str]:
-    """Extract module docstring from Python AST."""
-    tree = parsed.get("ast")
-    if not tree or not tree.body:
-        return None
-
-    first = tree.body[0]
-    if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
-        if isinstance(first.value.value, str):
-            docstring = first.value.value.strip()
-            # Extract first paragraph only
-            lines = docstring.split("\n")
-            desc_lines = []
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    break
-                desc_lines.append(line)
-            return " ".join(desc_lines) if desc_lines else docstring
-    return None
+def _extract_category_from_path(rule: Dict, parsed: Dict, file_path: Path) -> Optional[str]:
+    """Extract category from file path (parent directory name)."""
+    return file_path.parent.name if file_path.parent.name else None
 
 
 PRIMITIVES = {
     "filename": _extract_filename,
     "regex": _extract_regex,
+    "regex_all": _extract_regex_all,
     "path": _extract_path,
-    "ast_var": _extract_ast_var,
-    "ast_docstring": _extract_ast_docstring,
+    "category_path": _extract_category_from_path,
 }
 
 
@@ -190,43 +162,25 @@ class Bootstrap:
     """Load extractor tools by reading their module variables."""
 
     @staticmethod
-    def load_extractor(file_path: Path) -> Optional[Dict[str, Any]]:
+    def load_extractor(file_path: Path, item_type: str = "tool") -> Optional[Dict[str, Any]]:
         """
-        Load an extractor tool's EXTENSIONS, PARSER, SIGNATURE_FORMAT, and EXTRACTION_RULES.
+        Load an extractor tool's EXTENSIONS, PARSER, SIGNATURE_FORMAT, EXTRACTION_RULES,
+        VALIDATION_SCHEMA, and SEARCH_FIELDS.
+        Uses exec() to properly handle multi-line dict definitions.
         """
         try:
             content = file_path.read_text()
-            tree = ast.parse(content)
-
-            extensions = None
-            parser = "text"  # Default parser
-            signature_format = None
-            rules = None
-
-            for node in tree.body:
-                if isinstance(node, ast.Assign) and len(node.targets) == 1:
-                    target = node.targets[0]
-                    if isinstance(target, ast.Name):
-                        if target.id == "EXTENSIONS":
-                            try:
-                                extensions = ast.literal_eval(node.value)
-                            except (ValueError, TypeError):
-                                pass
-                        elif target.id == "PARSER":
-                            try:
-                                parser = ast.literal_eval(node.value)
-                            except (ValueError, TypeError):
-                                pass
-                        elif target.id == "SIGNATURE_FORMAT":
-                            try:
-                                signature_format = ast.literal_eval(node.value)
-                            except (ValueError, TypeError):
-                                pass
-                        elif target.id == "EXTRACTION_RULES":
-                            try:
-                                rules = ast.literal_eval(node.value)
-                            except (ValueError, TypeError):
-                                pass
+            
+            # Execute the file to get module-level variables
+            namespace: Dict[str, Any] = {}
+            exec(content, namespace)
+            
+            extensions = namespace.get("EXTENSIONS")
+            parser = namespace.get("PARSER", "text")
+            signature_format = namespace.get("SIGNATURE_FORMAT")
+            rules = namespace.get("EXTRACTION_RULES")
+            validation_schema = namespace.get("VALIDATION_SCHEMA")
+            search_fields = namespace.get("SEARCH_FIELDS")
 
             if extensions and rules:
                 return {
@@ -234,6 +188,8 @@ class Bootstrap:
                     "parser": parser,
                     "signature_format": signature_format or {"prefix": "#", "after_shebang": True},
                     "rules": rules,
+                    "validation_schema": validation_schema,
+                    "search_fields": search_fields,
                     "path": file_path,
                 }
             return None
@@ -272,8 +228,9 @@ class ExtractorValidator:
                     issues.append(f"Extension must start with '.', got '{ext}'")
 
         # Validate PARSER
-        if parser not in PARSERS:
-            issues.append(f"Unknown PARSER '{parser}'. Valid: {list(PARSERS.keys())}")
+        # Since we have dynamic parser loading, we just validate it's a string
+        if not isinstance(parser, str):
+            issues.append(f"PARSER must be a string, got {type(parser).__name__}")
 
         # Validate EXTRACTION_RULES
         if not rules:
@@ -298,10 +255,10 @@ class ExtractorValidator:
                 # Type-specific validation
                 if rule_type == "regex" and "pattern" not in rule:
                     issues.append(f"Rule '{field_name}' (regex) requires 'pattern'")
+                if rule_type == "regex_all" and "pattern" not in rule:
+                    issues.append(f"Rule '{field_name}' (regex_all) requires 'pattern'")
                 if rule_type == "path" and "key" not in rule:
                     issues.append(f"Rule '{field_name}' (path) requires 'key'")
-                if rule_type == "ast_var" and "name" not in rule:
-                    issues.append(f"Rule '{field_name}' (ast_var) requires 'name'")
 
         return {"valid": len(issues) == 0, "issues": issues}
 
@@ -342,22 +299,22 @@ class SchemaExtractor:
     """
 
     def __init__(self):
-        self._extractors: Dict[str, Dict] = {}  # ext -> {parser, rules}
-        self._extractors_loaded = False
+        self._extractors: Dict[tuple, Dict] = {}  # (item_type, ext) -> {parser, rules}
+        self._loaded_types: set = set()  # Track which item_types have been loaded
 
-    def _load_extractors(self, project_path: Optional[Path] = None):
-        """Load extractor tools using bootstrap."""
-        if self._extractors_loaded:
+    def _load_extractors(self, item_type: str = "tool", project_path: Optional[Path] = None):
+        """Load extractor tools for a specific item type."""
+        if item_type in self._loaded_types:
             return
 
         search_paths = []
         if project_path:
-            search_paths.append(project_path / ".ai" / "tools" / "extractors")
-        search_paths.append(Path.cwd() / ".ai" / "tools" / "extractors")
+            search_paths.append(project_path / ".ai" / "extractors" / item_type)
+        search_paths.append(Path.cwd() / ".ai" / "extractors" / item_type)
 
         from kiwi_mcp.utils.resolvers import get_user_space
 
-        search_paths.append(get_user_space() / "tools" / "extractors")
+        search_paths.append(get_user_space() / "extractors" / item_type)
 
         for extractors_dir in search_paths:
             if extractors_dir.exists():
@@ -365,25 +322,28 @@ class SchemaExtractor:
                     if file_path.name.startswith("_"):
                         continue
 
-                    extractor_data = Bootstrap.load_extractor(file_path)
+                    extractor_data = Bootstrap.load_extractor(file_path, item_type)
                     if extractor_data:
-                        # Validate extractor
                         validation = ExtractorValidator.validate(extractor_data)
                         if validation["valid"]:
                             for ext in extractor_data["extensions"]:
-                                self._extractors[ext.lower()] = {
+                                self._extractors[(item_type, ext.lower())] = {
                                     "parser": extractor_data["parser"],
                                     "rules": extractor_data["rules"],
+                                    "validation_schema": extractor_data.get("validation_schema"),
+                                    "search_fields": extractor_data.get("search_fields"),
                                 }
 
-        self._extractors_loaded = True
+        self._loaded_types.add(item_type)
 
-    def extract(self, file_path: Path, project_path: Optional[Path] = None) -> Dict[str, Any]:
+    def extract(
+        self, file_path: Path, item_type: str = "tool", project_path: Optional[Path] = None
+    ) -> Dict[str, Any]:
         """Extract metadata using dynamically loaded rules."""
-        self._load_extractors(project_path)
+        self._load_extractors(item_type, project_path)
 
         ext = file_path.suffix.lower()
-        extractor = self._extractors.get(ext)
+        extractor = self._extractors.get((item_type, ext))
 
         if not extractor:
             raise ValueError(
@@ -393,9 +353,9 @@ class SchemaExtractor:
 
         content = file_path.read_text()
 
-        # Use the extractor's parser
+        # Use the extractor's parser with dynamic loading
         parser_name = extractor["parser"]
-        parser_func = PARSERS.get(parser_name, _parse_text)
+        parser_func = get_parser(parser_name, project_path)
         parsed = parser_func(content)
 
         # Apply extraction rules
@@ -407,12 +367,117 @@ class SchemaExtractor:
             else:
                 result[field] = None
 
+        # Add path-derived category for validation
+        result["_path_category"] = _extract_category_from_path(
+            {"base_folder": f"{item_type}s" if item_type != "knowledge" else "knowledge"},
+            parsed,
+            file_path
+        )
+        result["_file_path"] = file_path
+        result["_item_type"] = item_type
+
         return result
 
-    def get_supported_extensions(self) -> List[str]:
+    def get_supported_extensions(
+        self, item_type: str = "tool", project_path: Optional[Path] = None
+    ) -> List[str]:
         """Get list of supported file extensions."""
-        self._load_extractors()
-        return list(self._extractors.keys())
+        self._load_extractors(item_type, project_path)
+        return [ext for (itype, ext) in self._extractors.keys() if itype == item_type]
+
+    def get_validation_schema(
+        self, file_path: Path, item_type: str = "tool", project_path: Optional[Path] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get validation schema for a file type."""
+        self._load_extractors(item_type, project_path)
+        ext = file_path.suffix.lower()
+        extractor = self._extractors.get((item_type, ext))
+        if extractor:
+            return extractor.get("validation_schema")
+        return None
+
+    def get_search_fields(
+        self, file_path: Path, item_type: str = "tool", project_path: Optional[Path] = None
+    ) -> Dict[str, float]:
+        """
+        Get search fields with weights for a file type.
+        
+        Returns explicit SEARCH_FIELDS from extractor, or derives defaults
+        from EXTRACTION_RULES and VALIDATION_SCHEMA.
+        """
+        self._load_extractors(item_type, project_path)
+        ext = file_path.suffix.lower()
+        extractor = self._extractors.get((item_type, ext))
+        
+        if not extractor:
+            return {}
+        
+        # Use explicit SEARCH_FIELDS if defined
+        explicit_fields = extractor.get("search_fields")
+        if explicit_fields:
+            # Normalize: accept both float and {"weight": float} forms
+            return {
+                k: (v if isinstance(v, (int, float)) else v.get("weight", 1.0))
+                for k, v in explicit_fields.items()
+            }
+        
+        # Derive defaults from schema
+        return self._derive_search_fields(extractor)
+
+    def _derive_search_fields(self, extractor: Dict) -> Dict[str, float]:
+        """
+        Derive search fields from EXTRACTION_RULES and VALIDATION_SCHEMA.
+        
+        Uses type information to exclude structural fields and applies
+        default weights based on field names.
+        """
+        # Default weights by field name (kernel-owned)
+        DEFAULT_WEIGHTS = {
+            "name": 5.0,
+            "title": 5.0,
+            "description": 2.0,
+            "summary": 2.0,
+            "category": 1.5,
+            "tags": 1.5,
+            "entry_type": 1.5,
+            "content": 1.0,
+            "body": 1.0,
+        }
+        
+        # Types to exclude from search
+        EXCLUDE_TYPES = {"object", "array", "semver", "number", "boolean"}
+        
+        # Fields to exclude by name (structural/metadata)
+        EXCLUDE_NAMES = {
+            "version", "author", "model", "permissions", "cost",
+            "created_at", "updated_at", "id", "backlinks", "attachments",
+            "source_url", "source_type", "inputs", "outputs", "process",
+            "config", "config_schema", "env_config", "mutates_state",
+            "extensions", "extraction_rules", "validation", "executor_id",
+            "tool_type",
+        }
+        
+        rules = extractor.get("rules", {})
+        validation = extractor.get("validation_schema", {})
+        field_schemas = validation.get("fields", {}) if validation else {}
+        
+        result = {}
+        for field_name in rules.keys():
+            # Skip internal/excluded fields
+            if field_name.startswith("_") or field_name in EXCLUDE_NAMES:
+                continue
+            
+            # Check validation type if available
+            field_schema = field_schemas.get(field_name, {})
+            field_type = field_schema.get("type", "string")
+            if field_type in EXCLUDE_TYPES:
+                continue
+            
+            # Apply weight from defaults or fallback
+            weight = DEFAULT_WEIGHTS.get(field_name, 1.0)
+            result[field_name] = weight
+        
+        return result
 
 
 # =============================================================================
@@ -423,7 +488,7 @@ class SchemaExtractor:
 class SchemaValidator:
     """Validates extracted tool data."""
 
-    def __init__(self, schema: Dict[str, Any] = None):
+    def __init__(self, schema: Optional[Dict[str, Any]] = None):
         self.schema = schema or VALIDATION_SCHEMA
 
     def validate(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -466,9 +531,19 @@ class SchemaValidator:
 
             if value is not None:
                 field_type = field_schema.get("type")
-                type_error = self._validate_type(value, field_type, field_name)
-                if type_error:
-                    issues.append(type_error)
+                if field_type:
+                    type_error = self._validate_type(value, field_type, field_name)
+                    if type_error:
+                        issues.append(type_error)
+
+        # Validate category matches path
+        metadata_category = data.get("category")
+        path_category = data.get("_path_category")
+        if metadata_category and path_category is not None and metadata_category != path_category:
+            issues.append(
+                f"Category mismatch: metadata declares '{metadata_category}' "
+                f"but file is at '{path_category or '(root)'}'"
+            )
 
         return {"valid": len(issues) == 0, "issues": issues, "warnings": warnings}
 
@@ -523,9 +598,11 @@ def _get_validator() -> SchemaValidator:
     return _validator
 
 
-def extract_tool_metadata(file_path: Path, project_path: Optional[Path] = None) -> Dict[str, Any]:
+def extract_tool_metadata(
+    file_path: Path, item_type: str = "tool", project_path: Optional[Path] = None
+) -> Dict[str, Any]:
     """Extract tool metadata using schema-driven extraction."""
-    return _get_extractor().extract(file_path, project_path)
+    return _get_extractor().extract(file_path, item_type, project_path)
 
 
 def validate_tool_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -544,13 +621,157 @@ def validate_extractor(file_path: Path) -> Dict[str, Any]:
     return ExtractorValidator.validate(extractor_data)
 
 
-def extract_and_validate(file_path: Path, project_path: Optional[Path] = None) -> Dict[str, Any]:
+def extract_and_validate(
+    file_path: Path, item_type: str = "tool", project_path: Optional[Path] = None
+) -> Dict[str, Any]:
     """Extract and validate in one call."""
-    data = extract_tool_metadata(file_path, project_path)
-    validation = validate_tool_metadata(data)
+    extractor = _get_extractor()
+    data = extractor.extract(file_path, item_type, project_path)
+    schema = extractor.get_validation_schema(file_path, item_type, project_path)
+    validator = SchemaValidator(schema) if schema else _get_validator()
+    validation = validator.validate(data)
     return {
         "data": data,
         "valid": validation["valid"],
         "issues": validation["issues"],
         "warnings": validation["warnings"],
     }
+
+
+def search_items(
+    item_type: str,
+    query: str,
+    search_paths: List[Path],
+    project_path: Optional[Path] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """
+    Search for items using schema-driven BM25 ranking.
+    
+    Architecture:
+    1. Extract metadata from files using SchemaExtractor
+    2. Get search fields from extractor's SEARCH_FIELDS or derive defaults
+    3. Index documents into KeywordSearchEngine with weighted fields
+    4. Search and return ranked results
+    
+    Args:
+        item_type: "directive", "tool", or "knowledge"
+        query: Search query string
+        search_paths: List of directories to search
+        project_path: Project root for extractor resolution
+        filters: Optional filters (category, entry_type, tags, etc.)
+        limit: Maximum results to return
+    
+    Returns:
+        List of matching items with scores
+    """
+    from kiwi_mcp.utils.search.keyword import KeywordSearchEngine
+    
+    filters = filters or {}
+    extractor = _get_extractor()
+    engine = KeywordSearchEngine()
+    
+    # Phase 1: Extract and index all matching files
+    indexed_data: Dict[str, Dict[str, Any]] = {}  # item_id -> extracted data
+    
+    for search_dir in search_paths:
+        if not search_dir.exists():
+            continue
+            
+        extensions = extractor.get_supported_extensions(item_type, project_path)
+        for ext in extensions:
+            for file_path in search_dir.rglob(f"*{ext}"):
+                try:
+                    data = extractor.extract(file_path, item_type, project_path)
+                    
+                    # Apply filters early to avoid indexing filtered items
+                    if not _matches_filters(data, filters):
+                        continue
+                    
+                    # Get search fields for this file type
+                    search_fields = extractor.get_search_fields(file_path, item_type, project_path)
+                    
+                    # Build indexable fields from extracted data
+                    fields = _build_search_fields(data, search_fields)
+                    
+                    # Generate unique item ID
+                    item_id = str(file_path)
+                    
+                    # Index the document with schema-driven field weights
+                    engine.index_document(
+                        item_id=item_id,
+                        item_type=item_type,
+                        fields=fields,
+                        path=file_path,
+                        metadata=data,
+                        field_weights=search_fields,
+                    )
+                    
+                    # Store for result building
+                    indexed_data[item_id] = data
+                    
+                except Exception:
+                    continue
+    
+    # Phase 2: Search if query provided, else return all indexed items
+    if query:
+        search_results = engine.search(query, item_type=item_type, limit=limit, min_score=0.0)
+        return [
+            {
+                **{k: v for k, v in indexed_data[r.item_id].items() if not k.startswith("_")},
+                "score": r.score,
+                "path": str(r.path),
+            }
+            for r in search_results
+            if r.item_id in indexed_data
+        ]
+    else:
+        # No query: return all items with score 1.0
+        return [
+            {
+                **{k: v for k, v in data.items() if not k.startswith("_")},
+                "score": 1.0,
+                "path": item_id,
+            }
+            for item_id, data in list(indexed_data.items())[:limit]
+        ]
+
+
+def _build_search_fields(data: Dict[str, Any], search_fields: Dict[str, float]) -> Dict[str, str]:
+    """
+    Build indexable text fields from extracted data using schema-driven field selection.
+    
+    Args:
+        data: Extracted metadata
+        search_fields: Field names with weights from extractor
+    
+    Returns:
+        Dictionary of field_name -> text content for indexing
+    """
+    result = {}
+    for field_name in search_fields.keys():
+        value = data.get(field_name)
+        if value is None:
+            result[field_name] = ""
+        elif isinstance(value, str):
+            result[field_name] = value
+        elif isinstance(value, list):
+            result[field_name] = " ".join(str(v) for v in value if v)
+        else:
+            result[field_name] = str(value)
+    return result
+
+
+def _matches_filters(data: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+    """Check if data matches all filters."""
+    for key, value in filters.items():
+        if value is None:
+            continue
+        data_value = data.get(key)
+        if isinstance(value, list):
+            if data_value not in value:
+                return False
+        elif data_value != value:
+            return False
+    return True

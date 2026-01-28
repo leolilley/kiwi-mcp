@@ -102,7 +102,7 @@ class TypeHandlerRegistry:
 
         Args:
             item_type: "directive", "tool", or "knowledge"
-            item_id: Item identifier (directive_name, tool_name, zettel_id)
+            item_id: Item identifier (directive_name, tool_name, id)
             **kwargs: Additional load parameters (destination, version, etc.)
 
         Returns:
@@ -125,7 +125,7 @@ class TypeHandlerRegistry:
             elif item_type == "tool":
                 result = await handler.load(tool_name=item_id, **kwargs)
             elif item_type == "knowledge":
-                result = await handler.load(zettel_id=item_id, **kwargs)
+                result = await handler.load(id=item_id, **kwargs)
 
             if result is None:
                 return {"error": f"Unsupported item_type: {item_type}"}
@@ -143,20 +143,18 @@ class TypeHandlerRegistry:
     async def execute(
         self,
         item_type: str,
-        action: str,
         item_id: str,
         parameters: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
-        Execute an operation on an item.
+        Execute an item (directive, tool, or knowledge).
 
         Args:
             item_type: "directive", "tool", or "knowledge"
-            action: "run", "publish", "delete", "sign"
             item_id: Item identifier
-            parameters: Action-specific parameters
-            **kwargs: Additional execution parameters (dry_run, project_path, etc.)
+            parameters: Execution parameters
+            **kwargs: Additional execution parameters (dry_run, etc.)
 
         Returns:
             Dict with operation result or error
@@ -169,21 +167,21 @@ class TypeHandlerRegistry:
             }
 
         try:
-            self.logger.info(f"Executing {item_type}.{action}: {item_id}")
+            self.logger.info(f"Executing {item_type}: {item_id}")
 
             # Map item_id to handler-specific parameter names
             result = None
             if item_type == "directive":
                 result = await handler.execute(
-                    action=action, directive_name=item_id, parameters=parameters, **kwargs
+                    directive_name=item_id, parameters=parameters, **kwargs
                 )
             elif item_type == "tool":
                 result = await handler.execute(
-                    action=action, tool_name=item_id, parameters=parameters, **kwargs
+                    tool_name=item_id, parameters=parameters, **kwargs
                 )
             elif item_type == "knowledge":
                 result = await handler.execute(
-                    action=action, zettel_id=item_id, parameters=parameters, **kwargs
+                    id=item_id, parameters=parameters, **kwargs
                 )
 
             if result is None:
@@ -191,13 +189,69 @@ class TypeHandlerRegistry:
 
             return result
         except Exception as e:
-            self.logger.error(f"Execute failed for {item_type}.{action} {item_id}: {str(e)}")
+            self.logger.error(f"Execute failed for {item_type} {item_id}: {str(e)}")
             return {
                 "error": str(e),
                 "item_type": item_type,
-                "action": action,
                 "item_id": item_id,
-                "message": f"Failed to execute {action} on {item_type}",
+                "message": f"Failed to execute {item_type}",
+            }
+
+    async def sign(
+        self,
+        item_type: str,
+        item_id: str,
+        parameters: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """
+        Validate and sign an item (directive, tool, or knowledge).
+
+        Args:
+            item_type: "directive", "tool", or "knowledge"
+            item_id: Item identifier
+            parameters: Sign parameters (location, category)
+            **kwargs: Additional parameters
+
+        Returns:
+            Dict with sign result or error
+        """
+        handler = self._get_handler(item_type)
+        if not handler:
+            return {
+                "error": f"Unknown item_type: {item_type}",
+                "supported_types": list(self.handlers.keys()),
+            }
+
+        try:
+            self.logger.info(f"Signing {item_type}: {item_id}")
+
+            # Map item_id to handler-specific parameter names
+            result = None
+            if item_type == "directive":
+                result = await handler.sign(
+                    directive_name=item_id, parameters=parameters, **kwargs
+                )
+            elif item_type == "tool":
+                result = await handler.sign(
+                    tool_name=item_id, parameters=parameters, **kwargs
+                )
+            elif item_type == "knowledge":
+                result = await handler.sign(
+                    id=item_id, parameters=parameters, **kwargs
+                )
+
+            if result is None:
+                return {"error": f"Unsupported item_type: {item_type}"}
+
+            return result
+        except Exception as e:
+            self.logger.error(f"Sign failed for {item_type} {item_id}: {str(e)}")
+            return {
+                "error": str(e),
+                "item_type": item_type,
+                "item_id": item_id,
+                "message": f"Failed to sign {item_type}",
             }
 
     def _get_handler(self, item_type: str) -> Optional[Any]:
@@ -217,43 +271,22 @@ class TypeHandlerRegistry:
             "registry": "TypeHandlerRegistry",
             "project_path": self.project_path,
             "supported_types": self.get_supported_types(),
-            "unified_actions": ["run", "publish", "delete", "sign"],
+            "operations": ["search", "load", "execute", "sign"],
             "handlers": {
                 "directive": {
                     "class": "DirectiveHandler",
-                    "operations": [
-                        "search",
-                        "load",
-                        "run",
-                        "publish",
-                        "delete",
-                        "sign",
-                    ],
-                    "run_behavior": "Returns parsed XML content for agent to follow",
+                    "operations": ["search", "load", "execute", "sign"],
+                    "execute_behavior": "Returns parsed XML content for agent to follow",
                 },
                 "tool": {
                     "class": "ToolHandler",
-                    "operations": [
-                        "search",
-                        "load",
-                        "run",
-                        "publish",
-                        "delete",
-                        "sign",
-                    ],
-                    "run_behavior": "Executes Python code and returns results",
+                    "operations": ["search", "load", "execute", "sign"],
+                    "execute_behavior": "Executes tool code and returns results",
                 },
                 "knowledge": {
                     "class": "KnowledgeHandler",
-                    "operations": [
-                        "search",
-                        "load",
-                        "run",
-                        "sign",
-                        "delete",
-                        "publish",
-                    ],
-                    "run_behavior": "Returns knowledge content for agent context",
+                    "operations": ["search", "load", "execute", "sign"],
+                    "execute_behavior": "Returns knowledge content for agent context",
                 },
             },
         }

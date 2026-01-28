@@ -500,11 +500,11 @@ class TestFieldBoosting:
         """Test field boost weights are applied correctly."""
         engine = KeywordSearchEngine()
 
-        # Verify field weights are defined
-        assert engine.FIELD_WEIGHTS["title"] == 3.0
-        assert engine.FIELD_WEIGHTS["name"] == 3.0
-        assert engine.FIELD_WEIGHTS["description"] == 2.0
-        assert engine.FIELD_WEIGHTS["content"] == 1.0
+        # Verify default field weights are defined
+        assert engine.DEFAULT_FIELD_WEIGHTS["title"] == 5.0
+        assert engine.DEFAULT_FIELD_WEIGHTS["name"] == 5.0
+        assert engine.DEFAULT_FIELD_WEIGHTS["description"] == 2.0
+        assert engine.DEFAULT_FIELD_WEIGHTS["content"] == 1.0
 
 
 class TestPhraseMatching:

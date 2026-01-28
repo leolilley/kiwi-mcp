@@ -29,6 +29,7 @@ class HelpTool(BaseTool):
                             "search",
                             "load",
                             "execute",
+                            "sign",
                             "directives",
                             "tools",
                             "knowledge",
@@ -47,10 +48,11 @@ class HelpTool(BaseTool):
             "overview": """
 Kiwi MCP - Unified MCP for directives, tools, and knowledge
 
-This MCP provides 4 tools:
+This MCP provides 5 tools:
 - search: Find items across all types
-- load: Download from registry to local
-- execute: Run, publish, delete, sign, link
+- load: Download/copy items between locations
+- execute: Run/execute items
+- sign: Validate and sign items
 - help: Get help and guidance
 
 Types supported:
@@ -66,41 +68,51 @@ search - Find items across local or registry
 Parameters:
 - item_type: "directive" | "tool" | "knowledge" (required)
 - query: Search query as natural language or keywords (required)
-- source: "local" | "registry" | "all" (default: "local")
+- source: "project" | "user" | "all" (default: "project")
 - limit: Max results (default: 10)
 
 Example:
-search(item_type="directive", query="lead generation", source="registry")
+search(item_type="directive", query="lead generation", source="project")
 """,
             "load": """
-load - Download items from registry to local storage
+load - Download/copy items between locations
 
 Parameters:
 - item_type: "directive" | "tool" | "knowledge" (required)
 - item_id: Item ID to load (required)
-- destination: "project" | "user" (default: "project")
-- version: Specific version (optional)
-- project_path: Path to project (required for destination="project")
+- source: "project" | "user" (where to load from)
+- destination: "project" | "user" (where to copy to, optional)
+- project_path: Path to project (required)
 
 Example:
-load(item_type="directive", item_id="my_directive", destination="project")
+load(item_type="directive", item_id="my_directive", source="user", destination="project")
 """,
             "execute": """
-execute - Run, publish, delete, sign, or link items
+execute - Run/execute an item
 
 Parameters:
 - item_type: "directive" | "tool" | "knowledge" (required)
-- action: "run" | "publish" | "delete" | "sign" | "link" (required)
-- item_id: Item ID (required)
-- parameters: Action-specific parameters (object)
-- project_path: Path to project (for project operations)
+- item_id: Item ID to execute (required)
+- parameters: Execution parameters (object)
+- project_path: Path to project (required)
 
-Actions:
-- run: Execute/run the item
-- publish: Publish to registry
-- delete: Delete item
-- sign: Validate and sign item (always allows re-signing)
-- link: Create relationship between items
+Examples:
+execute(item_type="directive", item_id="create_tool", project_path="/path/to/project")
+execute(item_type="tool", item_id="scraper", parameters={"url": "..."}, project_path="/path/to/project")
+""",
+            "sign": """
+sign - Validate and sign an item
+
+Parameters:
+- item_type: "directive" | "tool" | "knowledge" (required)
+- item_id: Item ID to sign (required)
+- project_path: Path to project (required)
+- parameters: Sign parameters (location, category)
+
+Always allows re-signing to update signatures after changes.
+
+Example:
+sign(item_type="directive", item_id="my_directive", project_path="/path/to/project")
 """,
         }
 

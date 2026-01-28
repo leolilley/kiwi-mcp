@@ -96,7 +96,7 @@ class TestKnowledgeIntegrity:
         """Test basic knowledge integrity computation."""
         content = "This is some knowledge content about APIs."
         frontmatter = {
-            "zettel_id": "20260124-api",
+            "id": "20260124-api",
             "title": "API Patterns",
             "entry_type": "pattern",
             "category": "architecture",
@@ -112,7 +112,7 @@ class TestKnowledgeIntegrity:
     def test_compute_knowledge_integrity_deterministic(self):
         """Test that same inputs produce same hash."""
         content = "Knowledge content"
-        frontmatter = {"zettel_id": "test", "title": "Test"}
+        frontmatter = {"id": "test", "title": "Test"}
         
         hash1 = compute_knowledge_integrity("test", "1.0.0", content, frontmatter)
         hash2 = compute_knowledge_integrity("test", "1.0.0", content, frontmatter)
@@ -120,7 +120,7 @@ class TestKnowledgeIntegrity:
         assert hash1 == hash2
 
     def test_compute_knowledge_integrity_changes_with_id(self):
-        """Test that different zettel_id produces different hash."""
+        """Test that different id produces different hash."""
         content = "Knowledge content"
         frontmatter = {"title": "Test"}
         
