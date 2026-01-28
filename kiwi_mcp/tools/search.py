@@ -36,9 +36,9 @@ class SearchTool(BaseTool):
                     },
                     "source": {
                         "type": "string",
-                        "enum": ["local"],
-                        "default": "local",
-                        "description": "Search source",
+                        "enum": ["project", "user"],
+                        "default": "project",
+                        "description": "Search source: 'project' (local .ai/) or 'user' (~/.ai/)",
                     },
                     "limit": {
                         "type": "integer",
@@ -86,12 +86,14 @@ class SearchTool(BaseTool):
                 storage_path=Path(project_path) / ".ai" / "vector" / "project",
                 collection_name="project_items",
                 embedding_service=embedding_service,
+                source="project",
             )
 
             user_store = LocalVectorStore(
                 storage_path=Path.home() / ".ai" / "vector" / "user",
                 collection_name="user_items",
                 embedding_service=embedding_service,
+                source="user",
             )
 
             # Setup manager and hybrid search
@@ -114,7 +116,7 @@ class SearchTool(BaseTool):
         """Execute search with vector search priority and keyword fallback."""
         item_type = arguments.get("item_type")
         query = arguments.get("query")
-        source = arguments.get("source", "local")
+        source = arguments.get("source", "project")
         limit = arguments.get("limit", 10)
         project_path = arguments.get("project_path")
 
@@ -198,7 +200,7 @@ class SearchTool(BaseTool):
     async def _keyword_search(
         self, item_type: str, query: str, source: str, limit: int, project_path: str
     ) -> str:
-        """Perform traditional keyword-based search."""
+        """Perform traditional keyword-based search using handler dispatch."""
         # Create handler dynamically with project_path
         from kiwi_mcp.handlers.directive.handler import DirectiveHandler
         from kiwi_mcp.handlers.tool.handler import ToolHandler
@@ -219,17 +221,29 @@ class SearchTool(BaseTool):
                 }
             )
 
+        # Dispatch to handler's search method
         handler = handler_class(project_path=project_path)
         result = await handler.search(query, source=source, limit=limit)
 
-        # Add search type indicator
+        # Add search type and quality indicators to response
         if isinstance(result, dict):
             result["search_type"] = "keyword"
+            # Quality indicator: "good" for BM25-based scoring, "basic" for substring matching
+            # Handlers use score_relevance which is BM25-inspired
+            result["quality"] = "good"
+
+            # Add quality indicator to individual results if present
+            if "results" in result and isinstance(result["results"], list):
+                for item in result["results"]:
+                    item["quality"] = "good"
 
         self.logger.info(
             f"SearchTool result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}"
         )
         self.logger.info(
             f"SearchTool result total: {result.get('total', 'N/A') if isinstance(result, dict) else 'N/A'}"
+        )
+        self.logger.info(
+            f"SearchTool search_type: {result.get('search_type', 'N/A') if isinstance(result, dict) else 'N/A'}"
         )
         return self._format_response(result)

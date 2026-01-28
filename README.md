@@ -176,7 +176,12 @@ python -m kiwi_mcp.server
 
 ### search
 
-Find items by natural language query across local and registry sources.
+Find items by natural language query across local and registry sources using advanced keyword search.
+
+**Search Architecture:**
+- **Default:** Keyword-first search with BM25 scoring
+- **Optional:** Hybrid search with vector embeddings (RAG)
+- Zero external dependencies for basic search
 
 **Parameters:**
 
@@ -185,8 +190,26 @@ Find items by natural language query across local and registry sources.
 - `project_path` (required): Absolute path to project root
 - `source` (optional): `"local"`, `"registry"`, or `"all"` (default: `"local"`)
 - `limit` (optional): Max results (default: 10)
+- `strategy` (optional): `"keyword"`, `"hybrid"`, or `"vector"` (default: `"keyword"`)
 
-**Returns:** JSON with `results` array or `error`
+**Keyword Search Features:**
+- BM25 scoring with term frequency and inverse document frequency
+- Field boosting (title > description > content)
+- Phrase matching bonus
+- Fuzzy matching for typos
+
+**RAG (Optional):**
+- Vector search via ChromaDB or Supabase
+- Configurable hybrid search blending
+- Requires additional setup
+
+**Environment Variables:**
+```bash
+# Optional RAG configuration
+KIWI_SEARCH_STRATEGY=hybrid           # keyword | hybrid | vector
+KIWI_VECTOR_BACKEND=chromadb          # chromadb | supabase
+KIWI_EMBEDDING_MODEL=all-MiniLM-L6-v2
+```
 
 **Examples:**
 
@@ -196,7 +219,8 @@ search(
     item_type="knowledge",
     query="email deliverability",
     source="registry",
-    project_path="/home/user/myproject"
+    project_path="/home/user/myproject",
+    strategy="hybrid"
 )
 
 # Search local tools
@@ -207,6 +231,14 @@ search(
     project_path="/home/user/myproject"
 )
 ```
+
+**Returns:** JSON with `results` array, including:
+- `item_id`: Unique identifier
+- `item_type`: Type of item (directive/tool/knowledge)
+- `score`: Relevance score
+- `preview`: Matching content snippet
+- `search_type`: "keyword" or "hybrid"
+- `metadata`: Additional context
 
 ---
 

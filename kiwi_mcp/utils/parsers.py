@@ -14,6 +14,26 @@ from kiwi_mcp.utils.xml_error_helper import format_error_with_context
 
 logger = logging.getLogger(__name__)
 
+# Shell operators and special chars that need CDATA wrapping
+SHELL_OPERATORS = [
+    r"&&",
+    r"\|\|",
+    r"\|",
+    r">>",
+    r">",
+    r"<",
+    r"2>&1",
+    r"\$",
+    "`",
+    r"\$\(",
+    r"\$\(\(",
+    r"&",  # URL separators, template vars
+]
+
+# CDATA markers
+CDATA_OPEN = "<![CDATA["
+CDATA_CLOSE = "]]>"
+
 # Mapping of module names to their corresponding PyPI package names
 MODULE_TO_PACKAGE = {
     "git": "GitPython",
@@ -36,6 +56,109 @@ MODULE_TO_PACKAGE = {
 PACKAGE_TO_MODULE = {v: k for k, v in MODULE_TO_PACKAGE.items()}
 
 
+def _smart_wrap_cdata(xml_content: str) -> str:
+    """
+    Wrap action/command/verify content in CDATA to avoid XML escaping requirements.
+
+    Always wraps <action>, <command>, <verify> tags in CDATA to be maximally permissive.
+    These tags contain user instructions, never XML structure itself.
+    Allows any content: shell commands, XML snippets, code examples, etc.
+    Preserves existing CDATA sections and handles nested CDATA.
+
+    Rules:
+    1. If a tag already has CDATA, preserve it as-is (don't re-wrap)
+    2. If a tag doesn't have CDATA AND doesn't contain child tags from tags_to_wrap,
+       wrap it in CDATA
+    3. If a tag contains child tags from tags_to_wrap, don't wrap it (to avoid
+       creating invalid nested CDATA sections)
+    """
+    result = xml_content
+
+    # Tags that should always be wrapped in CDATA
+    tags_to_wrap = ["action", "command", "verify"]
+
+    # First, find all tag positions for collision detection
+    # This allows us to detect nested tags and avoid creating invalid nested CDATA
+    all_tag_ranges = []
+    for tag_name in tags_to_wrap:
+        pattern = rf"<{tag_name}([^>]*)>(.*?)</{tag_name}>"
+        for match in re.finditer(pattern, result, re.DOTALL):
+            all_tag_ranges.append(
+                {
+                    "tag": tag_name,
+                    "start": match.start(),
+                    "end": match.end(),
+                    "content_start": match.start(2),
+                    "content_end": match.end(2),
+                }
+            )
+
+    # Sort by start position to ensure consistent processing
+    all_tag_ranges.sort(key=lambda x: x["start"])
+
+    # Process tags from END to START to avoid index shifting issues
+    # When we replace text, positions of later matches would be wrong if we
+    # processed from beginning to end
+    for tag_range in reversed(all_tag_ranges):
+        tag_name = tag_range["tag"]
+        start = tag_range["start"]
+        end = tag_range["end"]
+        content_start = tag_range["content_start"]
+        content_end = tag_range["content_end"]
+        content = result[content_start:content_end]
+
+        # Check if this tag already has CDATA
+        # Tags that already have CDATA should be preserved as-is
+        content_stripped = content.lstrip()
+        if content_stripped.startswith(CDATA_OPEN):
+            continue
+
+        # Check if this tag's content contains other tags from tags_to_wrap
+        # If yes, don't wrap it - this would create invalid nested CDATA
+        # Example: <action><command>...</command></action>
+        # We wrap the inner <command> but NOT the outer <action>
+        contains_child_tags = any(
+            other["start"] > content_start and other["end"] < content_end
+            for other in all_tag_ranges
+            if other is not tag_range  # Don't compare with self
+        )
+
+        if contains_child_tags:
+            continue
+
+        # Wrap content in CDATA
+        # Extract attributes from the opening tag
+        attrs = result[start + len(f"<{tag_name}") : content_start - 1]
+        cdata_tag = f"<{tag_name}{attrs}>{CDATA_OPEN}{content}{CDATA_CLOSE}</{tag_name}>"
+        result = result[:start] + cdata_tag + result[end:]
+
+    return result
+
+
+def _validate_directive_format(content: str) -> None:
+    """
+    Validate directive file has correct format:
+    - Frontmatter (optional)
+    - Brief description (1-2 sentences)
+    - XML directive block
+    - No content after directive block
+    """
+    # Find XML code block end
+    xml_end = content.rfind("```")
+    if xml_end == -1:
+        raise ValueError("No code block end marker found")
+
+    # Check for content after XML block
+    after_xml = content[xml_end + 3 :].strip()
+
+    # Allow only whitespace and comments
+    if after_xml and not after_xml.startswith("<!--"):
+        raise ValueError(
+            "Invalid directive format: Content found after XML directive block. "
+            "Directive files should contain only frontmatter, description, and XML block."
+        )
+
+
 def parse_directive_file(file_path: Path) -> Dict[str, Any]:
     """
     Parse a directive markdown file.
@@ -55,21 +178,23 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
     """
     content = file_path.read_text()
 
+    # Validate directive file format
+    _validate_directive_format(content)
+
     # Extract XML from markdown
     xml_content = _extract_xml_from_markdown(content)
     if not xml_content:
         raise ValueError(f"No XML directive found in directive file: {file_path}")
+
+    # Smart CDATA wrapping for shell operators and special chars
+    xml_content = _smart_wrap_cdata(xml_content)
 
     # Parse XML and validate required <permissions> section
     try:
         root = ET.fromstring(xml_content)
     except ET.ParseError as e:
         # Use enhanced error formatting with context and suggestions
-        enhanced_error = format_error_with_context(
-            str(e),
-            xml_content,
-            str(file_path)
-        )
+        enhanced_error = format_error_with_context(str(e), xml_content, str(file_path))
         raise ValueError(enhanced_error)
 
     # Look for <permissions> inside <metadata> (required location)
@@ -96,10 +221,17 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
         model_data = {
             "tier": model_elem.get("tier"),
             "fallback": model_elem.get("fallback"),
-            "parallel": model_elem.get("parallel"),
-            "id": model_elem.get("id"),
-            "reasoning": model_elem.text.strip() if model_elem.text else None,
+            "id": model_elem.get("model_id"),
+            "context": model_elem.text.strip() if model_elem.text else None,
         }
+
+        # Validation: tier and fallback are required
+        if not model_data.get("tier"):
+            raise ValueError("Model tag missing required 'tier' attribute")
+        if not model_data.get("fallback"):
+            raise ValueError("Model tag missing required 'fallback' attribute")
+        if not model_data.get("context"):
+            raise ValueError("Model tag missing required text content (context)")
     else:
         model_data = None
 
@@ -136,7 +268,7 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
                         action_data[attr_name] = attr_value
                 if action_data:
                     orchestration_data[action_type] = action_data
-        
+
         # Parse max_threads and timeout attributes
         max_threads = orchestration_elem.get("max_threads")
         if max_threads:
@@ -144,7 +276,7 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
                 orchestration_data["max_threads"] = int(max_threads)
             except ValueError:
                 pass
-        
+
         timeout = orchestration_elem.get("timeout")
         if timeout:
             orchestration_data["timeout"] = timeout
@@ -211,7 +343,7 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
 
     # Extract category from file path (supports nested categories)
     from kiwi_mcp.utils.paths import extract_category_path
-    
+
     # Determine location (project or user) by checking path
     # This is a best-effort guess - handlers should pass location explicitly
     location = "project" if ".ai" in str(file_path) else "user"
@@ -222,7 +354,7 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
         if ".ai" in path_parts:
             ai_index = path_parts.index(".ai")
             project_path = Path(*path_parts[:ai_index])
-    
+
     category_from_path = extract_category_path(file_path, "directive", location, project_path)
 
     # Validate category consistency
@@ -249,7 +381,7 @@ def parse_directive_file(file_path: Path) -> Dict[str, Any]:
                 f"    Run directive edit_directive with directive_name='{directive_name}'\n"
                 f"    Fix mismatch (update XML or move file)"
             )
-    
+
     # Use path category if XML category missing, otherwise use XML (validated above)
     category = category_from_path if not category_from_xml else category_from_xml
 
@@ -293,7 +425,7 @@ def parse_script_metadata(file_path: Path) -> Dict[str, Any]:
     """
     # Extract category from file path (supports nested categories)
     from kiwi_mcp.utils.paths import extract_category_path
-    
+
     # Determine location (project or user) by checking path
     location = "project" if ".ai" in str(file_path) else "user"
     project_path = None
@@ -303,9 +435,9 @@ def parse_script_metadata(file_path: Path) -> Dict[str, Any]:
         if ".ai" in path_parts:
             ai_index = path_parts.index(".ai")
             project_path = Path(*path_parts[:ai_index])
-    
+
     category_from_path = extract_category_path(file_path, "tool", location, project_path)
-    
+
     metadata = {
         "name": file_path.stem,
         "description": "",
@@ -354,16 +486,22 @@ def parse_script_metadata(file_path: Path) -> Dict[str, Any]:
                 target = node.targets[0]
                 if isinstance(target, ast.Name):
                     if target.id == "__version__":
-                        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        if isinstance(node.value, ast.Constant) and isinstance(
+                            node.value.value, str
+                        ):
                             metadata["version"] = node.value.value
                     elif target.id == "__tool_type__":
-                        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        if isinstance(node.value, ast.Constant) and isinstance(
+                            node.value.value, str
+                        ):
                             metadata["tool_type"] = node.value.value
                     elif target.id == "__executor_id__":
                         if isinstance(node.value, ast.Constant):
                             metadata["executor_id"] = node.value.value  # Can be None or string
                     elif target.id == "__category__":
-                        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        if isinstance(node.value, ast.Constant) and isinstance(
+                            node.value.value, str
+                        ):
                             # Use explicit category over path-derived
                             metadata["category"] = node.value.value
                     elif target.id == "CONFIG_SCHEMA":
@@ -476,7 +614,9 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
     frontmatter = _extract_yaml_frontmatter(content_without_sig)
 
     # Extract content (after frontmatter)
-    content_start = content_without_sig.find("---", 3) + 3 if content_without_sig.startswith("---") else 0
+    content_start = (
+        content_without_sig.find("---", 3) + 3 if content_without_sig.startswith("---") else 0
+    )
     entry_content = content_without_sig[content_start:].strip()
 
     # Get zettel_id from frontmatter (REQUIRED - no fallback)
@@ -529,10 +669,10 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
 
     # Extract category from frontmatter
     category_from_frontmatter = frontmatter.get("category", "")
-    
+
     # Extract category from file path (supports nested categories)
     from kiwi_mcp.utils.paths import extract_category_path
-    
+
     # Determine location (project or user) by checking path
     location = "project" if ".ai" in str(file_path) else "user"
     project_path = None
@@ -542,7 +682,7 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
         if ".ai" in path_parts:
             ai_index = path_parts.index(".ai")
             project_path = Path(*path_parts[:ai_index])
-    
+
     category_from_path = extract_category_path(file_path, "knowledge", location, project_path)
 
     # Validate category consistency
@@ -569,7 +709,7 @@ def parse_knowledge_entry(file_path: Path) -> Dict[str, Any]:
                 f"    Run directive edit_knowledge with zettel_id='{zettel_id}'\n"
                 f"    Fix mismatch (update frontmatter or move file)"
             )
-    
+
     # Use path category if frontmatter category missing, otherwise use frontmatter (validated above)
     category = category_from_path if not category_from_frontmatter else category_from_frontmatter
 
@@ -713,6 +853,7 @@ def _extract_yaml_frontmatter(content: str) -> Dict[str, Any]:
     # Use proper YAML parsing to handle arrays, quoted strings, etc.
     try:
         import yaml
+
         result = yaml.safe_load(yaml_content) or {}
         return result
     except Exception:

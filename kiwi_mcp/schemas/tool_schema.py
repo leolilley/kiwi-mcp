@@ -22,37 +22,64 @@ import yaml
 # PARSERS - Minimal preprocessors for different file types
 # =============================================================================
 
+
 def _parse_text(content: str) -> Dict[str, Any]:
     """Raw text - no preprocessing."""
     return {"content": content}
 
 
-def _parse_yaml(content: str) -> Dict[str, Any]:
-    """Parse YAML content."""
-    try:
-        return {"data": yaml.safe_load(content) or {}, "content": content}
-    except Exception:
-        return {"data": {}, "content": content}
+# Dynamic parser loading
+_loaded_parsers: Dict[str, Any] = {}
 
 
-def _parse_python_ast(content: str) -> Dict[str, Any]:
-    """Parse Python AST."""
-    try:
-        return {"ast": ast.parse(content), "content": content}
-    except SyntaxError:
-        return {"ast": None, "content": content}
+def _load_parser(name: str, project_path: Optional[Path] = None):
+    """Load a parser from .ai/parsers/ directories."""
+    from kiwi_mcp.utils.resolvers import get_user_space
+
+    search_paths = [
+        project_path / ".ai" / "parsers" if project_path else None,
+        Path.cwd() / ".ai" / "parsers",
+        get_user_space() / "parsers",
+    ]
+
+    for p in filter(None, search_paths):
+        f = p / f"{name}.py"
+        if f.exists():
+            code = f.read_text()
+            ns = {"__builtins__": __builtins__}
+            exec(code, ns)
+            if "parse" in ns:
+                _loaded_parsers[name] = ns["parse"]
+                return
 
 
-PARSERS = {
+def get_parser(name: str, project_path: Optional[Path] = None):
+    """Get parser by name, loading from RYE if needed."""
+    # Check builtin first
+    if name == "text":
+        return _parse_text
+
+    # Check loaded parsers
+    if name not in _loaded_parsers:
+        _load_parser(name, project_path)
+
+    # Return loaded parser or fallback to text
+    return _loaded_parsers.get(name, _parse_text)
+
+
+# Keep only text parser as builtin
+BUILTIN_PARSERS = {
     "text": _parse_text,
-    "yaml": _parse_yaml,
-    "python_ast": _parse_python_ast,
 }
+
+# Legacy alias for compatibility
+PARSERS = BUILTIN_PARSERS
 
 
 # =============================================================================
 # PRIMITIVES - Generic extraction functions
 # =============================================================================
+
 
 def _extract_filename(rule: Dict, parsed: Dict, file_path: Path) -> Optional[str]:
     """Extract name from filename stem."""
@@ -65,7 +92,7 @@ def _extract_regex(rule: Dict, parsed: Dict, file_path: Path) -> Optional[str]:
     pattern = rule.get("pattern")
     if not pattern:
         return None
-    
+
     flags = re.MULTILINE if rule.get("multiline") else 0
     match = re.search(pattern, content, flags)
     if match:
@@ -83,10 +110,10 @@ def _extract_path(rule: Dict, parsed: Dict, file_path: Path) -> Optional[Any]:
     data = parsed.get("data", {})
     if not isinstance(data, dict):
         return None
-    
+
     key = rule.get("key", "")
     keys = key.split(".") if "." in key else [key]
-    
+
     current = data
     for k in keys:
         if isinstance(current, dict) and k in current:
@@ -105,11 +132,11 @@ def _extract_ast_var(rule: Dict, parsed: Dict, file_path: Path) -> Optional[Any]
     tree = parsed.get("ast")
     if not tree:
         return None
-    
+
     var_name = rule.get("name")
     if not var_name:
         return None
-    
+
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
@@ -128,7 +155,7 @@ def _extract_ast_docstring(rule: Dict, parsed: Dict, file_path: Path) -> Optiona
     tree = parsed.get("ast")
     if not tree or not tree.body:
         return None
-    
+
     first = tree.body[0]
     if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
         if isinstance(first.value.value, str):
@@ -158,6 +185,7 @@ PRIMITIVES = {
 # BOOTSTRAP - Loads extractor tools
 # =============================================================================
 
+
 class Bootstrap:
     """Load extractor tools by reading their module variables."""
 
@@ -169,12 +197,12 @@ class Bootstrap:
         try:
             content = file_path.read_text()
             tree = ast.parse(content)
-            
+
             extensions = None
             parser = "text"  # Default parser
             signature_format = None
             rules = None
-            
+
             for node in tree.body:
                 if isinstance(node, ast.Assign) and len(node.targets) == 1:
                     target = node.targets[0]
@@ -199,7 +227,7 @@ class Bootstrap:
                                 rules = ast.literal_eval(node.value)
                             except (ValueError, TypeError):
                                 pass
-            
+
             if extensions and rules:
                 return {
                     "extensions": extensions,
@@ -209,7 +237,7 @@ class Bootstrap:
                     "path": file_path,
                 }
             return None
-            
+
         except Exception:
             return None
 
@@ -218,6 +246,7 @@ class Bootstrap:
 # EXTRACTOR VALIDATION
 # =============================================================================
 
+
 class ExtractorValidator:
     """Validates extractor tools have correct structure."""
 
@@ -225,11 +254,11 @@ class ExtractorValidator:
     def validate(extractor_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate an extractor's structure."""
         issues = []
-        
+
         extensions = extractor_data.get("extensions")
         parser = extractor_data.get("parser", "text")
         rules = extractor_data.get("rules")
-        
+
         # Validate EXTENSIONS
         if not extensions:
             issues.append("EXTENSIONS is required")
@@ -241,11 +270,11 @@ class ExtractorValidator:
                     issues.append(f"Extension must be string, got {type(ext).__name__}")
                 elif not ext.startswith("."):
                     issues.append(f"Extension must start with '.', got '{ext}'")
-        
+
         # Validate PARSER
         if parser not in PARSERS:
             issues.append(f"Unknown PARSER '{parser}'. Valid: {list(PARSERS.keys())}")
-        
+
         # Validate EXTRACTION_RULES
         if not rules:
             issues.append("EXTRACTION_RULES is required")
@@ -256,7 +285,7 @@ class ExtractorValidator:
                 if not isinstance(rule, dict):
                     issues.append(f"Rule for '{field_name}' must be a dict")
                     continue
-                
+
                 rule_type = rule.get("type")
                 if not rule_type:
                     issues.append(f"Rule for '{field_name}' missing 'type'")
@@ -265,7 +294,7 @@ class ExtractorValidator:
                         f"Rule '{field_name}' has unknown type '{rule_type}'. "
                         f"Valid types: {list(PRIMITIVES.keys())}"
                     )
-                
+
                 # Type-specific validation
                 if rule_type == "regex" and "pattern" not in rule:
                     issues.append(f"Rule '{field_name}' (regex) requires 'pattern'")
@@ -273,7 +302,7 @@ class ExtractorValidator:
                     issues.append(f"Rule '{field_name}' (path) requires 'key'")
                 if rule_type == "ast_var" and "name" not in rule:
                     issues.append(f"Rule '{field_name}' (ast_var) requires 'name'")
-        
+
         return {"valid": len(issues) == 0, "issues": issues}
 
 
@@ -304,10 +333,11 @@ VALIDATION_SCHEMA = {
 # SCHEMA EXTRACTOR - Dynamic extraction using loaded rules
 # =============================================================================
 
+
 class SchemaExtractor:
     """
     Extraction engine that loads rules from extractor tools.
-    
+
     Uses Bootstrap to load extractors, then PRIMITIVES for extraction.
     """
 
@@ -319,21 +349,22 @@ class SchemaExtractor:
         """Load extractor tools using bootstrap."""
         if self._extractors_loaded:
             return
-        
+
         search_paths = []
         if project_path:
             search_paths.append(project_path / ".ai" / "tools" / "extractors")
         search_paths.append(Path.cwd() / ".ai" / "tools" / "extractors")
-        
+
         from kiwi_mcp.utils.resolvers import get_user_space
+
         search_paths.append(get_user_space() / "tools" / "extractors")
-        
+
         for extractors_dir in search_paths:
             if extractors_dir.exists():
                 for file_path in extractors_dir.glob("*.py"):
                     if file_path.name.startswith("_"):
                         continue
-                    
+
                     extractor_data = Bootstrap.load_extractor(file_path)
                     if extractor_data:
                         # Validate extractor
@@ -344,29 +375,29 @@ class SchemaExtractor:
                                     "parser": extractor_data["parser"],
                                     "rules": extractor_data["rules"],
                                 }
-        
+
         self._extractors_loaded = True
 
     def extract(self, file_path: Path, project_path: Optional[Path] = None) -> Dict[str, Any]:
         """Extract metadata using dynamically loaded rules."""
         self._load_extractors(project_path)
-        
+
         ext = file_path.suffix.lower()
         extractor = self._extractors.get(ext)
-        
+
         if not extractor:
             raise ValueError(
                 f"No extractor found for extension '{ext}'. "
                 f"Available: {list(self._extractors.keys())}"
             )
-        
+
         content = file_path.read_text()
-        
+
         # Use the extractor's parser
         parser_name = extractor["parser"]
         parser_func = PARSERS.get(parser_name, _parse_text)
         parsed = parser_func(content)
-        
+
         # Apply extraction rules
         result = {}
         for field, rule in extractor["rules"].items():
@@ -375,7 +406,7 @@ class SchemaExtractor:
                 result[field] = primitive(rule, parsed, file_path)
             else:
                 result[field] = None
-        
+
         return result
 
     def get_supported_extensions(self) -> List[str]:
@@ -388,6 +419,7 @@ class SchemaExtractor:
 # SCHEMA VALIDATOR
 # =============================================================================
 
+
 class SchemaValidator:
     """Validates extracted tool data."""
 
@@ -399,15 +431,15 @@ class SchemaValidator:
         issues = []
         warnings = []
         fields = self.schema["fields"]
-        
+
         for field_name, field_schema in fields.items():
             value = data.get(field_name)
-            
+
             if field_schema.get("required"):
                 if value is None or value == "":
                     issues.append(f"Missing required field: {field_name}")
                     continue
-            
+
             required_unless = field_schema.get("required_unless")
             if required_unless and value is None:
                 condition_met = False
@@ -431,13 +463,13 @@ class SchemaValidator:
                     issues.append(
                         f"Field '{field_name}' is required unless {cond_field} is {cond_str}"
                     )
-            
+
             if value is not None:
                 field_type = field_schema.get("type")
                 type_error = self._validate_type(value, field_type, field_name)
                 if type_error:
                     issues.append(type_error)
-        
+
         return {"valid": len(issues) == 0, "issues": issues, "warnings": warnings}
 
     def _validate_type(self, value: Any, expected_type: str, field_name: str) -> Optional[str]:
@@ -461,7 +493,9 @@ class SchemaValidator:
                 return f"Field '{field_name}' must be a list"
             for item in value:
                 if not isinstance(item, str):
-                    return f"Field '{field_name}' must contain only strings, got {type(item).__name__}"
+                    return (
+                        f"Field '{field_name}' must contain only strings, got {type(item).__name__}"
+                    )
                 if "." not in item:
                     return f"Field '{field_name}' capability '{item}' must follow resource.action format (e.g., fs.read)"
         return None
@@ -503,7 +537,10 @@ def validate_extractor(file_path: Path) -> Dict[str, Any]:
     """Validate an extractor tool's structure."""
     extractor_data = Bootstrap.load_extractor(file_path)
     if not extractor_data:
-        return {"valid": False, "issues": ["Failed to load extractor (missing EXTENSIONS or EXTRACTION_RULES)"]}
+        return {
+            "valid": False,
+            "issues": ["Failed to load extractor (missing EXTENSIONS or EXTRACTION_RULES)"],
+        }
     return ExtractorValidator.validate(extractor_data)
 
 

@@ -5,23 +5,18 @@ Implements search, load, execute operations for knowledge entries.
 Handles LOCAL file operations directly, only uses registry for REMOTE operations.
 """
 
-from typing import Dict, Any, Optional, List, Literal
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
 
 from kiwi_mcp.handlers import SortBy
-import json
-from pathlib import Path
-
+from kiwi_mcp.primitives.integrity import compute_knowledge_integrity, short_hash
+from kiwi_mcp.utils.file_search import score_relevance, search_markdown_files
 from kiwi_mcp.utils.logger import get_logger
-from kiwi_mcp.utils.resolvers import KnowledgeResolver, get_user_space
-from kiwi_mcp.utils.parsers import parse_knowledge_entry
-from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
 from kiwi_mcp.utils.metadata_manager import MetadataManager
-from kiwi_mcp.utils.validators import ValidationManager, compare_versions
-from kiwi_mcp.primitives.integrity import (
-    compute_knowledge_integrity,
-    short_hash,
-)
+from kiwi_mcp.utils.parsers import parse_knowledge_entry
+from kiwi_mcp.utils.resolvers import KnowledgeResolver, get_user_space
 from kiwi_mcp.utils.schema_validator import SchemaValidator
+from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 
 
 class KnowledgeHandler:
@@ -34,7 +29,10 @@ class KnowledgeHandler:
 
         # Local file handling
         self.resolver = KnowledgeResolver(self.project_path)
-        self.search_paths = [self.resolver.project_knowledge, self.resolver.user_knowledge]
+        self.search_paths = [
+            self.resolver.project_knowledge,
+            self.resolver.user_knowledge,
+        ]
 
         # Frontmatter schema validation
         self._schema_validator = SchemaValidator()
@@ -47,8 +45,8 @@ class KnowledgeHandler:
         """Initialize project vector store for automatic embedding."""
         try:
             from kiwi_mcp.storage.vector import (
-                LocalVectorStore,
                 EmbeddingService,
+                LocalVectorStore,
                 load_vector_config,
             )
 
@@ -63,6 +61,7 @@ class KnowledgeHandler:
                 storage_path=vector_path,
                 collection_name="project_items",
                 embedding_service=embedding_service,
+                source="project",
             )
         except ValueError as e:
             # Missing config - vector search disabled
@@ -95,7 +94,9 @@ class KnowledgeHandler:
             metadata=metadata,
         )
 
-    def _verify_knowledge_integrity(self, entry_data: Dict[str, Any], stored_hash: str) -> bool:
+    def _verify_knowledge_integrity(
+        self, entry_data: Dict[str, Any], stored_hash: str
+    ) -> bool:
         """
         Verify knowledge entry content matches stored canonical integrity hash.
 
@@ -109,7 +110,9 @@ class KnowledgeHandler:
         computed = self._compute_knowledge_integrity(entry_data)
         return computed == stored_hash
 
-    def _extract_frontmatter_schema(self, entry_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _extract_frontmatter_schema(
+        self, entry_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         """
         Extract optional frontmatter_schema from knowledge entry.
 
@@ -165,7 +168,10 @@ class KnowledgeHandler:
                     "minLength": 1,
                     "description": "Type of knowledge entry (e.g., pattern, learning, reference, concept, decision, insight, procedure, api_fact, experiment, template, workflow, etc.)",
                 },
-                "category": {"type": "string", "description": "Category for organization"},
+                "category": {
+                    "type": "string",
+                    "description": "Category for organization",
+                },
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -235,7 +241,7 @@ class KnowledgeHandler:
     async def search(
         self,
         query: str,
-        source: str = "local",
+        source: str = "project",
         category: Optional[str] = None,
         entry_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
@@ -247,7 +253,7 @@ class KnowledgeHandler:
 
         Args:
             query: Search query (natural language)
-            source: "local", "registry", or "all"
+            source: "project", "user", or "all" (both project and user)
             category: Optional category filter
             entry_type: Optional entry type filter
             tags: Optional tags filter
@@ -288,12 +294,20 @@ class KnowledgeHandler:
                 )
             else:  # "score" (default)
                 results.sort(
-                    key=lambda x: (-x.get("score", 0), source_priority.get(x.get("source", ""), 99))
+                    key=lambda x: (
+                        -x.get("score", 0),
+                        source_priority.get(x.get("source", ""), 99),
+                    )
                 )
 
             results = results[:limit]
 
-            return {"query": query, "source": source, "results": results, "total": len(results)}
+            return {
+                "query": query,
+                "source": source,
+                "results": results,
+                "total": len(results),
+            }
         except Exception as e:
             return {"error": str(e), "message": "Failed to search knowledge entries"}
 
@@ -329,13 +343,17 @@ class KnowledgeHandler:
                 search_base = self.project_path / ".ai" / "knowledge"
                 file_path = self._find_entry_in_path(zettel_id, search_base)
                 if not file_path:
-                    return {"error": f"Knowledge entry '{zettel_id}' not found in project"}
+                    return {
+                        "error": f"Knowledge entry '{zettel_id}' not found in project"
+                    }
 
                 # If destination differs from source, copy the file
                 if destination == "user":
                     # Check signature before copying
                     content = file_path.read_text()
-                    signature_info = MetadataManager.get_signature_info("knowledge", content)
+                    signature_info = MetadataManager.get_signature_info(
+                        "knowledge", content
+                    )
                     if not signature_info:
                         return {
                             "error": f"Knowledge entry has no signature",
@@ -349,7 +367,9 @@ class KnowledgeHandler:
                     target_path = get_user_space() / "knowledge" / relative_path
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     target_path.write_text(content)
-                    self.logger.info(f"Copied knowledge entry from project to user: {target_path}")
+                    self.logger.info(
+                        f"Copied knowledge entry from project to user: {target_path}"
+                    )
 
                     entry_data = parse_knowledge_entry(target_path)
                     entry_data["source"] = "project"
@@ -359,7 +379,9 @@ class KnowledgeHandler:
                 else:
                     # Read-only mode: check signature and warn if missing
                     file_content = file_path.read_text()
-                    signature_info = MetadataManager.get_signature_info("knowledge", file_content)
+                    signature_info = MetadataManager.get_signature_info(
+                        "knowledge", file_content
+                    )
 
                     entry_data = parse_knowledge_entry(file_path)
                     entry_data["source"] = "project"
@@ -379,13 +401,17 @@ class KnowledgeHandler:
             search_base = get_user_space() / "knowledge"
             file_path = self._find_entry_in_path(zettel_id, search_base)
             if not file_path:
-                return {"error": f"Knowledge entry '{zettel_id}' not found in user space"}
+                return {
+                    "error": f"Knowledge entry '{zettel_id}' not found in user space"
+                }
 
             # If destination differs from source, copy the file
             if destination == "project":
                 # Check signature before copying
                 content = file_path.read_text()
-                signature_info = MetadataManager.get_signature_info("knowledge", content)
+                signature_info = MetadataManager.get_signature_info(
+                    "knowledge", content
+                )
                 if not signature_info:
                     return {
                         "error": f"Knowledge entry has no signature",
@@ -398,7 +424,9 @@ class KnowledgeHandler:
                 target_path = self.project_path / ".ai" / "knowledge" / relative_path
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_text(content)
-                self.logger.info(f"Copied knowledge entry from user to project: {target_path}")
+                self.logger.info(
+                    f"Copied knowledge entry from user to project: {target_path}"
+                )
 
                 entry_data = parse_knowledge_entry(target_path)
                 entry_data["source"] = "user"
@@ -408,7 +436,9 @@ class KnowledgeHandler:
             else:
                 # Read-only mode: check signature and warn if missing
                 file_content = file_path.read_text()
-                signature_info = MetadataManager.get_signature_info("knowledge", file_content)
+                signature_info = MetadataManager.get_signature_info(
+                    "knowledge", file_content
+                )
 
                 entry_data = parse_knowledge_entry(file_path)
                 entry_data["source"] = "user"
@@ -453,7 +483,9 @@ class KnowledgeHandler:
 
         if current_source == "project":
             try:
-                user_path = self._find_entry_in_path(zettel_id, self.resolver.user_knowledge)
+                user_path = self._find_entry_in_path(
+                    zettel_id, self.resolver.user_knowledge
+                )
                 if user_path and user_path.exists():
                     try:
                         user_data = parse_knowledge_entry(user_path)
@@ -461,7 +493,10 @@ class KnowledgeHandler:
                         if user_version:
                             try:
                                 if compare_versions(current_version, user_version) < 0:
-                                    if compare_versions(newest_version, user_version) < 0:
+                                    if (
+                                        compare_versions(newest_version, user_version)
+                                        < 0
+                                    ):
                                         newest_version = user_version
                                         newest_location = "user"
                             except Exception as e:
@@ -473,7 +508,9 @@ class KnowledgeHandler:
                             f"Failed to parse user space knowledge {zettel_id}: {e}"
                         )
             except Exception as e:
-                self.logger.warning(f"Failed to check user space for knowledge {zettel_id}: {e}")
+                self.logger.warning(
+                    f"Failed to check user space for knowledge {zettel_id}: {e}"
+                )
 
         if newest_location and newest_version != current_version:
             return {
@@ -541,7 +578,9 @@ class KnowledgeHandler:
 
                 if score > 0:
                     # Determine source by checking if file is in project or user knowledge
-                    is_project = str(file_path).startswith(str(self.resolver.project_knowledge))
+                    is_project = str(file_path).startswith(
+                        str(self.resolver.project_knowledge)
+                    )
 
                     results.append(
                         {
@@ -560,7 +599,9 @@ class KnowledgeHandler:
 
         return results
 
-    async def _run_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_knowledge(
+        self, zettel_id: str, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Load and return knowledge content for agent to use."""
         # Find local knowledge entry
         file_path = self.resolver.resolve(zettel_id)
@@ -573,7 +614,10 @@ class KnowledgeHandler:
         # Extract integrity hash from signature
         file_content = file_path.read_text()
         stored_hash = MetadataManager.get_signature_hash(
-            "knowledge", file_content, file_path=file_path, project_path=self.project_path
+            "knowledge",
+            file_content,
+            file_path=file_path,
+            project_path=self.project_path,
         )
 
         if not stored_hash:
@@ -674,7 +718,9 @@ class KnowledgeHandler:
                     }
 
             # Get integrity hash from signature
-            signature_info = MetadataManager.get_signature_info("knowledge", file_content)
+            signature_info = MetadataManager.get_signature_info(
+                "knowledge", file_content
+            )
             content_hash = signature_info["hash"] if signature_info else None
 
             out = {
@@ -700,9 +746,14 @@ class KnowledgeHandler:
                 out["version_warning"] = version_warning
             return out
         except Exception as e:
-            return {"error": f"Failed to parse knowledge entry: {str(e)}", "path": str(file_path)}
+            return {
+                "error": f"Failed to parse knowledge entry: {str(e)}",
+                "path": str(file_path),
+            }
 
-    async def _sign_knowledge(self, zettel_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _sign_knowledge(
+        self, zettel_id: str, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Validate and sign an existing knowledge entry file.
 
@@ -760,7 +811,10 @@ class KnowledgeHandler:
         try:
             entry_data = parse_knowledge_entry(file_path)
         except Exception as e:
-            return {"error": f"Failed to parse existing entry: {str(e)}", "path": str(file_path)}
+            return {
+                "error": f"Failed to parse existing entry: {str(e)}",
+                "path": str(file_path),
+            }
 
         # Validate entry
         validation_result = await ValidationManager.validate_and_embed(
@@ -831,7 +885,10 @@ class KnowledgeHandler:
 
         # Compute unified integrity hash on content WITHOUT signature
         # This allows re-signing to produce consistent hashes
-        from kiwi_mcp.utils.metadata_manager import compute_unified_integrity, MetadataManager
+        from kiwi_mcp.utils.metadata_manager import (
+            MetadataManager,
+            compute_unified_integrity,
+        )
 
         # Remove existing signature before hashing (chained validation)
         strategy = MetadataManager.get_strategy("knowledge")
@@ -858,7 +915,10 @@ class KnowledgeHandler:
 
         # Get signature info for response
         signature_info = MetadataManager.get_signature_info(
-            "knowledge", signed_content, file_path=file_path, project_path=self.project_path
+            "knowledge",
+            signed_content,
+            file_path=file_path,
+            project_path=self.project_path,
         )
 
         return {

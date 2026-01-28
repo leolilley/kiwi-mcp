@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Protocol, List, runtime_checkable
 from datetime import datetime
 
 
@@ -23,6 +23,34 @@ class EmbeddingRecord:
     metadata: dict
     validated_at: datetime
     signature: Optional[str] = None
+
+
+@runtime_checkable
+class VectorBackend(Protocol):
+    """Protocol for vector search backends (RAG plugins)."""
+
+    async def search(
+        self,
+        query: str,
+        item_type: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[SearchResult]:
+        """Semantic similarity search."""
+        ...
+
+    async def embed_and_store(
+        self,
+        item_id: str,
+        item_type: str,
+        content: str,
+        metadata: dict,
+    ) -> bool:
+        """Embed content and store in vector DB."""
+        ...
+
+    def is_available(self) -> bool:
+        """Check if backend is configured and ready."""
+        ...
 
 
 class VectorStore(ABC):

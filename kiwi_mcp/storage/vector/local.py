@@ -12,7 +12,7 @@ from .simple_store import SimpleVectorStore
 
 class LocalVectorStore(VectorStore):
     """Local vector storage using SQLite and API embeddings.
-    
+
     Wrapper around SimpleVectorStore for consistent interface.
     """
 
@@ -21,9 +21,11 @@ class LocalVectorStore(VectorStore):
         storage_path: Path,
         collection_name: str = "kiwi_items",
         embedding_service: Optional[Any] = None,
+        source: str = "project",
     ):
         self.storage_path = Path(storage_path)
         self.collection_name = collection_name
+        self.source = source
         storage_path.mkdir(parents=True, exist_ok=True)
 
         # Use SimpleVectorStore internally
@@ -31,8 +33,9 @@ class LocalVectorStore(VectorStore):
             storage_path=storage_path,
             collection_name=collection_name,
             embedding_service=embedding_service,
+            source=source,
         )
-        
+
         # Keep reference to embedder
         self.embedder = embedding_service
 

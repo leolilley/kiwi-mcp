@@ -50,9 +50,9 @@ This folder contains the complete implementation plan for Thread and Streaming A
 | 8.6   | Help tool extensions          | 2    | 8.5          | ⏭️ Skipped |
 | 8.7   | Thread intervention tools     | 3    | 8.5          | 📋         |
 | 8.8   | Cleanup: remove kiwi_mcp/mcp/ | 1    | 8.4          | ✅         |
-| 8.9   | Thread ID sanitization        | 0.5  | 8.5          | 📋         |
-| 8.10  | Capability token system       | 1-2  | 8.5          | 📋         |
-| 8.11  | Tool chain error handling     | 1    | 8.1          | 📋         |
+| 8.9   | Thread ID sanitization        | 0.5  | 8.5          | ✅         |
+| 8.10  | Capability token system       | 1-2  | 8.5          | ✅         |
+| 8.11  | Tool chain error handling     | 1    | 8.1          | ✅         |
 | 8.12  | Cost tracking validation      | 1    | None         | 📋         |
 | 8.13  | MCP connector pattern         | 1-2  | 8.4, 8.10    | 📋         |
 
@@ -127,6 +127,29 @@ implementation/thread-streaming/
 3. Work through tasks in order (01-, 02-, etc.)
 4. Verify each task before moving to the next
 5. Complete phase verification before starting next phase
+
+## Recent Completions
+
+### ✅ Phase 8.10: Capability Token System (COMPLETED 2026-01-28)
+- CapabilityToken dataclass with Ed25519 signing
+- Permission-to-capability conversion system
+- Token attenuation for parent-child threads
+- Tool YAML `requires` field validation
+- 7 capability modules (fs, net, db, git, process, mcp)
+- Complete test coverage (28/28 tests passing)
+- Integration with thread registry and spawning
+
+**Key Achievement:** Security foundation for thread permissions is now complete and operational.
+
+### ✅ Phase 8.11: Tool Chain Error Handling (COMPLETED 2026-01-28)
+- ToolChainError with full execution context
+- ValidationError and FailedToolContext for precise diagnostics
+- Error wrapping at every execution layer
+- LLM-actionable error responses with JSON serialization
+- Complete test coverage (19/19 tests passing)
+- Integration with executor and config validation
+
+**Key Achievement:** Comprehensive error handling provides clear diagnostics and LLM-actionable responses for any tool chain failures.
 
 ## Related Documents
 

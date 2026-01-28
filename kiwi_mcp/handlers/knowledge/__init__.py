@@ -3,7 +3,7 @@
 from .handler import KnowledgeHandler
 
 
-async def search(query: str, source: str = "local", **kwargs):
+async def search(query: str, source: str = "project", **kwargs):
     """Search for knowledge entries."""
     handler = KnowledgeHandler(project_path=kwargs.get("project_path"))
     return await handler.search(query, source=source, **kwargs)

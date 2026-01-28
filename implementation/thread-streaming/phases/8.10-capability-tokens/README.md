@@ -1,8 +1,11 @@
-# Phase 8.10: Capability Token System
+# Phase 8.10: Capability Token System ✅ COMPLETED
 
 **Estimated Time:** 1-2 days  
 **Dependencies:** Phase 8.5  
-**Status:** 📋 Planning
+**Status:** ✅ Complete
+
+**Implementation Date:** 2026-01-28  
+**Completion Note:** All core components implemented, tested, and integrated. The capability token system is now fully operational and ready for use.
 
 ## Overview
 
@@ -140,14 +143,14 @@ attenuated = set(parent_caps) & set(child_declared)
 
 ## Success Criteria
 
-- [ ] Capability tools exist and are discoverable via `CapabilityRegistry`
-- [ ] Tokens are signed, serializable, and verifiable
-- [ ] `permissions_to_caps()` correctly maps all permission types
-- [ ] `attenuate_token()` implements intersection correctly
-- [ ] Tool YAML `requires` field is validated
-- [ ] Harness calls `mint_token()` when spawning threads
-- [ ] `<orchestration>` tag is parsed from directives
-- [ ] All components tested with >95% coverage
+- [x] Capability tools exist and are discoverable via `CapabilityRegistry`
+- [x] Tokens are signed, serializable, and verifiable
+- [x] `permissions_to_caps()` correctly maps all permission types
+- [x] `attenuate_token()` implements intersection correctly
+- [x] Tool YAML `requires` field is validated
+- [x] Harness calls `mint_token()` when spawning threads
+- [x] `<orchestration>` tag is parsed from directives
+- [x] All components tested with >95% coverage
 
 ## Related Docs
 

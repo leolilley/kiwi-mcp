@@ -63,6 +63,7 @@ class ToolHandler:
                 storage_path=vector_path,
                 collection_name="project_items",
                 embedding_service=embedding_service,
+                source="project",
             )
         except ValueError as e:
             # Missing config - vector search disabled
@@ -85,14 +86,14 @@ class ToolHandler:
             return False
 
     async def search(
-        self, query: str, source: str = "all", limit: int = 10, sort_by: SortBy = "score"
+        self, query: str, source: str = "project", limit: int = 10, sort_by: SortBy = "score"
     ) -> Dict[str, Any]:
         """
         Search for tools/scripts.
 
         Args:
             query: Search query
-            source: "local", "registry", or "all"
+            source: "project", "user", or "all" (both project and user)
             limit: Max results
             sort_by: Sort method ("score", "date", "name")
 

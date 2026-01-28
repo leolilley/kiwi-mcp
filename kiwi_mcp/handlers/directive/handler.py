@@ -5,22 +5,21 @@ Implements search, load, execute operations for directives.
 Handles LOCAL file operations directly, only uses registry for REMOTE operations.
 """
 
-from typing import Dict, Any, Optional, List, Literal
-from kiwi_mcp.handlers import SortBy
-from pathlib import Path
+import json
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
+
+from kiwi_mcp.handlers import SortBy
+from kiwi_mcp.primitives.integrity import compute_directive_integrity
+from kiwi_mcp.utils.file_search import score_relevance, search_markdown_files
 from kiwi_mcp.utils.logger import get_logger
-from kiwi_mcp.utils.resolvers import DirectiveResolver
-from kiwi_mcp.utils.parsers import parse_directive_file
-from kiwi_mcp.utils.file_search import search_markdown_files, score_relevance
 from kiwi_mcp.utils.metadata_manager import MetadataManager, compute_unified_integrity
+from kiwi_mcp.utils.parsers import parse_directive_file
+from kiwi_mcp.utils.resolvers import DirectiveResolver
+from kiwi_mcp.utils.schema_validator import SchemaValidator
 from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 from kiwi_mcp.utils.xml_error_helper import format_error_with_context
-from kiwi_mcp.primitives.integrity import (
-    compute_directive_integrity,
-    short_hash,
-)
-from kiwi_mcp.utils.schema_validator import SchemaValidator
 
 
 class DirectiveHandler:
@@ -33,7 +32,10 @@ class DirectiveHandler:
 
         # Local file handling
         self.resolver = DirectiveResolver(self.project_path)
-        self.search_paths = [self.resolver.project_directives, self.resolver.user_directives]
+        self.search_paths = [
+            self.resolver.project_directives,
+            self.resolver.user_directives,
+        ]
 
         # MCP tool discovery removed - handled by tools
 
@@ -48,8 +50,8 @@ class DirectiveHandler:
         """Initialize project vector store for automatic embedding."""
         try:
             from kiwi_mcp.storage.vector import (
-                LocalVectorStore,
                 EmbeddingService,
+                LocalVectorStore,
                 load_vector_config,
             )
 
@@ -64,6 +66,7 @@ class DirectiveHandler:
                 storage_path=vector_path,
                 collection_name="project_items",
                 embedding_service=embedding_service,
+                source="project",
             )
         except ValueError as e:
             # Missing config - vector search disabled
@@ -93,9 +96,11 @@ class DirectiveHandler:
         metadata = {
             "category": directive_data.get("category"),
             "description": directive_data.get("description"),
-            "model_tier": directive_data.get("model", {}).get("tier")
-            if isinstance(directive_data.get("model"), dict)
-            else None,
+            "model_tier": (
+                directive_data.get("model", {}).get("tier")
+                if isinstance(directive_data.get("model"), dict)
+                else None
+            ),
         }
 
         return compute_directive_integrity(
@@ -150,11 +155,13 @@ class DirectiveHandler:
         if "schema" in inputs_section:
             schema_data = inputs_section["schema"]
             # Handle both text content and _text attribute
-            schema_text = schema_data.get("_text") if isinstance(schema_data, dict) else schema_data
+            schema_text = (
+                schema_data.get("_text")
+                if isinstance(schema_data, dict)
+                else schema_data
+            )
             if schema_text:
                 try:
-                    import json
-
                     return json.loads(schema_text)
                 except json.JSONDecodeError:
                     self.logger.warning("Invalid JSON in directive input_schema")
@@ -166,16 +173,18 @@ class DirectiveHandler:
             schema_attr = attrs.get("schema")
             if schema_attr:
                 try:
-                    import json
-
                     return json.loads(schema_attr)
                 except json.JSONDecodeError:
-                    self.logger.warning("Invalid JSON in directive input_schema attribute")
+                    self.logger.warning(
+                        "Invalid JSON in directive input_schema attribute"
+                    )
                     return None
 
         return None
 
-    def _build_input_schema_from_spec(self, inputs_spec: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _build_input_schema_from_spec(
+        self, inputs_spec: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         """
         Build a JSON Schema from the directive's input specifications.
 
@@ -247,7 +256,9 @@ class DirectiveHandler:
             return {
                 "valid": True,
                 "issues": [],
-                "warnings": ["JSON Schema validation not available - skipping input validation"],
+                "warnings": [
+                    "JSON Schema validation not available - skipping input validation"
+                ],
             }
 
         return self._schema_validator.validate(params, schema)
@@ -255,7 +266,7 @@ class DirectiveHandler:
     async def search(
         self,
         query: str,
-        source: str = "local",
+        source: str = "project",
         limit: int = 10,
         sort_by: SortBy = "score",
         categories: Optional[List[str]] = None,
@@ -269,7 +280,7 @@ class DirectiveHandler:
 
         Args:
             query: Search query (natural language)
-            source: "local", "registry", or "all"
+            source: "project", "user", "all" (both project and user)
             limit: Maximum number of results to return
             sort_by: "score", "success_rate", "date", or "downloads"
             categories: Filter by categories
@@ -312,13 +323,21 @@ class DirectiveHandler:
                 )
             else:  # "score" (default)
                 results.sort(
-                    key=lambda x: (-x.get("score", 0), source_priority.get(x.get("source", ""), 99))
+                    key=lambda x: (
+                        -x.get("score", 0),
+                        source_priority.get(x.get("source", ""), 99),
+                    )
                 )
 
             # Apply limit
             results = results[:limit]
 
-            return {"query": query, "source": source, "results": results, "total": len(results)}
+            return {
+                "query": query,
+                "source": source,
+                "results": results,
+                "total": len(results),
+            }
         except Exception as e:
             return {"error": str(e), "message": "Failed to search directives"}
 
@@ -351,7 +370,9 @@ class DirectiveHandler:
                 search_base = self.project_path / ".ai" / "directives"
                 file_path = self._find_in_path(directive_name, search_base)
                 if not file_path:
-                    return {"error": f"Directive '{directive_name}' not found in project"}
+                    return {
+                        "error": f"Directive '{directive_name}' not found in project"
+                    }
 
                 # If destination differs from source, copy the file
                 if destination == "user":
@@ -359,10 +380,12 @@ class DirectiveHandler:
                     content = file_path.read_text()
 
                     # Check signature before copying
-                    signature_info = MetadataManager.get_signature_info("directive", content)
+                    signature_info = MetadataManager.get_signature_info(
+                        "directive", content
+                    )
                     if not signature_info:
                         return {
-                            "error": f"Directive has no signature",
+                            "error": "Directive has no signature",
                             "path": str(file_path),
                             "solution": "Use execute action 'sign' to re-validate the directive before copying",
                         }
@@ -372,7 +395,9 @@ class DirectiveHandler:
                     target_path = Path.home() / ".ai" / "directives" / relative_path
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     target_path.write_text(content)
-                    self.logger.info(f"Copied directive from project to user: {target_path}")
+                    self.logger.info(
+                        f"Copied directive from project to user: {target_path}"
+                    )
 
                     directive_data = parse_directive_file(target_path)
                     directive_data["source"] = "project"
@@ -382,7 +407,9 @@ class DirectiveHandler:
                 else:
                     # Read-only mode: verify and warn, but don't block
                     file_content = file_path.read_text()
-                    signature_info = MetadataManager.get_signature_info("directive", file_content)
+                    signature_info = MetadataManager.get_signature_info(
+                        "directive", file_content
+                    )
 
                     directive_data = parse_directive_file(file_path)
                     directive_data["source"] = "project"
@@ -402,17 +429,21 @@ class DirectiveHandler:
             search_base = Path.home() / ".ai" / "directives"
             file_path = self._find_in_path(directive_name, search_base)
             if not file_path:
-                return {"error": f"Directive '{directive_name}' not found in user space"}
+                return {
+                    "error": f"Directive '{directive_name}' not found in user space"
+                }
 
             # If destination differs from source, copy the file
             if destination == "project":
                 # Check signature before copying
                 content = file_path.read_text()
 
-                signature_info = MetadataManager.get_signature_info("directive", content)
+                signature_info = MetadataManager.get_signature_info(
+                    "directive", content
+                )
                 if not signature_info:
                     return {
-                        "error": f"Directive has no signature",
+                        "error": "Directive has no signature",
                         "path": str(file_path),
                         "solution": "Use execute action 'sign' to re-validate the directive before copying",
                     }
@@ -422,7 +453,9 @@ class DirectiveHandler:
                 target_path = self.project_path / ".ai" / "directives" / relative_path
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_text(content)
-                self.logger.info(f"Copied directive from user to project: {target_path}")
+                self.logger.info(
+                    f"Copied directive from user to project: {target_path}"
+                )
 
                 directive_data = parse_directive_file(target_path)
                 directive_data["source"] = "user"
@@ -432,7 +465,9 @@ class DirectiveHandler:
             else:
                 # Read-only mode: check signature and warn if missing
                 file_content = file_path.read_text()
-                signature_info = MetadataManager.get_signature_info("directive", file_content)
+                signature_info = MetadataManager.get_signature_info(
+                    "directive", file_content
+                )
 
                 directive_data = parse_directive_file(file_path)
                 directive_data["source"] = "user"
@@ -447,10 +482,16 @@ class DirectiveHandler:
 
                 return directive_data
         except Exception as e:
-            return {"error": str(e), "message": f"Failed to load directive '{directive_name}'"}
+            return {
+                "error": str(e),
+                "message": f"Failed to load directive '{directive_name}'",
+            }
 
     async def execute(
-        self, action: str, directive_name: str, parameters: Optional[Dict[str, Any]] = None
+        self,
+        action: str,
+        directive_name: str,
+        parameters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Execute a directive or perform directive operation.
@@ -463,7 +504,9 @@ class DirectiveHandler:
         Returns:
             Dict with execution result
         """
-        self.logger.info(f"DirectiveHandler.execute: action={action}, directive={directive_name}")
+        self.logger.info(
+            f"DirectiveHandler.execute: action={action}, directive={directive_name}"
+        )
 
         try:
             if action == "run":
@@ -505,7 +548,9 @@ class DirectiveHandler:
 
                 if score > 0:
                     # Determine source by checking if file is in project or user directives
-                    is_project = str(file_path).startswith(str(self.resolver.project_directives))
+                    is_project = str(file_path).startswith(
+                        str(self.resolver.project_directives)
+                    )
 
                     results.append(
                         {
@@ -522,7 +567,83 @@ class DirectiveHandler:
 
         return results
 
-    async def _run_directive(self, directive_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_directive_paths(self, source: str = "project") -> List[Path]:
+        """
+        Get directive file paths from specified source.
+
+        Args:
+            source: "project", "user", or "all" (both project and user)
+
+        Returns:
+            List of Path objects for directive files
+        """
+        paths = []
+
+        if source in ("project", "all"):
+            project_dir = self.project_path / ".ai" / "directives"
+            if project_dir.exists():
+                paths.extend(project_dir.rglob("*.md"))
+
+        if source in ("user", "all"):
+            user_dir = Path.home() / ".ai" / "directives"
+            if user_dir.exists():
+                paths.extend(user_dir.rglob("*.md"))
+
+        return paths
+
+    def _extract_metadata(self, content: str) -> Dict[str, Any]:
+        """
+        Extract metadata from directive file content.
+
+        Args:
+            content: Raw file content
+
+        Returns:
+            Dict with extracted metadata (name, description, category, etc.)
+        """
+        metadata = {
+            "name": "",
+            "description": "",
+            "category": "",
+            "version": "0.0.0",
+        }
+
+        try:
+            # Extract XML content
+            import re
+
+            xml_match = re.search(r"```xml\s*(.*?)\s*```", content, re.DOTALL)
+            if not xml_match:
+                return metadata
+
+            xml_content = xml_match.group(1)
+
+            # Parse XML to extract metadata
+            root = ET.fromstring(xml_content)
+
+            # Get directive attributes
+            metadata["name"] = root.get("name", "")
+            metadata["version"] = root.get("version", "0.0.0")
+
+            # Get metadata section
+            metadata_elem = root.find("metadata")
+            if metadata_elem is not None:
+                desc_elem = metadata_elem.find("description")
+                if desc_elem is not None and desc_elem.text:
+                    metadata["description"] = desc_elem.text
+
+                category_elem = metadata_elem.find("category")
+                if category_elem is not None and category_elem.text:
+                    metadata["category"] = category_elem.text
+
+        except Exception as e:
+            self.logger.debug(f"Failed to extract metadata: {e}")
+
+        return metadata
+
+    async def _run_directive(
+        self, directive_name: str, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Load and return directive for agent to execute."""
         # Find local directive file
         file_path = self.resolver.resolve(directive_name)
@@ -552,12 +673,21 @@ class DirectiveHandler:
                     "path": str(file_path),
                 }
                 # Add specific error context
-                if any("permission" in issue.lower() for issue in validation_result["issues"]):
+                if any(
+                    "permission" in issue.lower()
+                    for issue in validation_result["issues"]
+                ):
                     error_response["error"] = "Directive permissions not satisfied"
-                    error_response["permissions_required"] = directive_data.get("permissions", [])
-                elif any("model" in issue.lower() for issue in validation_result["issues"]):
+                    error_response["permissions_required"] = directive_data.get(
+                        "permissions", []
+                    )
+                elif any(
+                    "model" in issue.lower() for issue in validation_result["issues"]
+                ):
                     error_response["error"] = "Directive model not valid"
-                    model_data = directive_data.get("model") or directive_data.get("model_class")
+                    model_data = directive_data.get("model") or directive_data.get(
+                        "model_class"
+                    )
                     error_response["model_found"] = model_data
                     error_response["hint"] = (
                         "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
@@ -584,7 +714,10 @@ class DirectiveHandler:
             # Extract integrity hash from signature
             file_content = file_path.read_text()
             stored_hash = MetadataManager.get_signature_hash(
-                "directive", file_content, file_path=file_path, project_path=self.project_path
+                "directive",
+                file_content,
+                file_path=file_path,
+                project_path=self.project_path,
             )
 
             if not stored_hash:
@@ -666,7 +799,10 @@ class DirectiveHandler:
                     if (
                         input_name not in params
                         or params[input_name] is None
-                        or (isinstance(params[input_name], str) and not params[input_name].strip())
+                        or (
+                            isinstance(params[input_name], str)
+                            and not params[input_name].strip()
+                        )
                     ):
                         missing_inputs.append(
                             {
@@ -697,7 +833,9 @@ class DirectiveHandler:
 
             schema_validation_result = None
             if input_schema and params:
-                schema_validation_result = self._validate_inputs_with_schema(params, input_schema)
+                schema_validation_result = self._validate_inputs_with_schema(
+                    params, input_schema
+                )
 
                 if not schema_validation_result.get("valid", True):
                     return {
@@ -727,7 +865,9 @@ class DirectiveHandler:
                         }
 
             # Get integrity hash from signature
-            signature_info = MetadataManager.get_signature_info("directive", file_content)
+            signature_info = MetadataManager.get_signature_info(
+                "directive", file_content
+            )
             content_hash = signature_info["hash"] if signature_info else None
 
             result = {
@@ -768,7 +908,9 @@ class DirectiveHandler:
             current_version = directive_data.get("version")
             if current_version and current_version != "0.0.0":
                 # Determine source location
-                is_project = str(file_path).startswith(str(self.resolver.project_directives))
+                is_project = str(file_path).startswith(
+                    str(self.resolver.project_directives)
+                )
                 current_source = "project" if is_project else "user"
 
                 version_warning = await self._check_for_newer_version(
@@ -781,7 +923,10 @@ class DirectiveHandler:
 
             return result
         except Exception as e:
-            return {"error": f"Failed to parse directive: {str(e)}", "path": str(file_path)}
+            return {
+                "error": f"Failed to parse directive: {str(e)}",
+                "path": str(file_path),
+            }
 
     async def _check_for_newer_version(
         self,
@@ -806,7 +951,9 @@ class DirectiveHandler:
         # Check user space (if running from project)
         if current_source == "project":
             try:
-                user_file_path = self._find_in_path(directive_name, self.resolver.user_directives)
+                user_file_path = self._find_in_path(
+                    directive_name, self.resolver.user_directives
+                )
                 if user_file_path and user_file_path.exists():
                     try:
                         user_directive_data = parse_directive_file(user_file_path)
@@ -815,7 +962,10 @@ class DirectiveHandler:
                             try:
                                 if compare_versions(current_version, user_version) < 0:
                                     # User version is newer
-                                    if compare_versions(newest_version, user_version) < 0:
+                                    if (
+                                        compare_versions(newest_version, user_version)
+                                        < 0
+                                    ):
                                         newest_version = user_version
                                         newest_location = "user"
                             except Exception as e:
@@ -864,7 +1014,11 @@ class DirectiveHandler:
                     {
                         "name": attrs.get("name"),
                         "required": attrs.get("required", "false").lower() == "true",
-                        "tools": attrs.get("tools", "").split(",") if attrs.get("tools") else None,
+                        "tools": (
+                            attrs.get("tools", "").split(",")
+                            if attrs.get("tools")
+                            else None
+                        ),
                         "refresh": attrs.get("refresh", "false").lower() == "true",
                     }
                 )
@@ -887,7 +1041,9 @@ class DirectiveHandler:
 
         return None
 
-    async def _sign_directive(self, directive_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _sign_directive(
+        self, directive_name: str, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Validate and sign an existing directive file.
 
@@ -918,7 +1074,9 @@ class DirectiveHandler:
                         break
             else:
                 file_path = None
-                for candidate in Path(self.resolver.user_directives).rglob(f"*{directive_name}.md"):
+                for candidate in Path(self.resolver.user_directives).rglob(
+                    f"*{directive_name}.md"
+                ):
                     if candidate.stem == directive_name:
                         file_path = candidate
                         break
@@ -952,21 +1110,23 @@ class DirectiveHandler:
         content = file_path.read_text()
 
         # Validate XML can be parsed
-        try:
-            strategy = MetadataManager.get_strategy("directive")
-            xml_content = strategy.extract_content_for_hash(content)
-            if not xml_content:
-                return {
-                    "error": "No XML directive found in content",
-                    "hint": "Content must contain <directive>...</directive> XML block",
-                    "file": str(file_path),
-                }
+        strategy = MetadataManager.get_strategy("directive")
+        xml_content = strategy.extract_content_for_hash(content)
+        if not xml_content:
+            return {
+                "error": "No XML directive found in content",
+                "hint": "Content must contain <directive>...</directive> XML block",
+                "file": str(file_path),
+            }
 
+        try:
             ET.fromstring(xml_content)  # Validate XML syntax
 
         except ET.ParseError as e:
             # Use enhanced error formatting with context and suggestions
-            enhanced_error = format_error_with_context(str(e), xml_content, str(file_path))
+            enhanced_error = format_error_with_context(
+                str(e), xml_content, str(file_path)
+            )
             return {
                 "error": "Invalid directive XML",
                 "parse_error": enhanced_error,
@@ -1012,7 +1172,9 @@ class DirectiveHandler:
                 if filename_issue:
                     parsed_name = directive_data["name"]
                     expected_filename = f"{parsed_name}.md"
-                    error_response["error"] = "Cannot sign: filename and directive name mismatch"
+                    error_response["error"] = (
+                        "Cannot sign: filename and directive name mismatch"
+                    )
                     error_response["problem"] = {
                         "expected": expected_filename,
                         "actual": file_path.name,
@@ -1023,14 +1185,23 @@ class DirectiveHandler:
                         "message": "Filename must match the directive name attribute in XML",
                         "option_1": f"Rename file: mv '{file_path}' '{file_path.parent / expected_filename}'",
                         "option_2": f'Update XML: Change <directive name="{file_path.stem}" ...> in {file_path}',
-                        "option_3": f"Use edit_directive directive to fix",
+                        "option_3": "Use edit_directive directive to fix",
                     }
-                elif any("permission" in issue.lower() for issue in validation_result["issues"]):
+                elif any(
+                    "permission" in issue.lower()
+                    for issue in validation_result["issues"]
+                ):
                     error_response["error"] = "Directive permissions not satisfied"
-                    error_response["permissions_required"] = directive_data.get("permissions", [])
-                elif any("model" in issue.lower() for issue in validation_result["issues"]):
+                    error_response["permissions_required"] = directive_data.get(
+                        "permissions", []
+                    )
+                elif any(
+                    "model" in issue.lower() for issue in validation_result["issues"]
+                ):
                     error_response["error"] = "Directive model not valid"
-                    model_data = directive_data.get("model") or directive_data.get("model_class")
+                    model_data = directive_data.get("model") or directive_data.get(
+                        "model_class"
+                    )
                     error_response["model_found"] = model_data
                     error_response["hint"] = (
                         "The <model> tag must have a 'tier' attribute. Example: <model tier=\"reasoning\">...</model>"
@@ -1099,7 +1270,9 @@ class DirectiveHandler:
         )
 
         # Generate and add signature for validated content with unified integrity hash
-        signed_content = MetadataManager.sign_content_with_hash("directive", content, content_hash)
+        signed_content = MetadataManager.sign_content_with_hash(
+            "directive", content, content_hash
+        )
 
         # Update file with signature
         file_path.write_text(signed_content)
@@ -1111,7 +1284,7 @@ class DirectiveHandler:
         try:
             directive = parse_directive_file(file_path)
             new_category = directive.get("category")
-        except:
+        except Exception:
             new_category = None
 
         # Extract current category from file path (supports nested categories)
@@ -1128,7 +1301,11 @@ class DirectiveHandler:
         # Handle category change: move file if category changed
         moved = False
         final_path = file_path
-        if new_category and new_category != current_category and new_category != "unknown":
+        if (
+            new_category
+            and new_category != current_category
+            and new_category != "unknown"
+        ):
             # Determine new path based on project or user space
             if determined_location == "project":
                 # Build path from slash-separated category
@@ -1174,7 +1351,7 @@ class DirectiveHandler:
             "signature": {"hash": content_hash, "timestamp": timestamp},
             "integrity": content_hash,
             "integrity_short": content_hash[:12],
-            "message": f"Directive validated and signed. Ready to use.",
+            "message": "Directive validated and signed. Ready to use.",
         }
 
         if moved:
