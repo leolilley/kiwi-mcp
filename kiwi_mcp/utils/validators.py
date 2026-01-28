@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from packaging import version
 
+from kiwi_mcp.utils.logger import get_logger
+
+logger = get_logger("validators")
+
 
 class BaseValidator(ABC):
     """Base validator for item-type-specific validation."""
@@ -36,19 +40,20 @@ class BaseValidator(ABC):
         all_issues = []
         all_warnings = []
 
-        # Validate filename match
         filename_result = self.validate_filename_match(file_path, parsed_data)
         if not filename_result.get("valid", True):
             all_issues.extend(filename_result.get("issues", []))
         if filename_result.get("warnings"):
             all_warnings.extend(filename_result.get("warnings", []))
 
-        # Validate metadata
         metadata_result = self.validate_metadata(parsed_data)
         if not metadata_result.get("valid", True):
             all_issues.extend(metadata_result.get("issues", []))
         if metadata_result.get("warnings"):
             all_warnings.extend(metadata_result.get("warnings", []))
+
+        if all_issues:
+            logger.warning(f"Validation failed for {file_path}: {all_issues}")
 
         return {
             "valid": len(all_issues) == 0,
@@ -108,7 +113,8 @@ class DirectiveValidator(BaseValidator):
         warnings = []
 
         # Validate XML structure: closing directive tag must be at the end
-        content = parsed_data.get("content", "")
+        # Use 'raw' field (full file content) not 'content' (which is just the process XML)
+        content = parsed_data.get("raw", "") or parsed_data.get("content", "")
         if content:
             xml_content = self._extract_xml_from_content(content)
             if xml_content:
@@ -154,8 +160,14 @@ class DirectiveValidator(BaseValidator):
                                             f"Found unexpected content after code block: {repr(after_code_block[:100])}"
                                         )
             else:
-                # XML extraction failed - this is already caught by parser, but validate structure anyway
-                issues.append("Could not extract valid XML directive from content")
+                has_directive_tag = "<directive" in content
+                has_closing_tag = "</directive>" in content
+                if not has_directive_tag:
+                    issues.append("Missing <directive> opening tag in content")
+                elif not has_closing_tag:
+                    issues.append("Missing </directive> closing tag in content")
+                else:
+                    issues.append("Could not extract XML: <directive> and </directive> tags found but extraction failed")
 
         # Validate permissions
         permissions = parsed_data.get("permissions", [])

@@ -22,6 +22,28 @@ from kiwi_mcp.utils.validators import ValidationManager, compare_versions
 from kiwi_mcp.utils.xml_error_helper import format_error_with_context
 
 
+def _sanitize_for_json(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove internal fields and convert Path objects for JSON serialization."""
+    result = {}
+    for key, value in data.items():
+        # Skip internal fields (prefixed with _)
+        if key.startswith("_"):
+            continue
+        # Convert Path objects to strings
+        if isinstance(value, Path):
+            result[key] = str(value)
+        elif isinstance(value, dict):
+            result[key] = _sanitize_for_json(value)
+        elif isinstance(value, list):
+            result[key] = [
+                _sanitize_for_json(v) if isinstance(v, dict) else (str(v) if isinstance(v, Path) else v)
+                for v in value
+            ]
+        else:
+            result[key] = value
+    return result
+
+
 class DirectiveHandler:
     """Handler for directive operations."""
 
@@ -421,7 +443,7 @@ class DirectiveHandler:
                         "directive", file_content
                     )
 
-                    directive_data = validation["data"]
+                    directive_data = _sanitize_for_json(validation["data"])
                     directive_data["source"] = "project"
                     directive_data["path"] = str(file_path)
                     directive_data["mode"] = "read_only"
@@ -489,7 +511,7 @@ class DirectiveHandler:
                     "directive", file_content
                 )
 
-                directive_data = validation["data"]
+                directive_data = _sanitize_for_json(validation["data"])
                 directive_data["source"] = "user"
                 directive_data["path"] = str(file_path)
                 directive_data["mode"] = "read_only"
@@ -768,42 +790,21 @@ class DirectiveHandler:
                     "solution": "Run sign(...) to re-validate the directive",
                 }
 
-            # Extract process steps and inputs for execution
-            parsed = directive_data["parsed"]
-
-            # Get process steps from parsed XML
             process_steps = []
-            if "process" in parsed and "step" in parsed["process"]:
-                steps = parsed["process"]["step"]
-                # Handle single step vs list of steps
+            process = directive_data.get("process", {})
+            if process and "step" in process:
+                steps = process["step"]
                 if isinstance(steps, dict):
                     steps = [steps]
                 for step in steps:
                     attrs = step.get("_attrs", {})
-                    process_steps.append(
-                        {
-                            "name": attrs.get("name", ""),
-                            "description": step.get("description", ""),
-                            "action": step.get("action", ""),
-                        }
-                    )
+                    process_steps.append({
+                        "name": attrs.get("name", ""),
+                        "description": step.get("description", ""),
+                        "action": step.get("action", ""),
+                    })
 
-            # Get inputs from parsed XML
-            inputs_spec = []
-            if "inputs" in parsed and "input" in parsed["inputs"]:
-                inp_list = parsed["inputs"]["input"]
-                if isinstance(inp_list, dict):
-                    inp_list = [inp_list]
-                for inp in inp_list:
-                    attrs = inp.get("_attrs", {})
-                    inputs_spec.append(
-                        {
-                            "name": attrs.get("name", ""),
-                            "type": attrs.get("type", "string"),
-                            "required": attrs.get("required", "false") == "true",
-                            "description": inp.get("_text", ""),
-                        }
-                    )
+            inputs_spec = directive_data.get("inputs", [])
 
             # Validate required inputs are provided
             missing_inputs = []
@@ -839,11 +840,8 @@ class DirectiveHandler:
                     "solution": f"Provide the missing required inputs in the 'parameters' field. Example: parameters={{'{missing_inputs[0]['name']}': 'value'}}",
                 }
 
-            # Schema-based input validation (optional but recommended)
-            # First check for explicit schema in directive, then auto-generate from spec
-            input_schema = self._extract_input_schema(parsed)
+            input_schema = self._extract_input_schema(directive_data)
             if input_schema is None and inputs_spec:
-                # Auto-generate schema from input specifications
                 input_schema = self._build_input_schema_from_spec(inputs_spec)
 
             schema_validation_result = None
@@ -1011,33 +1009,23 @@ class DirectiveHandler:
 
     def _parse_mcps(self, directive_data: dict) -> list[dict]:
         """Parse <mcps> declarations from directive metadata."""
-        # Try to get MCPs from parsed XML structure
-        parsed = directive_data.get("parsed", {})
+        mcps = directive_data.get("mcps", {})
+        if not mcps or "mcp" not in mcps:
+            return []
+
+        mcp_data = mcps["mcp"]
+        if isinstance(mcp_data, dict):
+            mcp_data = [mcp_data]
+
         mcps_list = []
-
-        # Check if there's an <mcps> section in the parsed data
-        if "mcps" in parsed and "mcp" in parsed["mcps"]:
-            mcp_data = parsed["mcps"]["mcp"]
-
-            # Handle single MCP vs list of MCPs
-            if isinstance(mcp_data, dict):
-                mcp_data = [mcp_data]
-
-            for mcp in mcp_data:
-                attrs = mcp.get("_attrs", {})
-                mcps_list.append(
-                    {
-                        "name": attrs.get("name"),
-                        "required": attrs.get("required", "false").lower() == "true",
-                        "tools": (
-                            attrs.get("tools", "").split(",")
-                            if attrs.get("tools")
-                            else None
-                        ),
-                        "refresh": attrs.get("refresh", "false").lower() == "true",
-                    }
-                )
-
+        for mcp in mcp_data:
+            attrs = mcp.get("_attrs", {})
+            mcps_list.append({
+                "name": attrs.get("name"),
+                "required": attrs.get("required", "false").lower() == "true",
+                "tools": attrs.get("tools", "").split(",") if attrs.get("tools") else None,
+                "refresh": attrs.get("refresh", "false").lower() == "true",
+            })
         return mcps_list
 
     def _find_in_path(self, directive_name: str, base_path: Path) -> Optional[Path]:

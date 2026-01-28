@@ -140,7 +140,35 @@ def _extract_regex_all(rule: Dict, parsed: Dict, file_path: Path) -> Optional[Li
 
 
 def _extract_category_from_path(rule: Dict, parsed: Dict, file_path: Path) -> Optional[str]:
-    """Extract category from file path (parent directory name)."""
+    """Extract category from file path relative to base folder.
+    
+    For a file at .ai/directives/demos/harness/demo.md with base_folder="directives",
+    returns "demos/harness" (the path between base folder and file).
+    """
+    base_folder = rule.get("base_folder", "")
+    
+    # Find the base folder in the path parts
+    parts = file_path.parts
+    try:
+        # Find index of base folder (e.g., "directives", "tools", "knowledge")
+        base_idx = None
+        for i, part in enumerate(parts):
+            if part == base_folder or part == f".{base_folder}":
+                base_idx = i
+                break
+        
+        if base_idx is not None:
+            # Category is everything between base folder and the file
+            # e.g., for .ai/directives/demos/harness/file.md -> demos/harness
+            category_parts = parts[base_idx + 1:-1]  # Exclude base folder and filename
+            if category_parts:
+                return "/".join(category_parts)
+            return ""  # Root of base folder
+        
+    except (ValueError, IndexError):
+        pass
+    
+    # Fallback to just parent name
     return file_path.parent.name if file_path.parent.name else None
 
 

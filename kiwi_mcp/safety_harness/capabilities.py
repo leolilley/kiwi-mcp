@@ -112,16 +112,32 @@ class CapabilityToken:
         return now > exp
     
     def has_capability(self, capability: str) -> bool:
-        """Check if token grants a specific capability."""
-        return capability in self.caps
+        """Check if token grants a specific capability.
+        
+        Uses capability hierarchy - if token has 'kiwi-mcp.execute',
+        it implicitly has 'kiwi-mcp.search', 'kiwi-mcp.load', etc.
+        """
+        # Lazy import to avoid circular dependency
+        from kiwi_mcp.safety_harness.capabilities import expand_capabilities
+        expanded = expand_capabilities(self.caps)
+        return capability in expanded
     
     def has_any_capability(self, capabilities: List[str]) -> bool:
         """Check if token grants any of the specified capabilities."""
-        return bool(set(self.caps) & set(capabilities))
+        from kiwi_mcp.safety_harness.capabilities import expand_capabilities
+        expanded = expand_capabilities(self.caps)
+        return bool(expanded & set(capabilities))
     
     def has_all_capabilities(self, capabilities: List[str]) -> bool:
         """Check if token grants all of the specified capabilities."""
-        return set(capabilities).issubset(set(self.caps))
+        from kiwi_mcp.safety_harness.capabilities import expand_capabilities
+        expanded = expand_capabilities(self.caps)
+        return set(capabilities).issubset(expanded)
+    
+    def get_expanded_capabilities(self) -> List[str]:
+        """Get all capabilities including implied ones from hierarchy."""
+        from kiwi_mcp.safety_harness.capabilities import expand_capabilities
+        return sorted(expand_capabilities(self.caps))
     
     def get_payload_for_signing(self) -> bytes:
         """Get the token payload for signing (excludes signature)."""
@@ -357,19 +373,112 @@ def attenuate_token(
 # Permission XML to capability conversion table
 PERMISSION_TO_CAPABILITY: Dict[tuple, str] = {
     # (tag, resource, action) -> capability
+    
+    # Filesystem
     ("read", "filesystem", None): "fs.read",
     ("write", "filesystem", None): "fs.write",
     ("execute", "filesystem", None): "fs.exec",
+    
+    # Thread spawning
     ("execute", "spawn", "thread"): "spawn.thread",
+    
+    # Thread registry
     ("execute", "registry", "write"): "registry.write",
     ("execute", "registry", "read"): "registry.read",
-    ("execute", "kiwi-mcp", "execute"): "kiwi-mcp.execute",
-    ("execute", "kiwi-mcp", "search"): "kiwi-mcp.execute",
-    ("execute", "kiwi-mcp", "load"): "kiwi-mcp.execute",
-    ("execute", "kiwi-mcp", "help"): "kiwi-mcp.execute",
+    
+    # Kiwi MCP - granular capabilities
+    ("execute", "kiwi-mcp", "execute"): "kiwi-mcp.execute",  # Run directives/tools
+    ("execute", "kiwi-mcp", "search"): "kiwi-mcp.search",    # Search for items
+    ("execute", "kiwi-mcp", "load"): "kiwi-mcp.load",        # Load/inspect items
+    ("execute", "kiwi-mcp", "sign"): "kiwi-mcp.sign",        # Sign items (privileged)
+    ("execute", "kiwi-mcp", "help"): "kiwi-mcp.help",        # Get help (low privilege)
+    ("execute", "kiwi-mcp", "*"): "kiwi-mcp.all",            # All MCP operations
+    
+    # Shell/process
     ("execute", "shell", "*"): "process.exec",
     ("execute", "shell", None): "process.exec",
 }
+
+# Capability hierarchy - if you have a higher cap, you implicitly have lower ones
+CAPABILITY_HIERARCHY: Dict[str, List[str]] = {
+    # kiwi-mcp.all grants all kiwi-mcp capabilities
+    "kiwi-mcp.all": [
+        "kiwi-mcp.execute",
+        "kiwi-mcp.search",
+        "kiwi-mcp.load",
+        "kiwi-mcp.sign",
+        "kiwi-mcp.help",
+    ],
+    # kiwi-mcp.execute implies search/load/help (need to find things to execute)
+    "kiwi-mcp.execute": [
+        "kiwi-mcp.search",
+        "kiwi-mcp.load",
+        "kiwi-mcp.help",
+    ],
+    # fs.write implies fs.read
+    "fs.write": ["fs.read"],
+}
+
+
+def expand_capabilities(caps: List[str]) -> Set[str]:
+    """Expand capabilities using the hierarchy.
+    
+    If a token has 'kiwi-mcp.execute', it implicitly has
+    'kiwi-mcp.search', 'kiwi-mcp.load', 'kiwi-mcp.help'.
+    
+    Args:
+        caps: List of capability strings
+        
+    Returns:
+        Set of all capabilities (original + implied)
+    """
+    expanded: Set[str] = set(caps)
+    
+    # Keep expanding until no new caps are added
+    changed = True
+    while changed:
+        changed = False
+        for cap in list(expanded):
+            if cap in CAPABILITY_HIERARCHY:
+                implied = set(CAPABILITY_HIERARCHY[cap])
+                new_caps = implied - expanded
+                if new_caps:
+                    expanded.update(new_caps)
+                    changed = True
+    
+    return expanded
+
+
+def check_capability(granted_caps: List[str], required_cap: str) -> bool:
+    """Check if granted capabilities satisfy a required capability.
+    
+    Uses hierarchy expansion - if you have kiwi-mcp.execute,
+    you implicitly have kiwi-mcp.search, kiwi-mcp.load, etc.
+    
+    Args:
+        granted_caps: List of granted capability strings
+        required_cap: Required capability to check
+        
+    Returns:
+        True if required capability is satisfied
+    """
+    expanded = expand_capabilities(granted_caps)
+    return required_cap in expanded
+
+
+def check_all_capabilities(granted_caps: List[str], required_caps: List[str]) -> tuple[bool, List[str]]:
+    """Check if all required capabilities are satisfied.
+    
+    Args:
+        granted_caps: List of granted capability strings
+        required_caps: List of required capabilities
+        
+    Returns:
+        Tuple of (all_satisfied, missing_caps)
+    """
+    expanded = expand_capabilities(granted_caps)
+    missing = [cap for cap in required_caps if cap not in expanded]
+    return (len(missing) == 0, missing)
 
 
 def permissions_to_caps(permissions: List[Dict[str, Any]]) -> List[str]:
@@ -382,6 +491,10 @@ def permissions_to_caps(permissions: List[Dict[str, Any]]) -> List[str]:
     - execute resource="spawn" action="thread" → spawn.thread
     - execute resource="registry" action="write" → registry.write
     - execute resource="kiwi-mcp" action="execute" → kiwi-mcp.execute
+    - execute resource="kiwi-mcp" action="search" → kiwi-mcp.search
+    - execute resource="kiwi-mcp" action="load" → kiwi-mcp.load
+    - execute resource="kiwi-mcp" action="sign" → kiwi-mcp.sign
+    - execute resource="kiwi-mcp" action="help" → kiwi-mcp.help
     
     Args:
         permissions: List of permission dicts with 'tag' and 'attrs' keys

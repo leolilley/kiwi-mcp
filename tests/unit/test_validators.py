@@ -164,7 +164,7 @@ Just markdown, no XML here.
         result = validator.validate_metadata(data)
 
         assert result["valid"] is False
-        assert any("could not extract" in issue.lower() for issue in result["issues"])
+        assert any("missing" in issue.lower() and "directive" in issue.lower() for issue in result["issues"])
 
     @pytest.mark.unit
     @pytest.mark.validation

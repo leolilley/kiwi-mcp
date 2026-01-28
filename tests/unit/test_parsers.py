@@ -30,7 +30,7 @@ class TestDirectiveParser:
     <permissions>
       <read resource="fs" path="*" />
     </permissions>
-    <model tier="fast" fallback="balanced">Model context</model>
+    <model tier="fast" fallback_id="gpt-4o-mini">Model context</model>
   </metadata>
   <inputs>
     <input name="foo" type="string" required="true">A foo param</input>
@@ -60,7 +60,7 @@ class TestDirectiveParser:
         
         # Check model
         assert result["model"]["tier"] == "fast"
-        assert result["model"]["fallback"] == "balanced"
+        assert result["model"]["fallback_id"] == "gpt-4o-mini"
         
         # Check permissions
         assert len(result["permissions"]) == 1
@@ -198,42 +198,104 @@ class TestDirectiveParser:
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_with_cost(self, tmp_path):
-        """Should parse cost structure correctly."""
+    def test_parse_directive_with_limits(self, tmp_path):
+        """Should parse limits structure correctly."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
         
         directive_content = """# Test Directive
 
 ```xml
-<directive name="test_cost" version="1.0.0">
+<directive name="test_limits" version="1.0.0">
   <metadata>
-    <description>Test with cost</description>
+    <description>Test with limits</description>
     <category>test</category>
     <author>tester</author>
     <permissions>
       <read resource="fs" path="*" />
     </permissions>
     <model tier="fast" />
-    <cost>
-      <context estimated_usage="high">5000</context>
+    <limits>
+      <turns>10</turns>
+      <tokens>5000</tokens>
+      <spawns>3</spawns>
       <duration>300</duration>
       <spend currency="USD">10.00</spend>
-    </cost>
+    </limits>
   </metadata>
 </directive>
 ```
 """
-        directive_file = directive_dir / "test_cost.md"
+        directive_file = directive_dir / "test_limits.md"
         directive_file.write_text(directive_content)
         
         result = parse_directive_file(directive_file, tmp_path)
         
-        assert result["name"] == "test_cost"
-        assert result["cost"] is not None
-        assert "context" in result["cost"]
-        assert "duration" in result["cost"]
-        assert "spend" in result["cost"]
+        assert result["name"] == "test_limits"
+        assert result["limits"] is not None
+        assert result["limits"]["turns"] == 10
+        assert result["limits"]["tokens"] == 5000
+        assert result["limits"]["spawns"] == 3
+        assert result["limits"]["duration"] == 300
+        assert result["limits"]["spend"] == 10.0
+        assert result["limits"]["spend_currency"] == "USD"
+
+    @pytest.mark.unit
+    @pytest.mark.parser
+    def test_parse_directive_with_hooks(self, tmp_path):
+        """Should parse hooks structure correctly."""
+        directive_dir = tmp_path / ".ai" / "directives" / "test"
+        directive_dir.mkdir(parents=True)
+        
+        directive_content = """# Test Directive
+
+```xml
+<directive name="test_hooks" version="1.0.0">
+  <metadata>
+    <description>Test with hooks</description>
+    <category>test</category>
+    <author>tester</author>
+    <permissions>
+      <read resource="fs" path="*" />
+    </permissions>
+    <model tier="fast" />
+    <hooks>
+      <hook>
+        <when>event.code == "permission_denied"</when>
+        <directive>request_elevated_permissions</directive>
+        <inputs>
+          <original_directive>${directive.name}</original_directive>
+          <missing_cap>${event.detail.missing}</missing_cap>
+        </inputs>
+      </hook>
+      <hook>
+        <when>cost.turns > limits.turns</when>
+        <directive>handle_turns_exceeded</directive>
+      </hook>
+    </hooks>
+  </metadata>
+</directive>
+```
+"""
+        directive_file = directive_dir / "test_hooks.md"
+        directive_file.write_text(directive_content)
+        
+        result = parse_directive_file(directive_file, tmp_path)
+        
+        assert result["name"] == "test_hooks"
+        assert result["hooks"] is not None
+        assert len(result["hooks"]) == 2
+        
+        # First hook
+        assert result["hooks"][0]["when"] == 'event.code == "permission_denied"'
+        assert result["hooks"][0]["directive"] == "request_elevated_permissions"
+        assert result["hooks"][0]["inputs"]["original_directive"] == "${directive.name}"
+        assert result["hooks"][0]["inputs"]["missing_cap"] == "${event.detail.missing}"
+        
+        # Second hook (no inputs)
+        assert result["hooks"][1]["when"] == "cost.turns > limits.turns"
+        assert result["hooks"][1]["directive"] == "handle_turns_exceeded"
+        assert "inputs" not in result["hooks"][1]
 
 
 class TestKnowledgeParser:

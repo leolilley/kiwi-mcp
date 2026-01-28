@@ -11,6 +11,11 @@ from kiwi_mcp.safety_harness.capabilities import (
     sign_token,
     verify_token,
     permissions_to_caps,
+    expand_capabilities,
+    check_capability,
+    check_all_capabilities,
+    CAPABILITY_HIERARCHY,
+    PERMISSION_TO_CAPABILITY,
 )
 
 __all__ = [
@@ -20,4 +25,9 @@ __all__ = [
     "sign_token",
     "verify_token",
     "permissions_to_caps",
+    "expand_capabilities",
+    "check_capability",
+    "check_all_capabilities",
+    "CAPABILITY_HIERARCHY",
+    "PERMISSION_TO_CAPABILITY",
 ]
