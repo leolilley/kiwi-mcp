@@ -1,0 +1,37 @@
+[project]
+name = "rye-lilux"
+version = "0.1.0"
+description = "RYE running on Lilux - AI agent harness with directives, tools, and knowledge"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["mcp", "ai", "agents", "directives", "tools", "knowledge", "lilux", "rye"]
+
+dependencies = [
+    "lilux>=0.1.0",  # Kernel dependency
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["rye"]
+package-data = { "rye" = [".ai/**/*"] }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

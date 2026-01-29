@@ -384,6 +384,80 @@ The limit isn't the model. The limit is your directive library.
 
 ---
 
+## Telemetry
+
+Kiwi MCP includes optional telemetry tracking to monitor directive, tool, and knowledge item performance.
+
+### Features
+
+- **Centralized tracking**: All stats stored in `~/.ai/telemetry.yaml`, not embedded in items
+- **Clean items**: No file modifications after execution
+- **Optional**: Disabled by default, opt-in only
+- **Private**: Never accidentally committed to repos
+
+### Usage
+
+Enable telemetry:
+
+```bash
+python ~/.ai/tools/core/configure_telemetry.py --enabled true
+```
+
+View stats for an item:
+
+```bash
+python ~/.ai/tools/core/telemetry_status.py --item-id "core/create_tool"
+```
+
+View summary:
+
+```bash
+python ~/.ai/tools/core/telemetry_status.py
+```
+
+Clear stats for specific item:
+
+```bash
+python ~/.ai/tools/core/clear_telemetry.py --item-id "core/create_tool"
+```
+
+Clear all stats:
+
+```bash
+python ~/.ai/tools/core/clear_telemetry.py
+```
+
+Export stats to item before publishing:
+
+```bash
+python ~/.ai/tools/core/export_telemetry.py --item-id "core/create_tool" --item-path "~/.ai/directives/core/create_tool.md"
+```
+
+### Tracked Metrics
+
+For directives and tools:
+- Total runs, success/failure/timeout counts
+- Running average duration
+- HTTP and subprocess call counts
+- Last execution timestamp and outcome
+- Known file paths
+
+For knowledge items:
+- Access count
+- Last access timestamp
+- Known file paths
+
+### Configuration
+
+Telemetry is configured in `~/.ai/config.yaml`:
+
+```yaml
+telemetry:
+  enabled: true
+```
+
+---
+
 ## License
 
 MIT

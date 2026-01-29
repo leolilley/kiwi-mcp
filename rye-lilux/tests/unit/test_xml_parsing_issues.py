@@ -6,7 +6,7 @@ unescaped special characters (<, >, &) in text content.
 """
 
 import pytest
-from kiwi_mcp.utils.parsers import parse_directive_file
+from lilux.utils.parsers import parse_directive_file
 
 
 class TestXMLParsingIssues:

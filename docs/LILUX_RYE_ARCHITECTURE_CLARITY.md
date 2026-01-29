@@ -1,95 +1,113 @@
 # Lilux/RYE Architecture: Repository & Packaging Clarity
 
-**Date:** 2026-01-28  
-**Status:** Clarification Document  
+**Date:** 2026-01-29  
+**Status:** Aligned with Ship Roadmap  
 **Purpose:** Clear explanation of how lilux kernel and rye content are organized and shipped
 
 ---
 
-## The Two Repositories
+## Critical Clarification: Lilux is an MCP, NOT a CLI
 
-### Repository 1: `lilux/` (Kernel - GitHub)
-
-```
-github.com/leolilley/lilux/
-├── lilux/                          # Python package (the kernel)
-│   ├── __init__.py
-│   ├── server.py                   # MCP server
-│   ├── tools/                      # Search, Load, Execute, Help
-│   ├── primitives/                 # Executor, subprocess, HTTP
-│   ├── handlers/                   # Directive, Tool, Knowledge handlers
-│   ├── runtime/                    # Auth, env, lockfile mgmt
-│   ├── storage/                    # Vector stores
-│   ├── utils/                      # Helper utilities
-│   ├── config/                     # Configuration
-│   └── safety_harness/             # Capability tokens
-│
-├── tests/                          # Tests for kernel
-├── pyproject.toml                  # Kernel package config
-├── setup.py
-└── README.md
-```
-
-**What it provides:**
-- Execution primitives
-- MCP server infrastructure
-- The 4 unified MCP tools
-- Handlers for directives/tools/knowledge
-- No content included (just infrastructure)
-
-**Published to PyPI as:** `lilux`
-
-### Repository 2: `rye/` (Content - GitHub)
+Lilux exposes MCP tools. Users interact through an LLM that calls these tools:
 
 ```
-github.com/leolilley/rye/
-├── .ai/                            # RYE content (git folder or submodule)
-│   ├── directives/
-│   │   ├── core/
-│   │   │   ├── init.md
-│   │   │   ├── bootstrap.md
-│   │   │   ├── sync_directives.md
-│   │   │   └── ...
-│   │   └── meta/
-│   │       ├── search_*.md
-│   │       └── ...
-│   ├── tools/
-│   │   └── core/
-│   │       ├── collection_manager.py
-│   │       ├── registry_manager.py
-│   │       └── ...
-│   └── knowledge/
-│       ├── concepts/
-│       ├── patterns/
-│       └── procedures/
-│
-├── tests/                          # Content validation tests
-├── pyproject.toml                  # RYE package config
-├── setup.py
-└── README.md
+WRONG (CLI thinking):
+$ lilux search "my-directive"
+
+CORRECT (MCP via LLM):
+User: "search for lead generation directives"
+LLM: [calls mcp__lilux__search(item_type="directive", query="lead generation")]
 ```
 
-**What it contains:**
-- Essential directives (init, bootstrap, sync, search, load, run, etc.)
-- Essential tools (collection manager, registry ops, etc.)
-- Core knowledge base
-- Nothing about kernel infrastructure
-
-**Published to PyPI as:** `rye`
+There is no CLI. The MCP server starts via `python -m lilux.server` and communicates over stdio.
 
 ---
 
-## The Package Dependency: How They Link
+## Monorepo Structure
 
-### `rye` Package Depends on `lilux`
+**Single repository for development simplicity:**
+
+```
+github.com/leolilley/lilux-rye/
+├── lilux/                          # Kernel package (pip install lilux)
+│   ├── __init__.py
+│   ├── server.py                   # MCP server
+│   ├── tools/                      # 5 primitive tools
+│   │   ├── search.py               # Find items
+│   │   ├── load.py                 # Get/copy items
+│   │   ├── execute.py              # Run items
+│   │   ├── sign.py                 # Validate & sign
+│   │   └── help.py                 # Kernel manual + command table
+│   ├── primitives/                 # Low-level execution
+│   │   ├── http_client.py          # HTTP requests
+│   │   └── subprocess.py           # Shell execution
+│   ├── handlers/                   # Item type handlers
+│   │   ├── directive/              # Parse & return directive data
+│   │   ├── tool/                   # Parse & return tool data
+│   │   └── knowledge/              # Parse & return knowledge data
+│   ├── storage/
+│   │   └── vector/                 # Vector store (uses env config)
+│   └── utils/
+│
+├── rye/                            # Content package (pip install rye-lilux)
+│   ├── __init__.py
+│   └── .ai/                        # RYE content bundle
+│       ├── directives/
+│       │   └── core/               # Can be shadowed by user
+│       ├── tools/
+│       │   ├── core/               # PROTECTED - cannot override
+│       │   ├── llm/                # LLM configs
+│       │   └── threads/            # Threading tools
+│       └── knowledge/
+│           └── kernel/             # PROTECTED - cannot override
+│
+├── tests/                          # Tests for both
+├── pyproject.toml                  # Monorepo config
+└── README.md
+```
+
+---
+
+## Two PyPI Packages
+
+### Package 1: `lilux` (Kernel)
+
+**Contains ONLY primitives:**
+
+- MCP server infrastructure
+- 5 unified MCP tools: search, load, execute, sign, help
+- Handlers for directives/tools/knowledge
+- Vector store infrastructure
+- No content included (just infrastructure)
+
+**Install:** `pip install lilux`
+
+### Package 2: `rye-lilux` (Content Bundle)
+
+Like "Arch Linux" - RYE running on Lilux.
+
+**Contains all intelligence:**
+
+- Core directives (init, bootstrap, sync, etc.)
+- Core tools (system, registry, rag, threads, etc.)
+- Core knowledge base
+- Depends on `lilux>=0.1.0`
+
+**Install:** `pip install rye-lilux` (gets both lilux kernel + rye content)
+
+---
+
+## Package Dependency
+
+### `rye-lilux` Depends on `lilux`
 
 **`rye/pyproject.toml`:**
 
 ```toml
 [project]
-name = "rye"
+name = "rye-lilux"
 version = "0.1.0"
-description = "RYE content layer + Lilux kernel"
+description = "RYE content layer for Lilux MCP"
 
 dependencies = [
     "lilux>=0.1.0",        # ← Depends on kernel
@@ -97,90 +115,51 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
-[project.scripts]
-lilux = "lilux.cli:main"         # From lilux package
-rye-init = "lilux.scripts.init:main"
-rye-demo = "lilux.scripts.demo:main"
-
 [tool.setuptools.package-data]
-lilux = ["**/*.py"]              # From lilux package (via dependency)
-"" = [".ai/**/*"]                # RYE content (this repo)
+"" = [".ai/**/*"]          # Bundle the .ai/ folder
 ```
 
-### What Happens When You `pipx install rye`
+### What Happens When You `pip install rye-lilux`
 
 ```
-$ pipx install rye
+$ pip install rye-lilux
 
-1. Fetch 'rye' package from PyPI
+1. Fetch 'rye-lilux' package from PyPI
 2. Dependencies:
    └── lilux>=0.1.0
-   
+
 3. Install lilux package (first)
-   ├── Installs ~/site-packages/lilux/
-   │   ├── __init__.py
+   ├── Installs site-packages/lilux/
    │   ├── server.py
    │   ├── tools/
    │   ├── primitives/
    │   ├── handlers/
-   │   ├── etc.
    │   └── (all kernel code)
-   └── Registers CLI: lilux, lilux-serve
+   └── Entry point: python -m lilux.server
 
-4. Install rye package (second)
-   ├── Installs ~/site-packages/rye/
-   │   ├── __init__.py (minimal, just package marker)
-   │   └── (rye package metadata)
-   └── Bundles .ai/ folder:
-       ├── directives/ (copied to wheel)
-       ├── tools/      (copied to wheel)
-       └── knowledge/  (copied to wheel)
+4. Install rye-lilux package (second)
+   ├── Installs site-packages/rye/
+   │   ├── __init__.py
+   │   └── .ai/                ← Content bundle
+   │       ├── directives/
+   │       ├── tools/
+   │       └── knowledge/
 
-5. Result: Full system available
-   ├── lilux kernel (from lilux package)
-   ├── RYE content (from rye package)
-   ├── Both integrated
-   └── All 4 tools available: search, load, execute, help
-```
-
----
-
-## File Organization in `rye/pyproject.toml`
-
-**The `.ai/` folder is bundled as package data:**
-
-```toml
-[tool.setuptools.package-data]
-"" = [".ai/**/*"]  # ← Package the entire .ai/ directory
-```
-
-This means when the `rye` wheel is built:
-```
-rye-0.1.0-py3-none-any.whl
-├── lilux/                   (from lilux dependency)
-├── rye/
-│   ├── __init__.py
-│   └── .ai/                 ← .ai/ folder bundled here
-│       ├── directives/
-│       ├── tools/
-│       └── knowledge/
-└── rye-0.1.0.dist-info/
+5. Result: Full system available via MCP
 ```
 
 ---
 
 ## How `lilux` Finds the `.ai/` Content
 
-**In `lilux/__init__.py` or a config module:**
+**In `lilux/config.py`:**
 
 ```python
-import importlib.resources
 from pathlib import Path
 
 def get_content_root():
     """Get path to bundled .ai/ content from rye package"""
     try:
-        # Try to import rye and find its .ai folder
         import rye
         rye_path = Path(rye.__file__).parent
         ai_path = rye_path / ".ai"
@@ -189,40 +168,197 @@ def get_content_root():
     except ImportError:
         pass
     
-    # Fallback: look relative to lilux
-    return Path(__file__).parent.parent / ".ai"
+    # Fallback: no content available (kernel-only install)
+    return None
 
 CONTENT_ROOT = get_content_root()
 ```
 
-**When a user calls `lilux search` or `lilux execute`:**
-1. lilux kernel loads
-2. Looks for `.ai/` content
-3. Finds it bundled in the rye package
-4. Uses that content as the default search/execute source
+---
+
+## User Spaces
+
+The userspace location is configurable via the `USER_PATH` environment variable. Default is `~/.ai/`.
+
+When a user runs the `init` directive, it creates:
+
+### User Space ($USER_PATH)
+
+Everything lives in one location - content, config, and cache:
+
+```
+$USER_PATH/                         # Default: ~/.ai/
+├── directives/                     # User's custom directives
+├── tools/                          # User's custom tools
+├── knowledge/                      # User's knowledge entries
+├── keys/
+│   └── trusted/*.pub               # Trusted author public keys
+├── cache/
+│   └── vectors/                    # Pre-computed embeddings
+├── config.yaml                     # User settings (telemetry, etc.)
+├── telemetry.yaml                  # Execution stats (v0.2.0)
+├── .env                            # CI secrets (fallback)
+└── AGENTS.md                       # Command dispatch table
+```
+
+Single location for everything. Simpler mental model than XDG split.
+
+### Secrets (System Keyring)
+
+Secrets stored in system keyring (not filesystem):
+- Registry session token → `keyring.set_password("rye", "registry-token", ...)`
+- Private signing key → `keyring.set_password("rye", "signing-key", ...)`
+
+Uses macOS Keychain, Windows Credential Manager, or Linux Secret Service via Python `keyring` library.
+
+### Kernel vs RYE Responsibilities
+
+| Data | Location | Managed By |
+|------|----------|------------|
+| All user data | `$USER_PATH` (~/.ai/) | User + RYE tools |
+| Secrets | System keyring | RYE tools |
+
+Kernel knows about `$USER_PATH`. RYE tools manage keys, cache, and config within it.
+
+Project-level content goes in `.ai/` within the project directory.
 
 ---
 
-## CLI Entry Points
+## Registry Authentication
 
-When you `pipx install rye`, both sets of CLI commands are available:
+Registry operations (publish, sync from private items) require authentication. The auth flow works like the Supabase CLI - browser-based, no custom UI needed.
 
-**From lilux package:**
-```bash
-lilux serve              # Start MCP server
-lilux search ...         # Search content
-lilux load ...           # Load items
-lilux execute ...        # Run directives/tools
-lilux help ...           # Get help
+### Auth Flow (Device Authorization Pattern)
+
+```
+User: "login to registry"
+LLM: [calls mcp__lilux__execute(item_type="tool", item_id="core/registry", 
+      parameters={"action": "login"})]
+
+1. Registry tool generates:
+   - Random session ID (UUID)
+   - ECDH keypair (P-256)
+   - Token name: "{username}@{machine}-{timestamp}"
+
+2. Opens browser to:
+   https://registry.lilux.dev/auth?session_id=xxx&public_key=yyy&token_name=zzz
+
+3. User authenticates via Supabase Auth (existing dashboard):
+   - Sign up with email/password, magic link, or OAuth (GitHub, Google)
+   - Existing users just log in
+
+4. Server encrypts access token:
+   - Generates server ECDH keypair
+   - Computes shared secret via ECDH
+   - Encrypts token, stores in DB with session ID
+
+5. Registry tool polls for completion:
+   - Fetches encrypted token by session ID
+   - Decrypts using local private key
+   - Stores in system keyring (key: `lilux-registry-token`)
+
+6. Done - user is logged in
 ```
 
-**From rye package (convenience aliases):**
-```bash
-rye-init                 # Run init directive
-rye-demo                 # Run demo directives
+### Auth Tool Actions
+
+```python
+# .ai/tools/core/registry.py
+
+ACTIONS = {
+    # Authentication
+    "login": "Authenticate with registry (opens browser)",
+    "logout": "Clear local auth session",
+    "whoami": "Show current authenticated user",
+    
+    # Registry operations (require auth)
+    "sync": "Download/update items from registry",
+    "publish": "Upload signed items to registry",
+    
+    # Key management (require auth)
+    "keys_generate": "Generate new signing keypair",
+    "keys_list": "List trusted public keys",
+    "keys_trust": "Add a public key to trusted list",
+    "keys_revoke": "Remove a public key from trusted list",
+}
 ```
 
-All backed by the same lilux kernel + rye content.
+### User Experience
+
+```
+User: "login to registry"
+LLM: "Opening browser for authentication..."
+     [browser opens to registry.lilux.dev/auth]
+     [user logs in or signs up]
+LLM: "Authenticated as leo@github. You can now publish and sync."
+
+User: "publish my-directive to registry"
+LLM: [calls registry tool with action="publish"]
+     "Published my-directive v1.0.0 to registry under leo/my-directive"
+
+User: "who am I logged in as?"
+LLM: [calls registry tool with action="whoami"]
+     "leo@github (authenticated since 2026-01-29)"
+```
+
+### No UI Required
+
+- **Signup/Login**: Uses existing Supabase Auth dashboard UI
+- **No custom frontend**: Just a simple redirect page at `registry.lilux.dev/auth`
+- **Same pattern as**: `gh auth login`, `supabase login`, `vercel login`
+
+### Secure Credential Storage
+
+**Primary: System Keyring** (via Python `keyring` library)
+
+| Secret | Keyring Service | Keyring Key |
+|--------|-----------------|-------------|
+| Registry token | `rye` | `registry-token` |
+| Private signing key | `rye` | `signing-key` |
+
+Works with:
+- macOS Keychain
+- Windows Credential Manager  
+- Linux Secret Service (GNOME Keyring, KWallet)
+
+**Fallback: .env file** (for CI/headless)
+
+```bash
+# ~/.ai/.env (or project .env)
+REGISTRY_TOKEN=sb-xxx...
+SIGNING_KEY=base64-encoded-pem...
+# or
+SIGNING_KEY_FILE=/path/to/private.pem
+```
+
+**Never stored as plaintext outside .env.** RYE tools check:
+1. System keyring first (for interactive)
+2. .env file second (for CI)
+3. Error if neither available
+
+---
+
+## MCP Configuration
+
+Users configure their LLM client to connect to Lilux:
+
+**Claude Desktop / Cursor config:**
+
+```json
+{
+  "mcpServers": {
+    "lilux": {
+      "command": "python",
+      "args": ["-m", "lilux.server"],
+      "env": {
+        "EMBEDDING_URL": "https://api.openai.com/v1/embeddings",
+        "EMBEDDING_API_KEY": "sk-...",
+        "VECTOR_DB_URL": "sqlite:///~/.local/share/lilux/vectors.db"
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -231,144 +367,155 @@ All backed by the same lilux kernel + rye content.
 ### Independent Versioning
 
 - **lilux 0.1.0**: Kernel stability, API contracts
-- **rye 0.1.0**: Content stability, directive/tool versions
+- **rye-lilux 0.1.0**: Content stability, directive/tool versions
 
 ### Compatibility Matrix
 
 ```
-rye 0.1.0 requires lilux >=0.1.0
-rye 0.2.0 requires lilux >=0.1.0
-rye 1.0.0 requires lilux >=0.2.0
+rye-lilux 0.1.0 requires lilux >=0.1.0
+rye-lilux 0.2.0 requires lilux >=0.1.0
+rye-lilux 1.0.0 requires lilux >=0.2.0
 
-lilux 0.2.0 compatible with rye >=0.1.0
-lilux 1.0.0 not compatible with rye <1.0.0
+lilux 0.2.0 compatible with rye-lilux >=0.1.0
+lilux 1.0.0 not compatible with rye-lilux <1.0.0
 ```
 
 ### Release Cycle
 
 - **lilux**: Slower releases (kernel stability)
-- **rye**: Faster releases (content improvements)
+- **rye-lilux**: Faster releases (content improvements)
 - **Coordinated releases**: Only when breaking changes
 
 ---
 
 ## Development & Contribution
 
-### Contributing to Lilux Kernel
+### Working in the Monorepo
 
 ```bash
-git clone github.com/leolilley/lilux
-cd lilux
+git clone github.com/leolilley/lilux-rye
+cd lilux-rye
 pip install -e .
-# Edit lilux/primitives/, lilux/handlers/, etc.
+# Both lilux/ and rye/ are editable
 pytest
 ```
 
-### Contributing to RYE Content
+### Testing
 
 ```bash
-git clone github.com/leolilley/rye
-cd rye
-# Edit .ai/directives/, .ai/tools/, .ai/knowledge/
-# Test against installed lilux
-lilux search "my-directive"
-lilux execute action run directive core my-directive
+# Test kernel
+pytest tests/kernel/
+
+# Test content
+pytest tests/content/
+
+# Integration tests
+pytest tests/integration/
 ```
-
----
-
-## Future: Optional Separate Repositories
-
-If ever split into fully separate repos:
-
-**Option 1: Monorepo (Current)**
-```
-lilux-rye/
-├── lilux/    (kernel)
-└── rye/      (content)
-```
-
-**Option 2: Separate repos (Future)
-```
-lilux/       (kernel only)
-├── lilux/
-├── pyproject.toml
-└── publish to PyPI as 'lilux'
-
-rye/         (content only)
-├── .ai/
-├── pyproject.toml (depends: lilux>=0.1.0)
-└── publish to PyPI as 'rye'
-```
-
-Either way, the user experience is the same: `pipx install rye` gets everything.
 
 ---
 
 ## Architecture Diagram
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                  User's Machine                          │
-│                                                          │
-│  $ pipx install rye                                     │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐ │
-│  │ Virtual Environment (~/virtualenvs/rye/)           │ │
-│  │                                                    │ │
-│  │ ┌──────────────────────┐  ┌──────────────────────┐│ │
-│  │ │   lilux Package      │  │   rye Package        ││ │
-│  │ │  (from PyPI)         │  │  (from PyPI)         ││ │
-│  │ │                      │  │                      ││ │
-│  │ │ ├── lilux/           │  │ ├── rye/             ││ │
-│  │ │ │   ├── server.py    │  │ │   └── __init__.py   ││ │
-│  │ │ │   ├── tools/       │  │ ├── .ai/  ← bundled ││ │
-│  │ │ │   ├── primitives/  │  │ │   ├── directives/  ││ │
-│  │ │ │   ├── handlers/    │  │ │   ├── tools/       ││ │
-│  │ │ │   └── ...          │  │ │   └── knowledge/   ││ │
-│  │ │ └── bin/             │  │ └── bin/             ││ │
-│  │ │     └── lilux        │  │     ├── lilux        ││ │
-│  │ │                      │  │     ├── rye-init     ││ │
-│  │ └──────────────────────┘  │     └── rye-demo     ││ │
-│  │         ▲                 └─────────────────────────┘│
-│  │         │                                            │
-│  │         └── rye depends on lilux                     │
-│  └────────────────────────────────────────────────────┘ │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐ │
-│  │ User Space: ~/.local/share/rye/                    │ │
-│  │                                                    │ │
-│  │ ├── collections/  (installed collections)          │ │
-│  │ ├── cache/        (embeddings, search indices)     │ │
-│  │ └── user/         (user's custom content)           │ │
-│  └────────────────────────────────────────────────────┘ │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                      USER'S LLM CLIENT                            │
+│              (Claude Desktop, Cursor, etc.)                       │
+│                                                                   │
+│  User: "init my workspace"                                       │
+│  LLM: [calls mcp__lilux__execute(...)]                           │
+└───────────────────────────────────────────────────────────────────┘
+                            │ MCP Protocol (stdio)
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    LILUX MCP SERVER                               │
+│                                                                   │
+│  Kernel (pip install lilux):                                     │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ 5 Primitive Tools:                                          │ │
+│  │   search │ load │ execute │ sign │ help                     │ │
+│  │                                                              │ │
+│  │ help includes: primitive docs + command dispatch table      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  RYE Content (pip install rye-lilux):                            │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ PROTECTED (readonly - all core tools):                      │ │
+│  │   .ai/tools/core/system.py    ← env vars, paths, rag       │ │
+│  │   .ai/tools/core/registry.py  ← auth, sync, publish, keys  │ │
+│  │   .ai/tools/core/rag.py       ← vector search              │ │
+│  │   .ai/tools/core/llm/*        ← LLM provider configs       │ │
+│  │   .ai/tools/core/threads/*    ← threading infrastructure   │ │
+│  │   .ai/knowledge/kernel/*      ← kernel documentation       │ │
+│  │                                                              │ │
+│  │ SHADOWABLE (user can override):                             │ │
+│  │   .ai/directives/core/*       ← init, bootstrap, sync      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      USER SPACES                                  │
+│                                                                   │
+│  User Space ($USER_PATH, default ~/.ai/):                         │
+│  ├── directives/               ← user's custom directives        │
+│  ├── tools/                    ← user's custom tools             │
+│  ├── knowledge/                ← user's knowledge entries        │
+│  ├── keys/trusted/*.pub        ← trusted author public keys      │
+│  ├── cache/vectors/            ← embeddings cache                │
+│  ├── config.yaml               ← user settings                   │
+│  └── AGENTS.md                 ← command dispatch table          │
+│                                                                   │
+│  System Keyring (secrets - not on filesystem):                   │
+│  └── rye/registry-token, rye/signing-key                         │
+│                                                                   │
+│  Project (.ai/):                                                  │
+│  ├── directives/               ← project-specific directives     │
+│  ├── tools/                    ← project-specific tools          │
+│  └── knowledge/                ← project-specific knowledge      │
+└──────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    REGISTRY (Supabase)                            │
+│                                                                   │
+│  items:                         user_keys:                       │
+│  ├── core/init (official)       ├── core → RYE team key         │
+│  ├── leo/my-tool (signed)       ├── leo → leo's public key      │
+│  └── jane/workflow (signed)     └── jane → jane's public key    │
+│                                                                   │
+│  vector_bundles:                                                 │
+│  ├── rye-core-384.tar.gz                                         │
+│  ├── rye-core-768.tar.gz                                         │
+│  ├── rye-core-1536.tar.gz                                        │
+│  └── rye-core-3072.tar.gz                                        │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Summary
 
-| Aspect | Lilux | RYE |
-|--------|-------|-----|
-| **What** | Kernel (execution engine) | Content (directives, tools, knowledge) |
-| **Repository** | `github.com/leolilley/lilux` | `github.com/leolilley/rye` |
-| **PyPI Package** | `lilux` | `rye` |
-| **Dependency** | None (standalone) | Depends on `lilux>=0.1.0` |
-| **Versioning** | Kernel semver | Content semver |
-| **Release Cycle** | Stable, infrequent | Dynamic, frequent |
-| **User Install** | `pip install lilux` | `pipx install rye` (gets both) |
-| **CLI** | `lilux`, `lilux-serve` | `rye-init`, `rye-demo`, + lilux CLI |
-| **Content** | None | `.ai/` folder with core directives/tools/knowledge |
+| Aspect            | Lilux                            | RYE                                                |
+| ----------------- | -------------------------------- | -------------------------------------------------- |
+| **What**          | Kernel (execution engine)        | Content (directives, tools, knowledge)             |
+| **Repository**    | Monorepo: `lilux-rye/lilux/`     | Monorepo: `lilux-rye/rye/`                         |
+| **PyPI Package**  | `lilux`                          | `rye-lilux`                                        |
+| **Dependency**    | None (standalone)                | Depends on `lilux>=0.1.0`                          |
+| **Versioning**    | Kernel semver                    | Content semver                                     |
+| **Release Cycle** | Stable, infrequent               | Dynamic, frequent                                  |
+| **User Install**  | `pip install lilux`              | `pip install rye-lilux` (gets both)                |
+| **Interaction**   | MCP tools via LLM                | MCP tools via LLM                                  |
+| **Content**       | None                             | `.ai/` folder with core directives/tools/knowledge |
 
 **Bottom line:**
-- User installs: `pipx install rye`
+
+- User installs: `pip install rye-lilux`
 - Gets: lilux kernel + rye content
+- Interacts via LLM → MCP tools (no CLI)
 - Both work together seamlessly
-- Independent evolution, coordinated release
 
 ---
 
-_Document Status: Clarification_  
-_Last Updated: 2026-01-28_
+_Document Status: Aligned with Ship Roadmap_  
+_Last Updated: 2026-01-29_

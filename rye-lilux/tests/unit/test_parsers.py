@@ -6,7 +6,7 @@ Tests the new Universal Extractor architecture with flat output structure.
 
 import pytest
 from pathlib import Path
-from kiwi_mcp.utils.parsers import parse_directive_file, parse_knowledge_file
+from lilux.utils.parsers import parse_directive_file, parse_knowledge_file
 
 
 class TestDirectiveParser:
@@ -14,7 +14,7 @@ class TestDirectiveParser:
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_basic(self, tmp_path):
+    def test_parse_directive_basic(self, tmp_path, parsing_project_path):
         """Should parse basic directive and return flat structure."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -49,7 +49,7 @@ class TestDirectiveParser:
         directive_file = directive_dir / "test_basic.md"
         directive_file.write_text(directive_content)
         
-        result = parse_directive_file(directive_file, tmp_path)
+        result = parse_directive_file(directive_file, parsing_project_path)
         
         # Check flat structure
         assert result["name"] == "test_basic"
@@ -73,7 +73,7 @@ class TestDirectiveParser:
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_without_version_returns_none(self, tmp_path):
+    def test_parse_directive_without_version_returns_none(self, tmp_path, parsing_project_path):
         """Should return None when version attribute is missing."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -95,13 +95,13 @@ class TestDirectiveParser:
         directive_file = directive_dir / "test_no_version.md"
         directive_file.write_text(directive_content)
         
-        result = parse_directive_file(directive_file, tmp_path)
+        result = parse_directive_file(directive_file, parsing_project_path)
         
         assert result["version"] is None
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_with_version_attribute(self, tmp_path):
+    def test_parse_directive_with_version_attribute(self, tmp_path, parsing_project_path):
         """Should parse version attribute correctly."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -123,13 +123,13 @@ class TestDirectiveParser:
         directive_file = directive_dir / "test_version.md"
         directive_file.write_text(directive_content)
         
-        result = parse_directive_file(directive_file, tmp_path)
+        result = parse_directive_file(directive_file, parsing_project_path)
         
         assert result["version"] == "2.3.4"
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_with_cdata(self, tmp_path):
+    def test_parse_directive_with_cdata(self, tmp_path, parsing_project_path):
         """Should parse directive with CDATA sections correctly."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -156,7 +156,7 @@ class TestDirectiveParser:
         directive_file = directive_dir / "test_cdata.md"
         directive_file.write_text(directive_content)
         
-        result = parse_directive_file(directive_file, tmp_path)
+        result = parse_directive_file(directive_file, parsing_project_path)
         
         assert result["name"] == "test_cdata"
         assert result["version"] == "1.0.0"
@@ -165,7 +165,7 @@ class TestDirectiveParser:
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_invalid_xml_raises_error(self, tmp_path):
+    def test_parse_directive_invalid_xml_raises_error(self, tmp_path, parsing_project_path):
         """Should raise ValueError for invalid XML."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -192,13 +192,13 @@ class TestDirectiveParser:
         directive_file.write_text(directive_content)
         
         with pytest.raises(ValueError) as exc_info:
-            parse_directive_file(directive_file, tmp_path)
+            parse_directive_file(directive_file, parsing_project_path)
         
         assert "Invalid directive XML" in str(exc_info.value)
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_with_limits(self, tmp_path):
+    def test_parse_directive_with_limits(self, tmp_path, parsing_project_path):
         """Should parse limits structure correctly."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -229,7 +229,7 @@ class TestDirectiveParser:
         directive_file = directive_dir / "test_limits.md"
         directive_file.write_text(directive_content)
         
-        result = parse_directive_file(directive_file, tmp_path)
+        result = parse_directive_file(directive_file, parsing_project_path)
         
         assert result["name"] == "test_limits"
         assert result["limits"] is not None
@@ -242,7 +242,7 @@ class TestDirectiveParser:
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_with_hooks(self, tmp_path):
+    def test_parse_directive_with_hooks(self, tmp_path, parsing_project_path):
         """Should parse hooks structure correctly."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -280,7 +280,7 @@ class TestDirectiveParser:
         directive_file = directive_dir / "test_hooks.md"
         directive_file.write_text(directive_content)
         
-        result = parse_directive_file(directive_file, tmp_path)
+        result = parse_directive_file(directive_file, parsing_project_path)
         
         assert result["name"] == "test_hooks"
         assert result["hooks"] is not None
@@ -299,7 +299,7 @@ class TestDirectiveParser:
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_with_nested_template(self, tmp_path):
+    def test_parse_directive_with_nested_template(self, tmp_path, parsing_project_path):
         """Should parse directive with nested XML template without breaking."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -336,7 +336,7 @@ class TestDirectiveParser:
         directive_file = directive_dir / "create_something.md"
         directive_file.write_text(directive_content)
         
-        result = parse_directive_file(directive_file, tmp_path)
+        result = parse_directive_file(directive_file, parsing_project_path)
         
         assert result["name"] == "create_something"
         assert result["version"] == "1.0.0"
@@ -348,7 +348,7 @@ class TestDirectiveParser:
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_directive_with_nested_markdown_fences(self, tmp_path):
+    def test_parse_directive_with_nested_markdown_fences(self, tmp_path, parsing_project_path):
         """Should handle nested markdown code fences correctly."""
         directive_dir = tmp_path / ".ai" / "directives" / "test"
         directive_dir.mkdir(parents=True)
@@ -379,7 +379,7 @@ def hello():
         directive_file = directive_dir / "example_fences.md"
         directive_file.write_text(directive_content)
         
-        result = parse_directive_file(directive_file, tmp_path)
+        result = parse_directive_file(directive_file, parsing_project_path)
         
         assert result["name"] == "example_fences"
         assert "templates" in result
@@ -393,7 +393,7 @@ class TestKnowledgeParser:
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_knowledge_basic(self, tmp_path):
+    def test_parse_knowledge_basic(self, tmp_path, parsing_project_path):
         """Should parse basic knowledge entry."""
         knowledge_dir = tmp_path / ".ai" / "knowledge"
         knowledge_dir.mkdir(parents=True)
@@ -418,7 +418,7 @@ It references [[other-entry]] and [[another-one]].
         knowledge_file = knowledge_dir / "test-entry.md"
         knowledge_file.write_text(knowledge_content)
         
-        result = parse_knowledge_file(knowledge_file, tmp_path)
+        result = parse_knowledge_file(knowledge_file, parsing_project_path)
         
         assert result["id"] == "test-entry"
         assert result["title"] == "Test Knowledge Entry"
@@ -428,12 +428,12 @@ It references [[other-entry]] and [[another-one]].
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_knowledge_with_signature(self, tmp_path):
+    def test_parse_knowledge_with_signature(self, tmp_path, parsing_project_path):
         """Should parse knowledge entry with signature comment."""
         knowledge_dir = tmp_path / ".ai" / "knowledge"
         knowledge_dir.mkdir(parents=True)
         
-        knowledge_content = """<!-- kiwi-mcp:validated:2026-01-28T00:00:00Z:abc123 -->
+        knowledge_content = """<!-- lilux:validated:2026-01-28T00:00:00Z:abc123 -->
 ---
 id: signed-entry
 title: Signed Entry
@@ -448,14 +448,14 @@ This entry has a signature.
         knowledge_file = knowledge_dir / "signed-entry.md"
         knowledge_file.write_text(knowledge_content)
         
-        result = parse_knowledge_file(knowledge_file, tmp_path)
+        result = parse_knowledge_file(knowledge_file, parsing_project_path)
         
         assert result["id"] == "signed-entry"
         assert result["title"] == "Signed Entry"
 
     @pytest.mark.unit
     @pytest.mark.parser
-    def test_parse_knowledge_body_extraction(self, tmp_path):
+    def test_parse_knowledge_body_extraction(self, tmp_path, parsing_project_path):
         """Should extract body content correctly."""
         knowledge_dir = tmp_path / ".ai" / "knowledge"
         knowledge_dir.mkdir(parents=True)
@@ -478,7 +478,7 @@ More content here.
         knowledge_file = knowledge_dir / "body-test.md"
         knowledge_file.write_text(knowledge_content)
         
-        result = parse_knowledge_file(knowledge_file, tmp_path)
+        result = parse_knowledge_file(knowledge_file, parsing_project_path)
         
         assert result["body"] is not None
         assert "Main Content" in result["body"]
