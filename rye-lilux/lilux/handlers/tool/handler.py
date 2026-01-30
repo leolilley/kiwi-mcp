@@ -1,693 +1,130 @@
 """
 Tool handler for lilux.
 
-Implements search, load, execute operations for tools.
-Handles LOCAL file operations directly, only uses registry for REMOTE operations.
+DUMB ROUTER - no content intelligence.
+All intelligence moved to RYE layer.
 
-Tool handler with executor pattern support.
+This handler only routes to Lilux primitives for execution.
 """
 
-from typing import Dict, Any, Optional, List, Literal
 from pathlib import Path
-import json
-import os
-
-from lilux.handlers import SortBy
+from typing import Any, Dict
 from lilux.utils.logger import get_logger
 from lilux.utils.resolvers import ToolResolver, get_user_space
-from lilux.schemas.tool_schema import search_items, extract_and_validate
-from lilux.utils.output_manager import OutputManager, truncate_for_response
-from lilux.utils.metadata_manager import MetadataManager
-from lilux.utils.validators import ValidationManager, compare_versions
-from lilux.utils.extensions import get_tool_extensions
-from lilux.schemas import extract_tool_metadata, validate_tool_metadata
-from lilux.primitives.executor import PrimitiveExecutor, ExecutionResult
-from lilux.utils.protection import validate_item_path
 
 
 class ToolHandler:
-    """Handler for tool operations with executor abstraction."""
+    """
+    Kernel handler - dumb router for tool files.
+
+    Does NOT understand tool metadata format.
+    Does NOT parse tool executor config.
+    Does NOT validate tool structure.
+
+    Only routes files to Lilux primitives for execution.
+    """
 
     def __init__(self, project_path: str):
-        """Initialize handler with project path."""
+        """Initialize dumb router with project path."""
         self.project_path = Path(project_path)
         self.resolver = ToolResolver(project_path=self.project_path)
         self.logger = get_logger("tool_handler")
 
-        # Output manager for saving large results
-        self.output_manager = OutputManager(project_path=self.project_path)
-
-        # Initialize primitive executor with project path for local chain resolution
-        self.primitive_executor = PrimitiveExecutor(project_path=self.project_path)
-
-        # Vector store for automatic embedding
-        self._vector_store = None
-        self._init_vector_store()
-
-    def _init_vector_store(self):
-        """Initialize project vector store for automatic embedding."""
-        try:
-            from lilux.storage.vector import (
-                LocalVectorStore,
-                EmbeddingService,
-                load_vector_config,
-            )
-
-            # Load embedding config from environment
-            config = load_vector_config()
-            embedding_service = EmbeddingService(config)
-
-            vector_path = self.project_path / ".ai" / "vector" / "project"
-            vector_path.mkdir(parents=True, exist_ok=True)
-
-            self._vector_store = LocalVectorStore(
-                storage_path=vector_path,
-                collection_name="project_items",
-                embedding_service=embedding_service,
-                source="project",
-            )
-        except ValueError as e:
-            # Missing config - vector search disabled
-            self.logger.debug(f"Vector store not configured: {e}")
-            self._vector_store = None
-        except Exception as e:
-            self.logger.warning(f"Vector store init failed: {e}")
-            self._vector_store = None
-
-    def _has_git(self) -> bool:
-        """Check if project is in a git repository."""
-        try:
-            import subprocess
-
-            result = subprocess.run(
-                ["git", "rev-parse", "--git-dir"], cwd=self.project_path, capture_output=True
-            )
-            return result.returncode == 0
-        except FileNotFoundError:
-            return False
-
-    async def search(
-        self, query: str, source: str = "project", limit: int = 10, sort_by: SortBy = "score"
-    ) -> Dict[str, Any]:
+    def get_file_path(self, tool_name: str) -> Dict[str, Any]:
         """
-        Search for tools/scripts.
+        Resolve tool file path - ROUTER ONLY.
+
+        No parsing, no validation, no intelligence.
+        Just returns the file path.
 
         Args:
-            query: Search query
-            source: "project", "user", or "all" (both project and user)
-            limit: Max results
-            sort_by: Sort method ("score", "date", "name")
+            tool_name: Name of tool to resolve
 
         Returns:
-            Dict with search results
+            Dict with 'path', 'item_type', 'item_id'
+            or dict with 'error' if not found
         """
-        results = []
-
-        # Search local files only
-        local_results = await self._search_local(query, limit)
-        results.extend(local_results)
-
-        # Sort and limit
-        if sort_by == "score":
-            results.sort(key=lambda x: x.get("score", 0), reverse=True)
-        elif sort_by == "date":
-            results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-        elif sort_by == "name":
-            results.sort(key=lambda x: x.get("name", ""))
-
-        return {"results": results[:limit], "total": len(results), "query": query, "source": source}
-
-    async def _search_local(self, query: str, limit: int) -> List[Dict[str, Any]]:
-        """Search local tools using Universal Extractor."""
-        search_dirs = [
-            self.project_path / ".ai" / "tools",
-            get_user_space() / "tools",
-        ]
-        
-        results = search_items("tool", query, search_dirs, self.project_path)
-        
-        for r in results:
-            r["source"] = "project" if ".ai/" in str(r["path"]) else "user"
-        
-        return results[:limit] if limit else results
-
-    def _detect_tool_type(self, file_path: Path) -> str:
-        """Detect tool type using schema-driven extraction."""
-        try:
-            meta = extract_tool_metadata(file_path, self.project_path)
-            return meta.get("tool_type") or "unknown"
-        except Exception:
-            return "unknown"
-
-    async def load(
-        self,
-        tool_name: str,
-        source: Literal["project", "user"],
-        destination: Optional[Literal["project", "user"]] = None,
-        version: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Load tool from specified source.
-
-        Args:
-            tool_name: Name of tool
-            source: Where to load from - "project" | "user"
-            destination: Where to copy to (optional). If None or same as source, read-only mode.
-
-        Returns:
-            Dict with tool details
-        """
-        self.logger.info(
-            f"ToolHandler.load: tool={tool_name}, source={source}, destination={destination}"
-        )
-
-        try:
-            # Determine if this is read-only mode (no copy)
-            is_read_only = destination is None or (source == destination)
-
-            # LOAD FROM LOCAL (project or user)
-            file_path = self.resolver.resolve(tool_name)
-            if not file_path:
-                return {"error": f"Tool '{tool_name}' not found locally"}
-
-            if not is_read_only:
-                if destination == "user":
-                    target_dir = get_user_space() / "tools"
-                else:
-                    target_dir = self.project_path / ".ai" / "tools"
-
-                target_dir.mkdir(parents=True, exist_ok=True)
-
-                # Copy with same relative structure
-                relative_path = file_path.relative_to(file_path.parents[1])  # Remove scripts/ part
-                target_file = target_dir / relative_path
-
-                # Create target directory structure
-                target_file.parent.mkdir(parents=True, exist_ok=True)
-
-                # Copy file
-                target_file.write_text(file_path.read_text())
-
-                self.logger.info(f"Copied tool from {source} to {destination}: {target_file}")
-                file_path = target_file  # Use new path for metadata extraction
-
-            validation = extract_and_validate(file_path, "tool", self.project_path)
-            
-            if not validation["valid"]:
-                return {
-                    "error": "Tool validation failed",
-                    "issues": validation["issues"],
-                    "path": str(file_path),
-                    "solution": "Fix issues and run sign tool",
-                }
-
-            result = {
-                "name": tool_name,
-                "path": str(file_path),
-                "content": file_path.read_text(),
-                "source": source,
-                "metadata": validation["data"],
-            }
-
-            if not is_read_only:
-                result["destination"] = destination
-                result["message"] = f"Tool copied from {source} to {destination}"
-
-            return result
-
-        except Exception as e:
-            self.logger.error(f"Load failed: {e}")
-            return {"error": str(e)}
-
-    async def execute(
-        self,
-        tool_name: str,
-        parameters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Execute a tool.
-
-        Args:
-            tool_name: Name of tool to execute
-            parameters: Tool parameters
-
-        Returns:
-            Dict with execution result
-        """
-        params = parameters or {}
-        dry_run = params.pop("dry_run", False) if params else False
-
-        try:
-            return await self._execute_tool(tool_name, params, dry_run)
-        except Exception as e:
-            self.logger.error(f"Execute failed: {e}")
-            return {"error": str(e)}
-
-    async def sign(
-        self,
-        tool_name: str,
-        parameters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Validate and sign a tool file.
-
-        Args:
-            tool_name: Name of tool to sign
-            parameters: Sign parameters (location, category)
-
-        Returns:
-            Dict with sign result
-        """
-        params = parameters or {}
-        try:
-            return await self._sign_tool(
-                tool_name,
-                params.get("location", "project"),
-                params.get("category"),
-            )
-        except Exception as e:
-            self.logger.error(f"Sign failed: {e}")
-            return {"error": str(e)}
-
-    async def _execute_tool(
-        self, tool_name: str, params: Dict[str, Any], dry_run: bool
-    ) -> Dict[str, Any]:
-        """Execute a tool using appropriate executor."""
-        # Find tool file
         file_path = self.resolver.resolve(tool_name)
+
         if not file_path:
             return {
-                "error": f"Tool '{tool_name}' not found locally",
-                "suggestion": "Use load() to download from registry first",
+                "error": f"Tool '{tool_name}' not found in project or user space"
             }
-
-        # Extract metadata using schema
-        tool_meta = extract_tool_metadata(file_path, self.project_path)
-
-        # Extract integrity hash from signature
-        file_content = file_path.read_text()
-        stored_hash = MetadataManager.get_signature_hash(
-            "tool", file_content, file_path=file_path, project_path=self.project_path
-        )
-
-        if not stored_hash:
-            return {
-                "status": "error",
-                "error": "Tool has no signature",
-                "path": str(file_path),
-                "hint": "Tool needs validation",
-                "solution": (
-                    f"Run: sign(item_type='tool', "
-                    f"item_id='{tool_name}', "
-                    f"project_path='{self.project_path}')"
-                ),
-            }
-
-        # Get version - must be present
-        version = tool_meta.get("version")
-        if not version or version == "0.0.0":
-            return {
-                "status": "error",
-                "error": "Tool validation failed",
-                "details": [
-                    'Tool is missing required version. Add at module level: __version__ = "1.0.0"'
-                ],
-                "path": str(file_path),
-                "solution": "Add version metadata and retry",
-            }
-
-        # Verify integrity using IntegrityVerifier
-        from lilux.primitives.integrity_verifier import IntegrityVerifier
-
-        verifier = IntegrityVerifier()
-
-        verification = verifier.verify_single_file(
-            item_type="tool",
-            item_id=tool_name,
-            version=version,
-            file_path=file_path,
-            stored_hash=stored_hash,
-            project_path=self.project_path,
-        )
-
-        if not verification.success:
-            return {
-                "status": "error",
-                "error": "Tool content has been modified since last validation",
-                "details": verification.error,
-                "path": str(file_path),
-                "solution": "Run sign(...) to re-validate the tool",
-            }
-
-        # Validate using schema
-        validation_result = validate_tool_metadata(tool_meta)
-        if not validation_result["valid"]:
-            return {
-                "status": "error",
-                "error": "Tool validation failed",
-                "details": validation_result["issues"],
-                "path": str(file_path),
-                "warnings": validation_result.get("warnings", []),
-            }
-
-        current_version = tool_meta.get("version") or "0.0.0"
-        current_source = (
-            "project" if str(file_path).startswith(str(self.resolver.project_tools)) else "user"
-        )
-        version_warning = await self._check_for_newer_version(
-            tool_name, current_version, current_source
-        )
-
-        if dry_run:
-            response = {
-                "status": "validation_passed",
-                "message": "Tool is ready to execute",
-                "path": str(file_path),
-                "metadata": tool_meta,
-            }
-            if version_warning:
-                response["version_warning"] = version_warning
-            return response
-
-        # Execute using PrimitiveExecutor with chain resolution
-        try:
-            # Inject file path and project path for subprocess execution
-            exec_params = params.copy()
-            exec_params["_file_path"] = str(file_path)
-            exec_params["_project_path"] = str(self.project_path)
-            result = await self.primitive_executor.execute(tool_meta["name"], exec_params)
-
-            if result.success:
-                response = {
-                    "status": "success",
-                    "data": result.data,
-                    "metadata": {
-                        "duration_ms": result.duration_ms,
-                        "tool_type": tool_meta.get("tool_type"),
-                        "primitive_type": result.metadata.get("type")
-                        if result.metadata
-                        else "unknown",
-                    },
-                }
-
-                if tool_meta.get("mutates_state") and self._has_git():
-                    response["checkpoint_recommended"] = True
-                    tool_name_val = tool_meta.get("name", "unknown")
-                    response["checkpoint_hint"] = (
-                        "This tool mutates state. Consider running git_checkpoint: "
-                        f"execute(item_type='directive', item_id='git_checkpoint', "
-                        f"parameters={{'operation': '{tool_name_val}'}})"
-                    )
-
-                # Add version warning if newer version exists
-                if version_warning:
-                    response["version_warning"] = version_warning
-
-                return response
-            else:
-                error_details = {
-                    "status": "error",
-                    "error": result.error or "Unknown execution error",
-                    "metadata": {
-                        "duration_ms": result.duration_ms,
-                        "tool_type": tool_meta.get("tool_type"),
-                        "primitive_type": result.metadata.get("type")
-                        if result.metadata
-                        else "unknown",
-                    },
-                }
-
-                # Always include subprocess details for debugging
-                if result.data:
-                    error_details["stdout"] = result.data.get("stdout", "")
-                    error_details["stderr"] = result.data.get("stderr", "")
-                    error_details["return_code"] = result.data.get("return_code")
-
-                return error_details
-
-        except Exception as e:
-            self.logger.error(f"Tool execution failed: {e}")
-            return {"status": "error", "error": str(e)}
-
-    async def _sign_tool(
-        self, tool_name: str, location: str = "project", category: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Validate and sign an existing tool file.
-
-        Expects the tool file to already exist on disk.
-        This action validates the Python/metadata and signs the file.
-        Always allows re-signing - signatures are included in the validation chain.
-        """
-        if location not in ("project", "user"):
-            return {
-                "error": f"Invalid location: {location}",
-                "valid_locations": ["project", "user"],
-            }
-
-        # Find the tool file - try resolver first, then search by location
-        file_path = self.resolver.resolve(tool_name)
-
-        if not file_path or not file_path.exists():
-            # Search by location if resolver didn't find it
-            if location == "project":
-                search_base = self.project_path / ".ai" / "tools"
-            else:
-                search_base = get_user_space() / "tools"
-
-            # Search for the tool file (all supported extensions)
-            supported_extensions = get_tool_extensions(self.project_path)
-            if search_base.exists():
-                for ext in supported_extensions:
-                    for candidate in Path(search_base).rglob(f"{tool_name}{ext}"):
-                        if candidate.stem == tool_name:
-                            file_path = candidate
-                            break
-                    if file_path:
-                        break
-
-        if not file_path or not file_path.exists():
-            category_hint = category or "utility"
-            supported_extensions = get_tool_extensions(self.project_path)
-            ext_list = ", ".join(supported_extensions)
-            return {
-                "error": f"Tool file not found: {tool_name}",
-                "hint": f"Create the file first at .ai/tools/{category_hint}/{tool_name}<ext> (supported: {ext_list})",
-            }
-
-        # Validate path structure
-        from lilux.utils.paths import validate_path_structure
-
-        determined_location = (
-            "project" if str(file_path).startswith(str(self.project_path)) else "user"
-        )
-        path_validation = validate_path_structure(
-            file_path, "tool", determined_location, self.project_path
-        )
-        if not path_validation["valid"]:
-            return {
-                "error": "Tool path structure invalid",
-                "details": path_validation["issues"],
-                "path": str(file_path),
-                "solution": "File must be under .ai/tools/ with correct structure",
-            }
-
-        # Read file content (may include existing signature)
-        file_content = file_path.read_text()
-
-        # Extract and validate using schema
-        try:
-            tool_meta = extract_tool_metadata(file_path, self.project_path)
-            validation_result = validate_tool_metadata(tool_meta)
-            if not validation_result["valid"]:
-                return {
-                    "error": "Tool validation failed",
-                    "details": validation_result["issues"],
-                    "warnings": validation_result.get("warnings", []),
-                    "path": str(file_path),
-                    "solution": "Fix validation issues and re-run sign action",
-                }
-        except Exception as e:
-            return {
-                "error": f"Failed to validate tool: {e}",
-                "path": str(file_path),
-            }
-
-        # Strict version requirement - fail if missing
-        version = tool_meta.get("version")
-        if not version or version == "0.0.0":
-            return {
-                "error": "Tool validation failed",
-                "details": [
-                    'Tool is missing required version. Add at module level: __version__ = "1.0.0"'
-                ],
-                "path": str(file_path),
-                "solution": "Add version metadata and re-run sign action",
-            }
-
-        # Compute unified integrity hash on content WITHOUT signature
-        # This allows re-signing to produce consistent hashes
-        from lilux.utils.metadata_manager import compute_unified_integrity, MetadataManager
-
-        # Remove existing signature before hashing (chained validation)
-        strategy = MetadataManager.get_strategy(
-            "tool", file_path=file_path, project_path=self.project_path
-        )
-        content_without_sig = strategy.remove_signature(file_content)
-
-        content_hash = compute_unified_integrity(
-            item_type="tool",
-            item_id=tool_name,
-            version=version,
-            file_content=content_without_sig,  # Hash only original content, not signature
-            file_path=file_path,
-        )
-
-        # Sign the validated content with unified integrity hash
-        signed_content = MetadataManager.sign_content_with_hash(
-            "tool", file_content, content_hash, file_path=file_path, project_path=self.project_path
-        )
-        file_path.write_text(signed_content)
-
-        # Get signature info for response
-        signature_info = MetadataManager.get_signature_info(
-            "tool", signed_content, file_path=file_path, project_path=self.project_path
-        )
-
-        # Generate lockfile for the tool's chain
-        lockfile_info = await self._generate_lockfile(
-            tool_name=tool_name,
-            version=version,
-            category=tool_meta.get("category", "tools"),
-            location=determined_location,
-        )
 
         return {
-            "status": "signed",
-            "tool_id": tool_name,
             "path": str(file_path),
-            "location": determined_location,
-            "category": tool_meta.get("category"),
-            "signature": signature_info,
-            "lockfile": lockfile_info,
+            "item_type": "tool",
+            "item_id": tool_name,
         }
 
-    async def _check_for_newer_version(
-        self,
-        tool_name: str,
-        current_version: str,
-        current_source: str,
-    ) -> Optional[Dict[str, Any]]:
+    def list_tools(self, source: str = "all") -> Dict[str, Any]:
         """
-        Check for newer versions of a tool in other locations.
+        List all tool files - ROUTER ONLY.
+
+        No parsing, no validation.
+        Just returns file paths.
 
         Args:
-            tool_name: Name of tool
-            current_version: Current version being run
-            current_source: "project" or "user"
+            source: "project", "user", or "all"
 
         Returns:
-            Warning dict if newer version found, None otherwise
+            Dict with list of file paths
         """
-        newest_version = current_version
-        newest_location = None
+        paths = []
 
-        # Check user space (if running from project)
-        if current_source == "project":
-            try:
-                user_file_path = self.resolver.resolve(tool_name)
-                # Check if it's in user space
-                if user_file_path and str(user_file_path).startswith(
-                    str(get_user_space() / "tools")
-                ):
-                    try:
-                        user_tool_meta = extract_tool_metadata(user_file_path, self.project_path)
-                        user_version = user_tool_meta.get("version")
-                        if user_version:
-                            try:
-                                if compare_versions(current_version, user_version) < 0:
-                                    # User version is newer
-                                    if compare_versions(newest_version, user_version) < 0:
-                                        newest_version = user_version
-                                        newest_location = "user"
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"Failed to compare versions with user space: {e}"
-                                )
-                    except Exception as e:
-                        self.logger.warning(f"Failed to parse user space tool {tool_name}: {e}")
-            except Exception as e:
-                self.logger.warning(f"Failed to check user space for tool {tool_name}: {e}")
+        if source in ("project", "all"):
+            project_dir = self.project_path / ".ai" / "tools"
+            if project_dir.exists():
+                paths.extend(project_dir.rglob("*"))
 
-        # Return warning if newer version found
-        if newest_location and newest_version != current_version:
-            return {
-                "message": "A newer version of this tool is available",
-                "current_version": current_version,
-                "newer_version": newest_version,
-                "location": newest_location,
-                "suggestion": f"Use load() to copy the newer version from user space",
-            }
+        if source in ("user", "all"):
+            user_dir = get_user_space() / "tools"
+            if user_dir.exists():
+                paths.extend(user_dir.rglob("*"))
 
-        return None
+        return {
+            "tools": [str(p) for p in paths],
+            "count": len(paths),
+        }
 
-    async def _generate_lockfile(
-        self,
-        tool_name: str,
-        version: str,
-        category: str,
-        location: str,
-    ) -> Dict[str, Any]:
+    def copy_tool(self, tool_name: str, destination: str) -> Dict[str, Any]:
         """
-        Generate lockfile for a tool by resolving its chain and freezing.
+        Copy tool file between project/user spaces - ROUTER ONLY.
 
-        Called automatically during sign to ensure lockfile is always current.
+        No parsing, no validation.
+        Just copies the file.
 
         Args:
-            tool_name: Name of tool
-            version: Tool version
-            category: Tool category
-            location: "project" or "user"
+            tool_name: Name of tool to copy
+            destination: "project" or "user"
 
         Returns:
-            Dict with lockfile generation result
+            Dict with 'path' or 'error'
         """
-        try:
-            from lilux.runtime.lockfile_store import LockfileStore
+        source_path = self.resolver.resolve(tool_name)
 
-            # Resolve the tool's chain
-            chain = await self.primitive_executor.resolver.resolve(tool_name)
+        if not source_path:
+            return {"error": f"Tool '{tool_name}' not found"}
 
-            if not chain:
-                return {
-                    "status": "skipped",
-                    "reason": "No chain to freeze (tool has no executor chain)",
-                }
+        # Determine target directory
+        if destination == "user":
+            target_dir = get_user_space() / "tools"
+        else:
+            target_dir = self.project_path / ".ai" / "tools"
 
-            # Get lockfile store
-            lockfile_store = LockfileStore(project_root=self.project_path)
+        # Preserve relative structure
+        relative_path = source_path.relative_to(source_path.parents[1])
+        target_path = target_dir / relative_path
 
-            # Freeze the chain
-            lockfile = lockfile_store.freeze(
-                tool_id=tool_name,
-                version=version,
-                category=category,
-                chain=chain,
-            )
+        # Copy file
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(source_path.read_text())
 
-            # Save to appropriate scope
-            scope = "project" if location == "project" else "user"
-            lockfile_path = lockfile_store.save(lockfile, category=category, scope=scope)
+        self.logger.info(f"Copied tool {tool_name} to {destination}: {target_path}")
 
-            return {
-                "status": "generated",
-                "path": str(lockfile_path),
-                "chain_length": len(chain),
-            }
-
-        except Exception as e:
-            self.logger.warning(f"Failed to generate lockfile for {tool_name}: {e}")
-            return {
-                "status": "failed",
-                "error": str(e),
-            }
+        return {
+            "path": str(target_path),
+            "item_id": tool_name,
+            "source": "project" if str(source_path).startswith(str(self.project_path)) else "user",
+            "destination": destination,
+        }

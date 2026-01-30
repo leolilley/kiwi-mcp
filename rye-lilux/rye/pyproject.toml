@@ -1,0 +1,19 @@
+[project]
+name = "rye-lilux"
+version = "0.1.0"
+description = "RYE - AI operating system running on Lilux microkernel"
+
+dependencies = [
+    "lilux>=0.1.0",  # ← Depends on microkernel
+]
+
+[project.scripts]
+rye = "rye.server:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["rye"]
+package-data = { "rye" = [".ai/**/*"] }  # Bundle .ai/ content

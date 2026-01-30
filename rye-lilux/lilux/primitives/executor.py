@@ -129,7 +129,14 @@ class ChainResolver:
             ToolNotFoundError: If tool is not found locally
         """
         from lilux.schemas.tool_schema import extract_tool_metadata
-        from lilux.utils.metadata_manager import MetadataManager
+
+        # STUB: MetadataManager replaced with local implementation
+        class StubMetadataManager:
+            """STUB: Simple metadata manager to replace the original."""
+
+            pass
+
+        MetadataManager = StubMetadataManager
 
         chain = []
         visited = set()
@@ -196,7 +203,19 @@ class ChainResolver:
 
             # Build file hashes for integrity verification
             # Remove signature before computing file hash
-            from lilux.utils.metadata_manager import ToolMetadataStrategy
+            # STUB: ToolMetadataStrategy replaced with local implementation
+            class StubToolMetadataStrategy:
+                """STUB: Simple tool metadata strategy."""
+
+                def __init__(self, file_path=None, project_path=None):
+                    self.file_path = file_path
+                    self.project_path = project_path
+
+                def remove_signature(self, content: str) -> str:
+                    """STUB: Return content as-is (signature handling moves to RYE)."""
+                    return content
+
+            ToolMetadataStrategy = StubToolMetadataStrategy
 
             strategy = ToolMetadataStrategy(file_path=file_path, project_path=self.project_path)
             content_without_sig = strategy.remove_signature(file_content)
@@ -594,7 +613,7 @@ class PrimitiveExecutor:
             resolved_env = env_resolver.resolve(
                 env_config=env_config, tool_env=params.get("_env", {})
             )
-            
+
             resolved_env_vars = {}
             if env_config:
                 # Extract only the variables declared in ENV_CONFIG for templating
@@ -627,34 +646,33 @@ class PrimitiveExecutor:
                 # Build validation errors for context
                 issues = validation_result.get("issues", [])
                 validation_errors = [
-                    ValidationError(field=str(issue), error="validation failed")
-                    for issue in issues
+                    ValidationError(field=str(issue), error="validation failed") for issue in issues
                 ]
-                
+
                 # Get the tool's file path for config_path
                 terminal_file_path = terminal_tool.get("file_path", "unknown")
-                
+
                 # Create ToolChainError with full context
                 failed_context = FailedToolContext(
                     tool_id=primitive_type,
                     config_path=terminal_file_path,
                     validation_errors=validation_errors,
                 )
-                
+
                 error = ToolChainError(
                     code="CONFIG_VALIDATION_ERROR",
                     message=f"Configuration validation failed for '{primitive_type}': {'; '.join(issues)}",
                     chain=[t.get("tool_id", "unknown") for t in chain],
                     failed_at=failed_context,
                 )
-                
+
                 return ExecutionResult(
                     success=False,
                     data=None,
                     duration_ms=int((time.time() - start_time) * 1000),
                     error=str(error),
                     metadata={"error_context": error.to_dict()},
-               )
+                )
 
             if validation_result.get("warnings"):
                 for warning in validation_result["warnings"]:
@@ -744,19 +762,19 @@ class PrimitiveExecutor:
         except Exception as e:
             # Wrap other exceptions with chain context
             logger.exception(f"Execution failed for {tool_id}")
-            
+
             # Try to get chain info if available
             chain_ids = []
             if context.chain:
                 chain_ids = [t.get("tool_id", "unknown") for t in context.chain]
-            
+
             # Wrap with context
             failed_context = FailedToolContext(
                 tool_id=tool_id,
                 config_path="unknown",
                 validation_errors=[],
             )
-            
+
             error = ToolChainError(
                 code="TOOL_CHAIN_FAILED",
                 message=f"Execution failed: {str(e)}",
@@ -764,7 +782,7 @@ class PrimitiveExecutor:
                 failed_at=failed_context,
                 cause=e,
             )
-            
+
             return ExecutionResult(
                 success=False,
                 data=None,

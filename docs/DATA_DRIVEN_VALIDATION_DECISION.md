@@ -15,6 +15,7 @@ After analysis, we determined that the original data-driven approach conflated t
 fundamentally different validation use cases. The correct architecture separates them:
 
 ### Layer 1: Definition-Time Validation (ToolValidator)
+
 - **Purpose**: Validates tool manifest structure at create/update/load time
 - **Location**: `kiwi_mcp/utils/validators.py` → `ToolValidator` class
 - **Characteristics**:
@@ -24,6 +25,7 @@ fundamentally different validation use cases. The correct architecture separates
 - **When**: Called by `ValidationManager.validate("tool", ...)`
 
 ### Layer 2: Runtime Parameter Validation (PrimitiveExecutor + SchemaValidator)
+
 - **Purpose**: Validates execution parameters at runtime before running primitives
 - **Location**: `kiwi_mcp/primitives/executor.py` → `PrimitiveExecutor._validate_runtime_params()`
 - **Characteristics**:
@@ -35,6 +37,7 @@ fundamentally different validation use cases. The correct architecture separates
 ### Why This Is Correct
 
 The database `config_schema` fields describe **runtime execution parameters**:
+
 - subprocess: command, args, env, cwd, timeout
 - http_client: method, url, headers, body, retry
 
@@ -345,4 +348,3 @@ This decision can be revisited if we encounter concrete use cases that require t
 2. Implement ToolValidator extension
 3. Update tests and documentation
 4. Archive the JSON Schema implementation for potential future use
-

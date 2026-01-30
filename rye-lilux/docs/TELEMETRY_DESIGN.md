@@ -118,7 +118,7 @@ items:
 
 Items are keyed by stable identifier:
 
-1. **Registry ID** (preferred): `namespace/item_name@version` (e.g., `leo/my-tool@1.0.0`)
+1. **Registry ID** (preferred): `category/item_name@version` (e.g., `leo/my-tool@1.0.0`)
 2. **Local ID**: `item_name` from frontmatter/metadata
 3. **Content hash**: `sha256(content_without_telemetry)` as fallback
 

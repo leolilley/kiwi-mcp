@@ -15,12 +15,8 @@ Package-manager style validation:
 from .subprocess import SubprocessPrimitive, SubprocessResult
 from .http_client import HttpClientPrimitive, HttpResult
 from .executor import PrimitiveExecutor, ExecutionResult, ChainResolver
-from .integrity import (
-    compute_tool_integrity,
-    compute_directive_integrity,
-    compute_knowledge_integrity,
-)
-from .integrity_verifier import IntegrityVerifier, VerificationResult
+from .integrity import short_hash
+from .integrity_verifier import compute_content_hash, verify_file_integrity
 from .chain_validator import ChainValidator, ChainValidationResult
 from .lockfile import Lockfile, LockfileManager, LockfileError
 from .errors import (
@@ -40,12 +36,9 @@ __all__ = [
     "PrimitiveExecutor",
     "ExecutionResult",
     "ChainResolver",
-    # Integrity
-    "compute_tool_integrity",
-    "compute_directive_integrity",
-    "compute_knowledge_integrity",
-    "IntegrityVerifier",
-    "VerificationResult",
+    # Integrity (simplified - dumb primitive only)
+    "compute_content_hash",
+    "verify_file_integrity",
     # Validation
     "ChainValidator",
     "ChainValidationResult",

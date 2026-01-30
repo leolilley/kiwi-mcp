@@ -167,7 +167,7 @@ def get_content_root():
             return ai_path
     except ImportError:
         pass
-    
+
     # Fallback: no content available (kernel-only install)
     return None
 
@@ -206,6 +206,7 @@ Single location for everything. Simpler mental model than XDG split.
 ### Secrets (System Keyring)
 
 Secrets stored in system keyring (not filesystem):
+
 - Registry session token → `keyring.set_password("rye", "registry-token", ...)`
 - Private signing key → `keyring.set_password("rye", "signing-key", ...)`
 
@@ -213,10 +214,10 @@ Uses macOS Keychain, Windows Credential Manager, or Linux Secret Service via Pyt
 
 ### Kernel vs RYE Responsibilities
 
-| Data | Location | Managed By |
-|------|----------|------------|
+| Data          | Location              | Managed By       |
+| ------------- | --------------------- | ---------------- |
 | All user data | `$USER_PATH` (~/.ai/) | User + RYE tools |
-| Secrets | System keyring | RYE tools |
+| Secrets       | System keyring        | RYE tools        |
 
 Kernel knows about `$USER_PATH`. RYE tools manage keys, cache, and config within it.
 
@@ -232,7 +233,7 @@ Registry operations (publish, sync from private items) require authentication. T
 
 ```
 User: "login to registry"
-LLM: [calls mcp__lilux__execute(item_type="tool", item_id="core/registry", 
+LLM: [calls mcp__lilux__execute(item_type="tool", item_id="core/registry",
       parameters={"action": "login"})]
 
 1. Registry tool generates:
@@ -270,11 +271,11 @@ ACTIONS = {
     "login": "Authenticate with registry (opens browser)",
     "logout": "Clear local auth session",
     "whoami": "Show current authenticated user",
-    
+
     # Registry operations (require auth)
     "sync": "Download/update items from registry",
     "publish": "Upload signed items to registry",
-    
+
     # Key management (require auth)
     "keys_generate": "Generate new signing keypair",
     "keys_list": "List trusted public keys",
@@ -311,14 +312,15 @@ LLM: [calls registry tool with action="whoami"]
 
 **Primary: System Keyring** (via Python `keyring` library)
 
-| Secret | Keyring Service | Keyring Key |
-|--------|-----------------|-------------|
-| Registry token | `rye` | `registry-token` |
-| Private signing key | `rye` | `signing-key` |
+| Secret              | Keyring Service | Keyring Key      |
+| ------------------- | --------------- | ---------------- |
+| Registry token      | `rye`           | `registry-token` |
+| Private signing key | `rye`           | `signing-key`    |
 
 Works with:
+
 - macOS Keychain
-- Windows Credential Manager  
+- Windows Credential Manager
 - Linux Secret Service (GNOME Keyring, KWallet)
 
 **Fallback: .env file** (for CI/headless)
@@ -332,6 +334,7 @@ SIGNING_KEY_FILE=/path/to/private.pem
 ```
 
 **Never stored as plaintext outside .env.** RYE tools check:
+
 1. System keyring first (for interactive)
 2. .env file second (for CI)
 3. Error if neither available
@@ -496,17 +499,17 @@ pytest tests/integration/
 
 ## Summary
 
-| Aspect            | Lilux                            | RYE                                                |
-| ----------------- | -------------------------------- | -------------------------------------------------- |
-| **What**          | Kernel (execution engine)        | Content (directives, tools, knowledge)             |
-| **Repository**    | Monorepo: `lilux-rye/lilux/`     | Monorepo: `lilux-rye/rye/`                         |
-| **PyPI Package**  | `lilux`                          | `rye-lilux`                                        |
-| **Dependency**    | None (standalone)                | Depends on `lilux>=0.1.0`                          |
-| **Versioning**    | Kernel semver                    | Content semver                                     |
-| **Release Cycle** | Stable, infrequent               | Dynamic, frequent                                  |
-| **User Install**  | `pip install lilux`              | `pip install rye-lilux` (gets both)                |
-| **Interaction**   | MCP tools via LLM                | MCP tools via LLM                                  |
-| **Content**       | None                             | `.ai/` folder with core directives/tools/knowledge |
+| Aspect            | Lilux                        | RYE                                                |
+| ----------------- | ---------------------------- | -------------------------------------------------- |
+| **What**          | Kernel (execution engine)    | Content (directives, tools, knowledge)             |
+| **Repository**    | Monorepo: `lilux-rye/lilux/` | Monorepo: `lilux-rye/rye/`                         |
+| **PyPI Package**  | `lilux`                      | `rye-lilux`                                        |
+| **Dependency**    | None (standalone)            | Depends on `lilux>=0.1.0`                          |
+| **Versioning**    | Kernel semver                | Content semver                                     |
+| **Release Cycle** | Stable, infrequent           | Dynamic, frequent                                  |
+| **User Install**  | `pip install lilux`          | `pip install rye-lilux` (gets both)                |
+| **Interaction**   | MCP tools via LLM            | MCP tools via LLM                                  |
+| **Content**       | None                         | `.ai/` folder with core directives/tools/knowledge |
 
 **Bottom line:**
 

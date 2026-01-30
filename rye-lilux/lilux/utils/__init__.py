@@ -1,6 +1,5 @@
-"""Shared utilities."""
+"""Kernel utilities - routing and primitive validation."""
 
-from lilux.utils.metadata_manager import MetadataManager
-from lilux.utils.validators import ValidationManager
+from lilux.utils.validators import BashValidator, APIValidator
 
-__all__ = ["MetadataManager", "ValidationManager"]
+__all__ = ["BashValidator", "APIValidator"]
